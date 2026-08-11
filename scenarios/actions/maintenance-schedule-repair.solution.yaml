@@ -1,0 +1,37 @@
+schema_version: 1
+actions:
+  - action_id: set-maintenance-policy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' 'RETENTION_DAYS=14' > /etc/sysconfig/lal-maintenance &&
+        chmod 0644 /etc/sysconfig/lal-maintenance
+  - action_id: replace-maintenance-timer
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' '[Unit]' 'Description=Run LAL housekeeping every night' '' '[Timer]'
+        'OnCalendar=*-*-* 02:15:00 UTC' 'Persistent=true' 'Unit=lal-maintenance.service' ''
+        '[Install]' 'WantedBy=timers.target'
+        > /etc/systemd/system/lal-maintenance.timer &&
+        systemctl daemon-reload
+  - action_id: prove-and-enable-maintenance
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - systemctl
+      - enable
+      - --now
+      - lal-maintenance.timer
+  - action_id: run-maintenance-now
+    target: node2
+    arguments: [sudo, --, systemctl, start, lal-maintenance.service]

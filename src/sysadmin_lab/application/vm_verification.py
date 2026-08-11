@@ -42,7 +42,12 @@ class VmScenarioDriver:
 
     def provision(self, manifest: ScenarioManifest) -> LabSession:
         setup = load_action_manifest(self._scenario_directory / manifest.setup)
-        started = self._scenarios.start(manifest, setup, self._base_images)
+        started = self._scenarios.start(
+            manifest,
+            setup,
+            self._base_images,
+            require_verified=False,
+        )
         return LabSession(str(started.provisioned.state.session_id), manifest.scenario_id)
 
     def run_checks(
@@ -63,7 +68,11 @@ class VmScenarioDriver:
     def reset(self, session: LabSession, manifest: ScenarioManifest) -> LabSession:
         setup = load_action_manifest(self._scenario_directory / manifest.setup)
         started = self._scenarios.reset(
-            UUID(session.session_id), manifest, setup, self._base_images
+            UUID(session.session_id),
+            manifest,
+            setup,
+            self._base_images,
+            require_verified=False,
         )
         return LabSession(str(started.provisioned.state.session_id), manifest.scenario_id)
 

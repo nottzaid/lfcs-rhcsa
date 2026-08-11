@@ -1,0 +1,116 @@
+schema_version: 1
+scenario_id: maintenance-schedule-repair
+version: 1
+status: verified
+title: The overnight maintenance window is being missed
+summary: Repair and validate a persistent systemd timer for an operational housekeeping job.
+estimated_minutes: 25
+task_type: fix
+difficulty: intermediate
+task: >-
+  On node2, the supplied lal-maintenance.service housekeeping job has the wrong retention
+  setting, and lal-maintenance.timer is neither correctly scheduled nor enabled. Configure
+  RETENTION_DAYS=14 in /etc/sysconfig/lal-maintenance. Make the timer activate
+  lal-maintenance.service every day at 02:15 UTC, catch up a missed calendar run after downtime,
+  and start automatically at boot. Activate the timer now and run the service once to prove the
+  supplied job works. Do not reboot node1; it is not part of this scenario.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.scheduled-jobs
+    title: Manage or schedule jobs for executing commands
+  - track: professional
+    version: v1
+    objective_id: repair-persistent-maintenance-timer
+    title: Recover and validate a persistent system maintenance schedule
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: systemd timer unit documentation
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html
+  - kind: upstream
+    title: systemd time and calendar event documentation
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.time.html
+  - kind: man-page
+    title: systemctl manual
+    man_page: systemctl(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-base-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: retention-policy
+    kind: file
+    target: node2
+    description: The housekeeping job uses the required retention policy.
+    parameters:
+      path: /etc/sysconfig/lal-maintenance
+      kind: file
+      owner: root
+      group: root
+      mode: "0644"
+      contains: RETENTION_DAYS=14
+  - check_id: timer-running
+    kind: service
+    target: node2
+    description: The maintenance timer is loaded, active, and enabled at boot.
+    parameters:
+      name: lal-maintenance.timer
+      active: true
+      enabled: true
+  - check_id: timer-target
+    kind: command
+    target: node2
+    description: The timer activates the supplied maintenance service.
+    parameters:
+      arguments:
+        - sh
+        - -c
+        - >-
+          test "$(systemctl show --property=Triggers --value -- lal-maintenance.timer)"
+          = lal-maintenance.service
+  - check_id: timer-calendar
+    kind: command
+    target: node2
+    description: The next daily activation is at 02:15 UTC.
+    parameters:
+      arguments:
+        - sh
+        - -c
+        - >-
+          next=$(systemctl show --property=NextElapseUSecRealtime --value --
+          lal-maintenance.timer) && test -n "$next" &&
+          test "$(date --utc --date="$next" +%H:%M)" = 02:15 &&
+          delta=$(($(date --date="$next" +%s) - $(date +%s))) &&
+          test "$delta" -gt 0 && test "$delta" -le 86400
+  - check_id: missed-run-policy
+    kind: command
+    target: node2
+    description: Missed calendar activations are caught after downtime.
+    parameters:
+      arguments:
+        - sh
+        - -c
+        - >-
+          test "$(systemctl show --property=Persistent --value -- lal-maintenance.timer)" = yes
+  - check_id: maintenance-proven
+    kind: file
+    target: node2
+    description: The supplied service has completed with the required policy at least once.
+    parameters:
+      path: /var/lib/lal-maintenance/last-run
+      kind: file
+      owner: root
+      group: root
+      mode: "0644"
+      contains: retention_days=14
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/maintenance-schedule-repair.setup.yaml
+reference_solution: actions/maintenance-schedule-repair.solution.yaml
+alternate_solutions: [actions/maintenance-schedule-repair.alternate.yaml]

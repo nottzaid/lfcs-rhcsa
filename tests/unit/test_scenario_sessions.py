@@ -217,6 +217,21 @@ def test_start_rejects_draft_unsupported_topology_and_missing_image(tmp_path: Pa
         scenario.start(two_hosts, setup(), {})
 
 
+def test_acceptance_path_can_start_an_unreleased_draft(tmp_path: Path) -> None:
+    draft = manifest(status=ScenarioStatus.DRAFT)
+    scenario, _vm, actions, _progress = service(tmp_path, [report(draft, passed=False)])
+
+    started = scenario.start(
+        draft,
+        setup(),
+        {"rocky-base": tmp_path / "base.qcow2"},
+        require_verified=False,
+    )
+
+    assert started.provisioned.state.status is SessionStatus.READY
+    assert actions.calls == 1
+
+
 def test_check_reset_and_destroy_delegate_with_scenario_identity(tmp_path: Path) -> None:
     spec = manifest()
     expected = report(spec, passed=False)

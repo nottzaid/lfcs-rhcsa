@@ -20,7 +20,7 @@ focused_scenarios:
     competencies: [users-groups.local-accounts]
     capabilities: [single-node]
   - scenario_id: persistent-kernel-tuning
-    status: planned
+    status: verified
     wave: 1
     estimated_minutes: 20
     competencies: [operations.kernel-parameters]
@@ -32,11 +32,23 @@ focused_scenarios:
     competencies: [operations.processes-services]
     capabilities: [single-node]
   - scenario_id: maintenance-schedule-repair
-    status: planned
+    status: verified
     wave: 1
     estimated_minutes: 25
     competencies: [operations.scheduled-jobs]
     capabilities: [single-node]
+  - scenario_id: recurring-user-report
+    status: planned
+    wave: 1
+    estimated_minutes: 20
+    competencies: [operations.scheduled-jobs]
+    capabilities: [single-node, cron]
+  - scenario_id: queued-handoff-job
+    status: planned
+    wave: 1
+    estimated_minutes: 20
+    competencies: [operations.scheduled-jobs]
+    capabilities: [single-node, at]
   - scenario_id: repository-trust-repair
     status: planned
     wave: 1

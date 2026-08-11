@@ -90,8 +90,19 @@ def test_vm_driver_connects_every_acceptance_operation(tmp_path: Path) -> None:
     assert reset.session_id == str(RESET_ID)
     driver.destroy(session)
 
-    scenarios.start.assert_called_once()
-    scenarios.reset.assert_called_once()
+    scenarios.start.assert_called_once_with(
+        manifest,
+        scenarios.start.call_args.args[1],
+        base_images,
+        require_verified=False,
+    )
+    scenarios.reset.assert_called_once_with(
+        SESSION_ID,
+        manifest,
+        scenarios.reset.call_args.args[2],
+        base_images,
+        require_verified=False,
+    )
     vm_sessions.reboot.assert_called_once_with(SESSION_ID, ("node1",))
     vm_sessions.destroy.assert_called_once_with(SESSION_ID)
 

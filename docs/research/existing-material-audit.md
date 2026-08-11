@@ -56,6 +56,9 @@ edition is the better source for current enterprise-Linux behavior; the 2023 edi
 additional exercise variation.
 
 The books do not define LFCS scope, and their task text or solutions will not be reproduced.
+They also remain claims to verify: for example, the RHCSA 9 guide's explanation of a persistent
+timer implies a fixed interval, while upstream `systemd.timer(5)` defines `Persistent=` as catch-up
+for missed `OnCalendar=` activations. Scenario behavior follows upstream documentation.
 Original scenarios may use the same public Linux administration concepts, verified against
 upstream documentation, Rocky documentation, and installed man pages.
 

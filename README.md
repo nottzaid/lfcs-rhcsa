@@ -70,13 +70,17 @@ manifest under `examples/` remains a draft contract fixture and is not released 
 enablement, service-owned PID validation, process priority, reboot persistence, and alternate
 repair replay. All released scenarios appear in the same local browser collection.
 
+`maintenance-schedule-repair` adds a behavior-checked systemd calendar timer: the grader observes
+its next UTC activation, daily cadence, trigger relationship, missed-run policy, enablement, an
+actual completed job, two solution styles, and persistence through real reboots.
+
 Maintainers can replay the permanent acceptance contract for any released scenario with
 `uv run labctl scenario verify <scenario-id>`. It provisions a disposable VM, proves the broken
 state, applies and checks the reference solution, reboots when persistence is required, proves a
 clean reset is broken again, and independently checks every declared alternate solution.
 
 The current-scope research, audited projects and books, default-distribution decision, and
-machine-checked 36-focused-scenario/7-capstone/3-mock portfolio are under
+machine-checked 38-focused-scenario/7-capstone/3-mock portfolio are under
 [`docs/research`](docs/research) and [`curricula`](curricula).
 
 The infrastructure can acquire and verify the pinned Rocky Linux 10.2 cloud image, create a

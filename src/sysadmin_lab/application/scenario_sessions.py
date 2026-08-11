@@ -53,8 +53,10 @@ class ScenarioSessionService:
         manifest: ScenarioManifest,
         setup: ActionManifest,
         base_images: dict[str, Path],
+        *,
+        require_verified: bool = True,
     ) -> StartedScenario:
-        host = self._supported_host(manifest)
+        host = self._supported_host(manifest, require_verified=require_verified)
         try:
             base_image = base_images[host.image]
         except KeyError as exc:
@@ -102,6 +104,8 @@ class ScenarioSessionService:
         manifest: ScenarioManifest,
         setup: ActionManifest,
         base_images: dict[str, Path],
+        *,
+        require_verified: bool = True,
     ) -> StartedScenario:
         state = self._sessions.get(session_id)
         if state.scenario_id != manifest.scenario_id:
@@ -109,7 +113,12 @@ class ScenarioSessionService:
                 f"session runs {state.scenario_id}, not {manifest.scenario_id}"
             )
         self._vm_sessions.destroy(session_id)
-        return self.start(manifest, setup, base_images)
+        return self.start(
+            manifest,
+            setup,
+            base_images,
+            require_verified=require_verified,
+        )
 
     def destroy(self, session_id: UUID) -> SessionState:
         return self._vm_sessions.destroy(session_id)
@@ -127,8 +136,10 @@ class ScenarioSessionService:
         return endpoints
 
     @staticmethod
-    def _supported_host(manifest: ScenarioManifest) -> HostSpec:
-        if manifest.status is not ScenarioStatus.VERIFIED:
+    def _supported_host(
+        manifest: ScenarioManifest, *, require_verified: bool = True
+    ) -> HostSpec:
+        if require_verified and manifest.status is not ScenarioStatus.VERIFIED:
             raise ScenarioLaunchError(f"scenario is not verified: {manifest.scenario_id}")
         if len(manifest.topology.hosts) != 1:
             raise ScenarioLaunchError("this release supports one-host scenarios only")

@@ -1,0 +1,51 @@
+schema_version: 1
+actions:
+  - action_id: install-maintenance-worker
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        install -d -m 0755 /usr/local/sbin /var/lib/lal-maintenance &&
+        printf '%s\n' '#!/bin/sh' 'set -eu'
+        'install -d -m 0755 /var/lib/lal-maintenance'
+        'tmp=$(mktemp /var/lib/lal-maintenance/.last-run.XXXXXX)'
+        'printf "retention_days=%s\n" "$RETENTION_DAYS" > "$tmp"'
+        'date --utc +"completed_at=%Y-%m-%dT%H:%M:%SZ" >> "$tmp"'
+        'chmod 0644 "$tmp"'
+        'mv -f "$tmp" /var/lib/lal-maintenance/last-run'
+        'logger --tag lal-maintenance "housekeeping completed"'
+        > /usr/local/sbin/lal-maintenance &&
+        chmod 0755 /usr/local/sbin/lal-maintenance &&
+        rm -f /var/lib/lal-maintenance/last-run
+  - action_id: install-stale-maintenance-policy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' 'RETENTION_DAYS=90' > /etc/sysconfig/lal-maintenance &&
+        chmod 0644 /etc/sysconfig/lal-maintenance
+  - action_id: install-broken-maintenance-units
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        systemctl disable --now lal-maintenance.timer >/dev/null 2>&1 || true;
+        printf '%s\n' '[Unit]' 'Description=LAL housekeeping job' '' '[Service]'
+        'Type=oneshot' 'EnvironmentFile=/etc/sysconfig/lal-maintenance'
+        'ExecStart=/usr/local/sbin/lal-maintenance'
+        > /etc/systemd/system/lal-maintenance.service &&
+        printf '%s\n' '[Unit]' 'Description=Run LAL housekeeping on the stale schedule' ''
+        '[Timer]' 'OnCalendar=weekly' 'Persistent=false' 'Unit=lal-maintenance.service' ''
+        '[Install]' 'WantedBy=timers.target'
+        > /etc/systemd/system/lal-maintenance.timer &&
+        rm -rf /etc/systemd/system/lal-maintenance.timer.d &&
+        systemctl daemon-reload
