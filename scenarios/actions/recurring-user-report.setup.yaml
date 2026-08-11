@@ -1,0 +1,46 @@
+schema_version: 1
+actions:
+  - action_id: create-reportbot-account
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        set -eu;
+        id reportbot >/dev/null 2>&1 ||
+        useradd --create-home --home-dir /var/lib/lal-reports --shell /bin/bash reportbot;
+        install -d -m 0750 -o reportbot -g reportbot /var/lib/lal-reports;
+        rm -f /var/lib/lal-reports/latest
+  - action_id: install-report-command
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        install -d -m 0755 /opt/lal/bin &&
+        printf '%s\n' '#!/bin/sh' 'set -eu'
+        'test "${1:-}" = --format && test "${2:-}" = compact'
+        'tmp=$(mktemp /var/lib/lal-reports/.latest.XXXXXX)'
+        'printf "format=%s\n" "$2" > "$tmp"'
+        'printf "user=%s\n" "$(id -un)" >> "$tmp"'
+        'printf "home=%s\n" "$HOME" >> "$tmp"'
+        'chmod 0640 "$tmp"'
+        'mv -f "$tmp" /var/lib/lal-reports/latest'
+        > /opt/lal/bin/generate-usage-report &&
+        chmod 0755 /opt/lal/bin/generate-usage-report
+  - action_id: install-broken-reportbot-crontab
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' 'CRON_TZ=Asia/Amman' 'PATH=/usr/bin:/bin' 'MAILTO=""'
+        '15 3 * * * generate-usage-report --format verbose'
+        | crontab -u reportbot - &&
+        systemctl enable --now crond.service

@@ -1,0 +1,28 @@
+schema_version: 1
+actions:
+  - action_id: install-path-aware-reportbot-schedule
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' 'SHELL=/bin/sh' 'CRON_TZ = "UTC"'
+        'PATH=/opt/lal/bin:/usr/bin:/bin' 'MAILTO=""'
+        '40 6 * * mon-fri generate-usage-report --format compact'
+        | crontab -u reportbot -
+  - action_id: prove-report-job-with-clean-environment
+    target: node2
+    arguments:
+      - sudo
+      - --user=reportbot
+      - --set-home
+      - --
+      - env
+      - --ignore-environment
+      - HOME=/var/lib/lal-reports
+      - PATH=/opt/lal/bin:/usr/bin:/bin
+      - generate-usage-report
+      - --format
+      - compact

@@ -126,3 +126,22 @@ def test_report_rejects_a_reference_solution_that_does_not_work() -> None:
     manifest = ScenarioManifest.model_validate(minimal_manifest())
     report = ScenarioVerifier(IneffectiveSolutionDriver()).verify(manifest)
     assert not report.passed
+
+
+def test_report_rejects_checker_error_in_expected_broken_phase() -> None:
+    class ErroringInitialDriver(FakeDriver):
+        def run_checks(
+            self, session: LabSession, manifest: ScenarioManifest
+        ) -> tuple[CheckObservation, ...]:
+            observations = super().run_checks(session, manifest)
+            if self.phase == "broken":
+                return tuple(
+                    CheckObservation(item.check_id, False, "checker crashed", error=True)
+                    for item in observations
+                )
+            return observations
+
+    manifest = ScenarioManifest.model_validate(minimal_manifest())
+    report = ScenarioVerifier(ErroringInitialDriver()).verify(manifest)
+
+    assert not report.passed

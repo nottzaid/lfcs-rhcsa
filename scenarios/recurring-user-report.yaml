@@ -1,0 +1,108 @@
+schema_version: 1
+scenario_id: recurring-user-report
+version: 1
+status: verified
+title: The weekday usage report never arrives
+summary: Repair a user-owned cron schedule and its non-interactive execution environment.
+estimated_minutes: 20
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  On node2, the reportbot account owns a broken cron schedule for the supplied
+  generate-usage-report command. Schedule the compact report for 06:40 UTC every Monday through
+  Friday in reportbot's personal crontab. Make the command resolvable in cron's non-interactive
+  environment without changing the supplied script, keep cron active and enabled, and run the job
+  once as reportbot to prove it produces /var/lib/lal-reports/latest. Do not reboot node1; it is
+  not part of this scenario.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.scheduled-jobs
+    title: Manage or schedule jobs for executing commands
+  - track: professional
+    version: v1
+    objective_id: repair-user-cron-environment
+    title: Recover a user-owned scheduled report in a non-interactive environment
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: Cronie crontab file documentation
+    url: https://github.com/cronie-crond/cronie/blob/master/man/crontab.5
+  - kind: man-page
+    title: crontab file format manual
+    man_page: crontab(5)
+  - kind: man-page
+    title: crontab command manual
+    man_page: crontab(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-base-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: cron-daemon
+    kind: service
+    target: node2
+    description: Cron is active and starts automatically at boot.
+    parameters:
+      name: crond.service
+      active: true
+      enabled: true
+  - check_id: reportbot-schedule
+    kind: command
+    target: node2
+    description: reportbot has the required weekday 06:40 UTC compact-report schedule.
+    parameters:
+      sudo: true
+      arguments:
+        - sh
+        - -c
+        - >-
+          tab=$(crontab -u reportbot -l) &&
+          printf '%s\n' "$tab" | grep --extended-regexp --quiet
+          '^[[:space:]]*CRON_TZ[[:space:]]*=[[:space:]]*"?UTC"?[[:space:]]*$' &&
+          job=$(printf '%s\n' "$tab" | awk
+          '$1 == "40" && $2 == "6" && $3 == "*" && $4 == "*" &&
+          ($5 == "1-5" || tolower($5) == "mon-fri")
+          {for (i=6; i<=NF; i++) printf "%s%s", $i, (i<NF ? " " : "\n")}') &&
+          case "$job" in
+          '/opt/lal/bin/generate-usage-report --format compact') exit 0 ;;
+          'generate-usage-report --format compact')
+          path=$(printf '%s\n' "$tab" | sed --silent
+          's/^[[:space:]]*PATH[[:space:]]*=[[:space:]]*//p' | tail --lines=1) &&
+          case ":$path:" in *:/opt/lal/bin:*) exit 0 ;; *) exit 1 ;; esac ;;
+          *) exit 1 ;; esac
+  - check_id: report-output
+    kind: file
+    target: node2
+    description: A compact report was successfully produced by reportbot.
+    parameters:
+      path: /var/lib/lal-reports/latest
+      kind: file
+      owner: reportbot
+      group: reportbot
+      mode: "0640"
+      contains: format=compact
+  - check_id: report-identity
+    kind: command
+    target: node2
+    description: The proof run used reportbot's expected identity and home directory.
+    parameters:
+      sudo: true
+      arguments:
+        - sh
+        - -c
+        - >-
+          grep --fixed-strings --line-regexp --quiet user=reportbot
+          /var/lib/lal-reports/latest &&
+          grep --fixed-strings --line-regexp --quiet home=/var/lib/lal-reports
+          /var/lib/lal-reports/latest
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/recurring-user-report.setup.yaml
+reference_solution: actions/recurring-user-report.solution.yaml
+alternate_solutions: [actions/recurring-user-report.alternate.yaml]

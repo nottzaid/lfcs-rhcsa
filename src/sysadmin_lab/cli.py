@@ -388,6 +388,11 @@ def verify_scenario(
         outcome = "checks fail as designed" if expects_broken else "checks pass"
         solution = f" ({phase.solution})" if phase.solution else ""
         typer.echo(f"{status} {phase.phase.value}{solution}: {outcome}")
+        if not accepted:
+            for observation in phase.observations:
+                if not observation.passed or observation.error:
+                    marker = "ERROR" if observation.error else "CHECK"
+                    typer.echo(f"  {marker} {observation.check_id}: {observation.message}")
     if not report.passed:
         raise typer.Exit(code=1)
     typer.echo(f"verified acceptance contract: {report.scenario_id}")

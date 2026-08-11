@@ -38,7 +38,7 @@ focused_scenarios:
     competencies: [operations.scheduled-jobs]
     capabilities: [single-node]
   - scenario_id: recurring-user-report
-    status: planned
+    status: verified
     wave: 1
     estimated_minutes: 20
     competencies: [operations.scheduled-jobs]

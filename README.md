@@ -74,6 +74,10 @@ repair replay. All released scenarios appear in the same local browser collectio
 its next UTC activation, daily cadence, trigger relationship, missed-run policy, enablement, an
 actual completed job, two solution styles, and persistence through real reboots.
 
+`recurring-user-report` adds a user-owned Cronie schedule, UTC calendar semantics, non-interactive
+`PATH` diagnosis, least-privilege execution proof, named and numeric weekday alternatives, and
+reboot persistence.
+
 Maintainers can replay the permanent acceptance contract for any released scenario with
 `uv run labctl scenario verify <scenario-id>`. It provisions a disposable VM, proves the broken
 state, applies and checks the reference solution, reboots when persistence is required, proves a
