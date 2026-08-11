@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.curricula import CurriculumManifest
 from sysadmin_lab.domain.images import ImageManifest
+from sysadmin_lab.domain.mock_exams import MockExamManifest
 from sysadmin_lab.domain.models import ScenarioManifest
 
 
@@ -32,6 +33,25 @@ def load_catalog(path: Path) -> tuple[ScenarioManifest, ...]:
     duplicates = sorted({scenario_id for scenario_id in ids if ids.count(scenario_id) > 1})
     if duplicates:
         raise CatalogError(f"duplicate scenario identifiers: {', '.join(duplicates)}")
+    return manifests
+
+
+def load_mock_exam(path: Path) -> MockExamManifest:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return MockExamManifest.model_validate(raw)
+    except (OSError, yaml.YAMLError, ValidationError) as exc:
+        raise CatalogError(f"invalid mock exam manifest {path}: {exc}") from exc
+
+
+def load_mock_catalog(path: Path) -> tuple[MockExamManifest, ...]:
+    candidates = sorted((*path.glob("*.yaml"), *path.glob("*.yml")))
+    if not candidates:
+        raise CatalogError(f"no mock exam manifests found in {path}")
+    manifests = tuple(load_mock_exam(candidate) for candidate in candidates)
+    ids = [manifest.mock_id for manifest in manifests]
+    if len(ids) != len(set(ids)):
+        raise CatalogError("duplicate mock exam identifiers")
     return manifests
 
 

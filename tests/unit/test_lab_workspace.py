@@ -88,6 +88,7 @@ def test_workspace_delegates_complete_learner_lifecycle(
         image_manifest=root / "images" / "rocky-10.2" / "manifest.yaml",
         image_cache=tmp_path / "cache",
         runtime_root=tmp_path / "runtime",
+        mock_exam_directory=root / "mock-exams",
     )
     runtime = FakeRuntime(tmp_path, manifest.scenario_id)
     image = tmp_path / "base.qcow2"

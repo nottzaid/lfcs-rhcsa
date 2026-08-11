@@ -9,9 +9,10 @@ actions:
       - -c
       - |
         nmcli con add type bond ifname bond0 con-name lal-bond bond.options 'mode=active-backup,miimon=100' \
-          ipv4.method manual ipv4.addresses 192.0.2.20/24 ipv4.never-default yes ipv6.method disabled
-        nmcli con add type dummy ifname bond-a con-name lal-bond-a master bond0 slave-type bond
-        nmcli con add type dummy ifname bond-b con-name lal-bond-b master bond0 slave-type bond
+          ipv4.method manual ipv4.addresses 192.0.2.20/24 ipv4.never-default yes ipv6.method disabled \
+          connection.autoconnect yes connection.autoconnect-ports 1
+        nmcli con add type dummy ifname bond-a con-name lal-bond-a controller bond0 port-type bond connection.autoconnect yes
+        nmcli con add type dummy ifname bond-b con-name lal-bond-b controller bond0 port-type bond connection.autoconnect yes
         nmcli con up lal-bond
         nmcli con up lal-bond-a
         nmcli con up lal-bond-b
@@ -24,7 +25,8 @@ actions:
       - -c
       - |
         nmcli con add type bridge ifname br0 con-name lal-bridge \
-          ipv4.method manual ipv4.addresses 198.51.100.20/24 ipv4.never-default yes ipv6.method disabled
-        nmcli con add type dummy ifname bridge-port con-name lal-bridge-port master br0 slave-type bridge
+          ipv4.method manual ipv4.addresses 198.51.100.20/24 ipv4.never-default yes ipv6.method disabled \
+          connection.autoconnect yes connection.autoconnect-ports 1
+        nmcli con add type dummy ifname bridge-port con-name lal-bridge-port controller br0 port-type bridge connection.autoconnect yes
         nmcli con up lal-bridge
         nmcli con up lal-bridge-port

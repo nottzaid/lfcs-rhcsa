@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: libvirt-guest-recovery
 version: 1
-status: draft
+status: verified
 title: The utility guest was removed from libvirt
 summary: Recreate and persist a small nested guest through the libvirt toolchain.
 estimated_minutes: 40
@@ -45,8 +45,16 @@ checks:
     description: The exact requested libvirt guest is running.
     parameters:
       sudo: true
-      arguments: [virsh, --connect, qemu:///system, domstate, lfcs-guest]
-      stdout_equals: running
+      arguments:
+        - bash
+        - -c
+        - >-
+          for attempt in $(seq 1 30); do
+            test "$(virsh -c qemu:///system domstate lfcs-guest 2>/dev/null)" = running && exit 0;
+            sleep 1;
+          done;
+          exit 1
+      timeout_seconds: 40
   - check_id: utility-guest-resources
     kind: command
     target: node2
@@ -70,7 +78,8 @@ checks:
         - -c
         - >-
           virsh -c qemu:///system domblklist lfcs-guest --details | grep -Fq '/var/lib/libvirt/images/lfcs-guest.qcow2' &&
-          test "$(qemu-img info --output=json /var/lib/libvirt/images/lfcs-guest.qcow2 | python3 -c 'import json,sys; print(json.load(sys.stdin)["virtual-size"] )')" -ge 805306368
+          virsh -c qemu:///system domblkinfo lfcs-guest vda |
+          awk '$1=="Capacity:" && $2>=805306368 {ok=1} END {exit !ok}'
   - check_id: utility-guest-autostart
     kind: command
     target: node2

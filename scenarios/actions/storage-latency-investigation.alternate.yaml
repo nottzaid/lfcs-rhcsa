@@ -2,4 +2,4 @@ schema_version: 1
 actions:
   - action_id: set-persistent-io-property
     target: node2
-    arguments: [sudo, --, systemctl, set-property, --runtime=false, lal-io-load.service, IOWeight=10]
+    arguments: [sudo, --, systemctl, set-property, lal-io-load.service, IOWeight=10]

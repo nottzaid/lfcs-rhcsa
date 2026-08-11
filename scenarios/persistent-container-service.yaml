@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: persistent-container-service
 version: 1
-status: draft
+status: verified
 title: The worker container must survive host maintenance
 summary: Run a prebuilt local image as a persistent systemd-managed Podman workload.
 estimated_minutes: 35

@@ -73,4 +73,4 @@ upstream documentation, Rocky documentation, and installed man pages.
    history or a learner-authored “answer” file.
 6. Include negative invariants: SELinux must remain enforcing, required services must not be
    replaced with dummy processes, and expected data must survive.
-7. Keep normal scenario times advisory. Only an explicitly selected mock exam owns a countdown.
+7. Keep scenario and mock-exam times advisory; local sessions do not expire on a countdown.

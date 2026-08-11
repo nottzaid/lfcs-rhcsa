@@ -9,4 +9,5 @@ actions:
       - -c
       - >-
         printf 'projects -fstype=nfs4,ro {{host.node1.address}}:/srv/projects\n' > /etc/auto.lal;
+        systemctl enable --now autofs.service;
         systemctl restart autofs.service

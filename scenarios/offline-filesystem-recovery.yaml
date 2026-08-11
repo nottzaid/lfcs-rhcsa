@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: offline-filesystem-recovery
 version: 1
-status: draft
+status: verified
 title: The records filesystem was left with errors
 summary: Repair an unmounted ext4 filesystem and restore its persistent mount.
 estimated_minutes: 35

@@ -9,7 +9,7 @@ actions:
       - -c
       - >-
         install -d /etc/systemd/system/lal-monitor.service.d;
-        printf '%s\n' '[Service]' 'Environment=MONITOR_BIND=0.0.0.0'
+        printf '%s\n' '[Service]' 'Environment=MONITOR_BIND={{host.node1.address}}'
         > /etc/systemd/system/lal-monitor.service.d/listen.conf;
         systemctl daemon-reload;
         systemctl restart lal-monitor.service

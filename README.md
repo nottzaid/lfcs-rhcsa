@@ -1,9 +1,9 @@
 # Linux Admin Lab
 
 Linux Admin Lab is a completely local, reproducible, self-grading environment for
-practical Linux system-administration work. Its first certification profiles are the
-current LFCS and RHCSA 10 objectives; a separate professional-operations track covers
-workplace skills without misrepresenting them as examination requirements.
+practical Linux system-administration work. Its released curriculum covers the current
+Linux Foundation Certified System Administrator (LFCS) competencies. RHCSA and broader
+professional-operations tracks are future additions and will remain visibly separate.
 
 This is not a conventional course and it is not an exam-question dump. A scenario gives
 the learner one or more real virtual machines in a known state, describes the required
@@ -11,20 +11,38 @@ outcome, and checks the resulting behavior after the learner has administered th
 
 ## Quick start
 
-From a checkout on a supported Linux host with QEMU/KVM, system libvirt, and `uv`:
+From a checkout on a Linux host with hardware virtualization, QEMU/KVM, system libvirt,
+virt-manager, and [`uv`](https://docs.astral.sh/uv/) installed:
 
 ```bash
 ./lab
 ```
 
-This opens the LFCS scenario collection at `http://127.0.0.1:8787/scenarios/topic/lfcs`.
+That is the only project command needed. It opens the LFCS scenario collection at
+`http://127.0.0.1:8787/scenarios/topic/lfcs`.
 Choose **Info** to inspect a task or **Run** to acquire/verify its image and launch the
 disposable VM in the background. Active machines are visible in virt-manager. Scenario time
-values are estimates only: ordinary labs never expire or destroy a VM on a timer.
+values are advisory estimates; the local lab does not enforce a countdown.
 
-The first launch verifies or downloads the pinned Rocky Linux 10.2 installation media and
-builds the immutable lab image; later launches reuse it after validating its provenance and
+The first launch verifies or downloads the pinned Rocky Linux 10.2 DVD (about 10 GB) and
+builds the immutable lab image. Later launches reuse it after validating its provenance and
 checksum. The equivalent development command is `uv run labctl up`.
+
+## What is included
+
+- 38 focused exercises, with at least one dedicated scenario for every published LFCS
+  competency.
+- 7 integrated capstones that combine administration domains into realistic incidents.
+- 3 balanced 20-task mock rehearsals following the published domain weights.
+- Fresh disposable Rocky Linux 10.2 VMs, including multi-machine, extra-disk, networking,
+  LDAP, NFS, iSCSI, container, SELinux, and nested-libvirt labs.
+- State-based grading, reset, solution-independent checks, and reboot validation where
+  persistence is part of the task.
+
+The scenario names and suggested times are visible before launch. **Info** shows the task,
+competency mapping, sources, topology, and affected VM names. **Run** starts the machines in
+the background; **Check** grades the observable end state. You remain free to use the VM
+console in virt-manager or the displayed SSH command.
 
 ## Non-negotiable properties
 
@@ -51,51 +69,28 @@ Before a scenario can be included in a release, automation must demonstrate:
 The web application and CLI will call the same application service used by this verification
 harness. No scenario logic may exist only in the browser.
 
-## Current status
+## Curriculum and evidence
 
-The production browser loop is operational. Its `/scenarios/topic/lfcs` page lists the local
-LFCS collection; scenario and session pages expose the task, affected machines, virt-manager
-domain, SSH/console access, and **Check**, **Reset**, and **Destroy** controls. Slow VM work is
-serialized through background jobs, and check attempts, best score, and version-specific
-Solved state survive VM destruction and website restarts.
+The Linux Foundation's published objectives define scope; books, repositories, and third-party
+training material provide exercise ideas only after technical review. The research record,
+official weighting, project and book audits, distribution decision, and coverage matrix live in
+[`docs/research`](docs/research) and [`curricula`](curricula). Each scenario also records its
+competency mapping and upstream, distribution, or man-page sources in its manifest.
 
-Scenario content has begun. `local-account-repair` passes both the complete live broken →
-repair → pass → reset → broken contract and the real browser lifecycle. The second released
-scenario, `persistent-kernel-tuning`, proves live and persistent sysctl state through two
-different valid solution paths, two real guest reboots, and a clean reprovision. The SELinux
-manifest under `examples/` remains a draft contract fixture and is not released content.
+All 45 released scenarios pass the permanent disposable-VM acceptance contract against the
+pinned Rocky Linux 10.2 image. Maintainers can replay one with:
 
-`runaway-service-recovery` adds process discovery, failed-unit diagnosis, environment repair,
-enablement, service-owned PID validation, process priority, reboot persistence, and alternate
-repair replay. All released scenarios appear in the same local browser collection.
+```bash
+uv run labctl scenario verify SCENARIO_ID
+```
 
-`maintenance-schedule-repair` adds a behavior-checked systemd calendar timer: the grader observes
-its next UTC activation, daily cadence, trigger relationship, missed-run policy, enablement, an
-actual completed job, two solution styles, and persistence through real reboots.
+The verifier proves broken initial state, reference repair, required reboot persistence, clean
+reset, and every alternate repair. The browser and CLI call the same application services; no
+grader behavior exists only in the UI.
 
-`recurring-user-report` adds a user-owned Cronie schedule, UTC calendar semantics, non-interactive
-`PATH` diagnosis, least-privilege execution proof, named and numeric weekday alternatives, and
-reboot persistence.
-
-`system-environment-policy` adds real multi-user Bash login evaluation, idempotent system-wide
-`PATH` policy, an exported per-user override with leak prevention, alternate profile layouts, and
-reboot persistence.
-
-Maintainers can replay the permanent acceptance contract for any released scenario with
-`uv run labctl scenario verify <scenario-id>`. It provisions a disposable VM, proves the broken
-state, applies and checks the reference solution, reboots when persistence is required, proves a
-clean reset is broken again, and independently checks every declared alternate solution.
-
-The current-scope research, audited projects and books, default-distribution decision, and
-machine-checked 38-focused-scenario/7-capstone/3-mock portfolio are under
-[`docs/research`](docs/research) and [`curricula`](curricula).
-
-The infrastructure can acquire and verify the pinned Rocky Linux 10.2 cloud image, create a
-disposable QCOW2 overlay and cloud-init seed, boot an ownership-guarded system-libvirt domain,
-discover it through DHCP, verify the guest baseline over SSH, and remove only its registered
-resources. Session state, machine access details, and resource ownership survive across CLI
-processes in a private SQLite database. See [docs/architecture.md](docs/architecture.md) and
-the architecture decisions in [docs/adr](docs/adr).
+Session state, machine access details, check history, best score, and resource ownership survive
+website restarts in a private SQLite database. Only resources registered to a lab session can be
+destroyed. See [docs/architecture.md](docs/architecture.md) and [docs/adr](docs/adr).
 
 The same learner lifecycle remains available without a browser. One command acquires or
 verifies the pinned image, creates the broken machine, and prints its virt-manager domain,
@@ -123,11 +118,13 @@ uv sync
 uv run ruff check .
 uv run mypy
 uv run pytest --cov
-uv run labctl catalog validate examples/scenarios
+uv run labctl catalog validate scenarios
 ```
 
 Live KVM verification is deliberately separate from fast tests:
 
 ```bash
-uv run pytest -m live
+LAL_RUN_SCENARIO_LIVE=1 \
+LAL_BASE_IMAGE=runtime/cache/images/rocky-10.2-lab-v1.qcow2 \
+uv run pytest tests/live/test_verified_scenario_replay.py
 ```

@@ -13,8 +13,8 @@ actions:
         > /home/deploy/.ssh/authorized_keys;
         chown deploy:deploy /home/deploy/.ssh/authorized_keys;
         chmod 0600 /home/deploy/.ssh/authorized_keys;
-        printf '%s\n' 'Port 2222' 'PermitRootLogin no' 'PasswordAuthentication no'
-        'PubkeyAuthentication yes' 'AllowGroups opsssh' > /etc/ssh/sshd_config.d/99-deployment.conf;
+        printf '%s\n' 'Port 2222' 'Port 22' 'PermitRootLogin no' 'PasswordAuthentication no'
+        'PubkeyAuthentication yes' 'AllowGroups opsssh wheel' > /etc/ssh/sshd_config.d/99-deployment.conf;
         semanage port -a -p tcp -t ssh_port_t 2222;
         firewall-cmd --quiet --permanent --add-port=2222/tcp;
         firewall-cmd --quiet --reload;

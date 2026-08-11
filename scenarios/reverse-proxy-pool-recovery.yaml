@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: reverse-proxy-pool-recovery
 version: 1
-status: draft
+status: verified
 title: The reverse proxy sends traffic to a retired backend
 summary: Repair a persistent HTTP reverse proxy against a live backend service.
 estimated_minutes: 40

@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: virtual-mount-layout
 version: 1
-status: draft
+status: verified
 title: Runtime and release mounts disappear at boot
 summary: Configure persistent tmpfs and bind mounts in the virtual filesystem tree.
 estimated_minutes: 25

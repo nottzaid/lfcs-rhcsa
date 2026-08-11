@@ -1,0 +1,28 @@
+schema_version: 1
+mock_id: lfcs-mock-a
+status: verified
+title: LFCS Mock A — Core Operations
+summary: A balanced twenty-task rehearsal drawn from independently resettable machines.
+suggested_minutes: 120
+time_policy: advisory-only
+tasks:
+  - persistent-kernel-tuning
+  - runaway-service-recovery
+  - maintenance-schedule-repair
+  - repository-trust-repair
+  - selinux-confined-web-service
+  - dual-stack-host-resolution
+  - chrony-source-recovery
+  - network-path-diagnosis
+  - ssh-client-server-policy
+  - firewall-nat-redirection
+  - lvm-online-growth
+  - filesystem-build-and-persist
+  - nfs-client-recovery
+  - persistent-swap-priority
+  - configuration-history-recovery
+  - systemd-service-deployment
+  - deleted-open-log-recovery
+  - private-ca-service-certificate
+  - local-account-repair
+  - collaborative-tree-acls

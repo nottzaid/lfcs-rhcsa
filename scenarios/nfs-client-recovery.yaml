@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: nfs-client-recovery
 version: 1
-status: draft
+status: verified
 title: The application node lost its shared data mount
 summary: Repair a persistent NFS client mount against a live local server.
 estimated_minutes: 35
@@ -50,13 +50,12 @@ checks:
           test "$(findmnt -n -o FSTYPE /mnt/teamshare)" = nfs4 &&
           test "$(findmnt -n -o SOURCE /mnt/teamshare)" = '{{host.node1.address}}:/srv/teamshare'
   - check_id: remote-content-visible
-    kind: file
+    kind: command
     target: node2
     description: Existing server data is visible on the client.
     parameters:
-      path: /mnt/teamshare/project.txt
-      kind: file
-      contains: shared project record
+      sudo: true
+      arguments: [runuser, -u, appshare, --, grep, -Fxq, shared project record, /mnt/teamshare/project.txt]
   - check_id: application-write-access
     kind: command
     target: node2

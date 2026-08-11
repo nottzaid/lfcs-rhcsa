@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: routed-internal-service
 version: 1
-status: draft
+status: verified
 title: The internal service network has no route from the host
 summary: Diagnose a routed namespace topology and persist the missing static route.
 estimated_minutes: 35

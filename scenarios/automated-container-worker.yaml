@@ -1,0 +1,77 @@
+schema_version: 1
+scenario_id: automated-container-worker
+version: 1
+status: verified
+title: The automated worker deployment was left half-configured
+summary: Repair a local repository and Git policy, then deploy a constrained scheduled container.
+estimated_minutes: 50
+task_type: build
+difficulty: exam
+task: >-
+  node2 contains a local package repository at /srv/lal-worker-repo, a configuration Git
+  repository at /etc/lal-automation, and image localhost/lal-worker:1. Repair and enable the
+  lal-worker repository and install lal-worker-assets. Restore worker.conf from tag
+  approved-worker, commit only that restoration on the current branch, and leave the worktree
+  clean. Run the image as rootful container lal-automation under systemd, load SITE=amman from
+  worker.conf, mount /var/lib/lal-automation at /data with SELinux relabeling and
+  /usr/share/lal-worker-assets at /assets read-only, and write amman:approved-worker to
+  /data/ready before remaining active. The systemd service must start at boot with MemoryMax
+  128M and CPUQuota 50%. Create persistent lal-automation-refresh.timer to activate its
+  supplied refresh service every 15 minutes, enable it, and run the refresh once now.
+objectives:
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.scheduled-jobs, title: Manage or schedule jobs for executing commands}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.packages-repositories, title: Search install validate and maintain packages or repositories}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.containers, title: Configure container engines create and manage containers}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.git, title: Basic Git operations}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.constraints, title: Determine application and service specific constraints}
+sources:
+  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
+  - {kind: upstream, title: Podman Quadlet documentation, url: https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html}
+  - {kind: upstream, title: Git restore documentation, url: https://git-scm.com/docs/git-restore}
+  - {kind: upstream, title: systemd timer documentation, url: https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html}
+  - {kind: man-page, title: dnf manual, man_page: dnf(8)}
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v1, memory_mib: 1792, vcpus: 2}
+checks:
+  - check_id: worker-package-installed
+    kind: command
+    target: node2
+    description: The required package came from the repaired local repository.
+    parameters: {sudo: true, arguments: [bash, -c, 'rpm -q lal-worker-assets >/dev/null && test "$(cat /usr/share/lal-worker-assets/payload)" = approved-worker && dnf repolist --enabled | grep -q lal-worker']}
+  - check_id: approved-worker-history-restored
+    kind: command
+    target: node2
+    description: The approved configuration is restored in a focused commit.
+    parameters: {sudo: true, arguments: [bash, -c, 'test -z "$(git -C /etc/lal-automation status --porcelain)" && git -C /etc/lal-automation diff --quiet approved-worker -- worker.conf && test "$(git -C /etc/lal-automation diff-tree --no-commit-id --name-only -r HEAD)" = worker.conf && test "$(cat /etc/lal-automation/worker.conf)" = SITE=amman']}
+  - check_id: automation-container-running
+    kind: command
+    target: node2
+    description: The named container runs with the required environment and mounts.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'test "$(podman inspect -f ''{{.State.Running}}'' lal-automation)" = true && podman inspect -f ''{{range .Config.Env}}{{println .}}{{end}}'' lal-automation | grep -qx SITE=amman && podman inspect -f ''{{range .Mounts}}{{println .Source .Destination .RW}}{{end}}'' lal-automation | grep -q ''/var/lib/lal-automation /data true'' && podman inspect -f ''{{range .Mounts}}{{println .Source .Destination .RW}}{{end}}'' lal-automation | grep -q ''/usr/share/lal-worker-assets /assets false''']
+  - check_id: automation-service-constrained
+    kind: command
+    target: node2
+    description: systemd starts the container at boot with the requested resource controls.
+    parameters: {arguments: [bash, -c, 'systemctl is-active --quiet lal-automation.service && systemctl is-enabled --quiet lal-automation.service && test "$(systemctl show -p MemoryMax --value lal-automation.service)" = 134217728 && test "$(systemctl show -p CPUQuotaPerSecUSec --value lal-automation.service)" = 500ms']}
+  - check_id: automation-produced-state
+    kind: file
+    target: node2
+    description: The container and package produced the exact persistent result.
+    parameters: {path: /var/lib/lal-automation/ready, kind: file, contains: 'amman:approved-worker'}
+  - check_id: refresh-schedule-persistent
+    kind: command
+    target: node2
+    description: The refresh timer runs every 15 minutes, catches missed runs, and is enabled.
+    parameters: {arguments: [bash, -c, 'systemctl is-active --quiet lal-automation-refresh.timer && systemctl is-enabled --quiet lal-automation-refresh.timer && test "$(systemctl show -p Persistent --value lal-automation-refresh.timer)" = yes && systemctl cat lal-automation-refresh.timer | grep -Eq ''OnCalendar=.*:0/15''']}
+  - check_id: refresh-proven
+    kind: file
+    target: node2
+    description: The supplied refresh job has completed at least once.
+    parameters: {path: /var/lib/lal-automation/refreshed, kind: file, contains: refreshed}
+persistence: {reboot: true, hosts: [node2]}
+setup: actions/automated-container-worker.setup.yaml
+reference_solution: actions/automated-container-worker.solution.yaml
+alternate_solutions: [actions/automated-container-worker.alternate.yaml]

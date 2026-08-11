@@ -26,6 +26,7 @@ from sysadmin_lab.application.lab_workspace import (
     WorkspacePaths,
 )
 from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.domain.mock_exams import MockExamManifest
 from sysadmin_lab.domain.models import ScenarioManifest, ScenarioStatus
 from sysadmin_lab.domain.progress import ScenarioProgress
 from sysadmin_lab.domain.sessions import SessionState
@@ -205,9 +206,21 @@ def create_app(
 
     def scenario_or_404(scenario_id: str) -> ScenarioManifest:
         try:
-            return active_workspace.scenario(scenario_id)
+            manifest = active_workspace.scenario(scenario_id)
         except (LookupError, ValueError) as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if manifest.status is not ScenarioStatus.VERIFIED:
+            raise HTTPException(status_code=404, detail="scenario is not released")
+        return manifest
+
+    def mock_or_404(mock_id: str) -> MockExamManifest:
+        try:
+            manifest = active_workspace.mock_exam(mock_id)
+        except (LookupError, ValueError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        if manifest.status is not ScenarioStatus.VERIFIED:
+            raise HTTPException(status_code=404, detail="mock exam is not released")
+        return manifest
 
     def session_or_404(session_id: UUID) -> ScenarioSessionSnapshot:
         try:
@@ -238,6 +251,11 @@ def create_app(
         )
         sessions = active_workspace.sessions(limit=20)
         progress = active_workspace.progress()
+        mock_exams = tuple(
+            mock
+            for mock in active_workspace.mock_exams()
+            if mock.status is ScenarioStatus.VERIFIED
+        )
         active_by_scenario = {
             snapshot.state.scenario_id: snapshot
             for snapshot in sessions
@@ -260,7 +278,19 @@ def create_app(
                 "sessions": sessions,
                 "active_by_scenario": active_by_scenario,
                 "progress_by_scenario": progress_by_scenario,
+                "mock_exams": mock_exams,
             },
+        )
+
+    @app.get("/mocks/{mock_id}", response_class=HTMLResponse)
+    def mock_page(request: Request, mock_id: str) -> HTMLResponse:
+        mock = mock_or_404(mock_id)
+        scenarios = {scenario.scenario_id: scenario for scenario in active_workspace.scenarios()}
+        tasks = tuple(scenarios[scenario_id] for scenario_id in mock.tasks)
+        return templates.TemplateResponse(
+            request=request,
+            name="mock.html",
+            context={"mock": mock, "tasks": tasks},
         )
 
     @app.get("/scenarios/{scenario_id}", response_class=HTMLResponse)

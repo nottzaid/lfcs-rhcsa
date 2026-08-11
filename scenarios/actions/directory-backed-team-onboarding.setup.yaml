@@ -1,0 +1,133 @@
+schema_version: 1
+actions:
+  - action_id: create-team-directory-and-client-key
+    target: node1
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        dsctl lal remove --do-it >/dev/null 2>&1 || true
+        cat > /tmp/lal-ds.inf <<'EOF'
+        [general]
+        config_version = 2
+        [slapd]
+        instance_name = lal
+        root_dn = cn=Directory Manager
+        root_password = Directory-Lab-2026
+        port = 389
+        secure_port = 636
+        self_sign_cert = True
+        [backend-userroot]
+        suffix = dc=lab,dc=internal
+        create_suffix_entry = True
+        sample_entries = no
+        EOF
+        dscreate from-file /tmp/lal-ds.inf
+        systemctl enable --now dirsrv@lal.service
+        cat > /tmp/lal-team.ldif <<'EOF'
+        dn: ou=People,dc=lab,dc=internal
+        objectClass: organizationalUnit
+        ou: People
+
+        dn: ou=Groups,dc=lab,dc=internal
+        objectClass: organizationalUnit
+        ou: Groups
+
+        dn: uid=ldapdev,ou=People,dc=lab,dc=internal
+        objectClass: top
+        objectClass: account
+        objectClass: posixAccount
+        cn: LDAP Developer
+        uid: ldapdev
+        uidNumber: 2300
+        gidNumber: 2300
+        homeDirectory: /home/ldapdev
+        loginShell: /bin/bash
+
+        dn: cn=ldapops,ou=Groups,dc=lab,dc=internal
+        objectClass: top
+        objectClass: posixGroup
+        cn: ldapops
+        gidNumber: 2300
+        memberUid: ldapdev
+        EOF
+        ldapadd -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-team.ldif
+        cat > /tmp/lal-anonymous-posix-read.ldif <<'EOF'
+        dn: dc=lab,dc=internal
+        changetype: modify
+        add: aci
+        aci: (targetattr="uid || uidNumber || gidNumber || homeDirectory || loginShell || cn || memberUid || objectClass")(version 3.0; acl "Allow anonymous POSIX identity reads"; allow (read,search,compare) userdn="ldap:///anyone";)
+        EOF
+        ldapmodify -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-anonymous-posix-read.ldif
+        firewall-cmd --quiet --permanent --add-service=ldap
+        firewall-cmd --quiet --reload
+        id teamlead >/dev/null 2>&1 || useradd -m teamlead
+        install -d -o teamlead -g teamlead -m 0700 /home/teamlead/.ssh
+        rm -f /home/teamlead/.ssh/lal_teamlead*
+        cat > /home/teamlead/.ssh/lal_teamlead <<'EOF'
+        -----BEGIN OPENSSH PRIVATE KEY-----
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+        QyNTUxOQAAACD9/k+S4/Md8/gwJF8MtjZ+AdTlwY8fbpL/+PX9GJpw1gAAAJhjRknUY0ZJ
+        1AAAAAtzc2gtZWQyNTUxOQAAACD9/k+S4/Md8/gwJF8MtjZ+AdTlwY8fbpL/+PX9GJpw1g
+        AAAECIvTeEuZuZ4aHJt+GkggofWKEOEWvyym/151itTnjE6v3+T5Lj8x3z+DAkXwy2Nn4B
+        1OXBjx9ukv/49f0YmnDWAAAAEmxhbC1kZXBsb3ktZml4dHVyZQECAw==
+        -----END OPENSSH PRIVATE KEY-----
+        EOF
+        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW lal-teamlead-fixture\n' > /home/teamlead/.ssh/lal_teamlead.pub
+        chown teamlead:teamlead /home/teamlead/.ssh/lal_teamlead*
+        chmod 0600 /home/teamlead/.ssh/lal_teamlead
+        chmod 0644 /home/teamlead/.ssh/lal_teamlead.pub
+  - action_id: install-broken-team-host
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        userdel -r ldapdev >/dev/null 2>&1 || true
+        groupdel ldapops >/dev/null 2>&1 || true
+        id teamlead >/dev/null 2>&1 || useradd -m teamlead
+        usermod -u 3099 teamlead
+        usermod -p "$(openssl passwd -6 "$(cat /proc/sys/kernel/random/uuid)")" teamlead
+        groupadd -g 3100 platform >/dev/null 2>&1 || true
+        authselect select sssd with-mkhomedir --force
+        cat > /etc/sssd/sssd.conf <<'EOF'
+        [sssd]
+        services = nss, pam
+        domains = lab
+        [domain/lab]
+        id_provider = ldap
+        auth_provider = ldap
+        ldap_uri = ldap://192.0.2.99
+        ldap_search_base = dc=lab,dc=internal
+        ldap_id_use_start_tls = false
+        enumerate = true
+        EOF
+        chmod 0600 /etc/sssd/sssd.conf
+        systemctl enable sssd.service
+        systemctl restart sssd.service || true
+        rm -rf /srv/platform
+        install -d -m 0700 /srv/platform
+        printf 'platform-plan\n' > /srv/platform/plan
+        rm -f /etc/profile.d/lal-team.sh /etc/security/limits.d/80-lal-team.conf
+        install -d -o teamlead -g teamlead -m 0700 /home/teamlead/.ssh
+        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBadKeyOnly broken\n' > /home/teamlead/.ssh/authorized_keys
+        chown teamlead:teamlead /home/teamlead/.ssh/authorized_keys
+        chmod 0600 /home/teamlead/.ssh/authorized_keys
+        rm -f /etc/ssh/sshd_config.d/80-lal-team.conf
+        semanage port -d -t ssh_port_t -p tcp 2222 >/dev/null 2>&1 || true
+        systemctl restart sshd.service
+  - action_id: copy-key-between-training-hosts
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - "printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW lal-teamlead-fixture' > /tmp/lal_teamlead.pub"

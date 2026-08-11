@@ -16,7 +16,6 @@ actions:
         targetcli /iscsi create iqn.2026-08.internal.lab:storage
         targetcli /iscsi/iqn.2026-08.internal.lab:storage/tpg1/luns create /backstores/block/lalblock
         targetcli /iscsi/iqn.2026-08.internal.lab:storage/tpg1 set attribute authentication=0 generate_node_acls=1 demo_mode_write_protect=0
-        targetcli /iscsi/iqn.2026-08.internal.lab:storage/tpg1/portals create 0.0.0.0 3260
         targetcli saveconfig
         firewall-cmd --quiet --permanent --add-port=3260/tcp
         firewall-cmd --quiet --reload

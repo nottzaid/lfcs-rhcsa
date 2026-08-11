@@ -15,7 +15,7 @@
     <div class="section-heading">
       <div>
         <h2 id="scenario-list-title">Scenario collection</h2>
-        <p>Work on a real local VM, then check the resulting system state. Times are estimates only—there is no limit.</p>
+        <p>Work on a real local VM, then check the resulting system state. Times are advisory estimates.</p>
       </div>
     </div>
     <div class="table-scroll">
@@ -71,4 +71,31 @@
       </table>
     </div>
   </section>
+
+  {% if mock_exams %}
+    <section class="scenario-list mock-list" aria-labelledby="mock-list-title">
+      <div class="section-heading">
+        <div>
+          <h2 id="mock-list-title">Full mock rehearsals</h2>
+          <p>Twenty-task collections balanced to the published LFCS domain weights. The 120-minute value is advisory only.</p>
+        </div>
+      </div>
+      <div class="table-scroll">
+        <table>
+          <thead><tr><th>#</th><th>Name</th><th>Suggested time</th><th>Tasks</th><th></th></tr></thead>
+          <tbody>
+            {% for mock in mock_exams %}
+              <tr>
+                <td class="row-number">{{ loop.index }}</td>
+                <td><a class="scenario-name" href="/mocks/{{ mock.mock_id }}">{{ mock.title }}</a><span class="scenario-summary">{{ mock.summary }}</span></td>
+                <td class="nowrap">~{{ mock.suggested_minutes }} min</td>
+                <td>{{ mock.tasks|length }}</td>
+                <td class="row-actions"><a class="button button-primary" href="/mocks/{{ mock.mock_id }}">Open</a></td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  {% endif %}
 {% endblock %}

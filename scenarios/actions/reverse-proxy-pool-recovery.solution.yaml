@@ -9,5 +9,7 @@ actions:
       - -c
       - |
         sed -i 's/server retired 192\.0\.2\.99:8081 check/server node1 {{host.node1.address}}:8081 check/' /etc/haproxy/haproxy.cfg
+        setsebool -P httpd_can_network_connect 1
+        setsebool -P haproxy_connect_any 1
         haproxy -c -f /etc/haproxy/haproxy.cfg
         systemctl restart haproxy.service

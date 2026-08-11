@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: inode-exhaustion-recovery
 version: 1
-status: draft
+status: verified
 title: The cache filesystem is full with free bytes remaining
 summary: Diagnose inode exhaustion and remove only disposable cache entries.
 estimated_minutes: 25

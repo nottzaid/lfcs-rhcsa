@@ -7,7 +7,7 @@ actions:
       - --
       - sed
       - -i
-      - s/MONITOR_BIND=127\.0\.0\.1/MONITOR_BIND=0.0.0.0/
+      - s/MONITOR_BIND=127\.0\.0\.1/MONITOR_BIND={{host.node1.address}}/
       - /etc/systemd/system/lal-monitor.service
   - action_id: reload-monitor-service
     target: node1

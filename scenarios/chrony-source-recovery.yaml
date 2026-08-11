@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: chrony-source-recovery
 version: 1
-status: draft
+status: verified
 title: The application node has no usable time source
 summary: Point Chrony at the designated internal time server and verify synchronization.
 estimated_minutes: 25

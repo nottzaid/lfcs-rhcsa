@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: selinux-confined-web-service
 version: 1
-status: draft
+status: verified
 title: SELinux blocks the web service's custom content and port
 summary: Define persistent file and port labels while keeping SELinux enforcing.
 estimated_minutes: 35
@@ -71,7 +71,7 @@ checks:
     kind: command
     target: node2
     description: Nginx serves the required content through the labeled port.
-    parameters: {arguments: [curl, --fail, --silent, http://127.0.0.1:8088/], stdout_equals: selinux-ready}
+    parameters: {arguments: [curl, --fail, --silent, http://127.0.0.1:8088/index.html], stdout_equals: selinux-ready}
 persistence:
   reboot: false
 setup: actions/selinux-confined-web-service.setup.yaml

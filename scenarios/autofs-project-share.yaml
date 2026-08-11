@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: autofs-project-share
 version: 1
-status: draft
+status: verified
 title: The project share should mount only when used
 summary: Repair an on-demand AutoFS map backed by a live NFS server.
 estimated_minutes: 35

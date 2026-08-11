@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: branch-office-routing-incident
 version: 1
-status: draft
+status: verified
 title: The branch office cannot reach its datacenter service
 summary: Repair addressing, routes, forwarding, and a least-privilege nftables policy.
 estimated_minutes: 60

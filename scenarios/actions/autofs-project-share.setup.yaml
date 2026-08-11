@@ -2,6 +2,7 @@ schema_version: 1
 actions:
   - action_id: configure-project-export
     target: node1
+    timeout_seconds: 120
     arguments:
       - sudo
       - --
@@ -12,6 +13,7 @@ actions:
         printf 'project-share-ready\n' > /srv/projects/status.txt;
         printf '/srv/projects {{host.node2.address}}/32(ro,sync,no_subtree_check,root_squash)\n'
         > /etc/exports.d/lal-projects.exports;
+        setsebool -P nfs_export_all_ro 1;
         systemctl enable --now nfs-server;
         exportfs -ra;
         firewall-cmd --quiet --permanent --add-service=nfs;
@@ -29,5 +31,4 @@ actions:
         install -d /etc/auto.master.d;
         printf '/shares /etc/auto.lal --timeout=30\n' > /etc/auto.master.d/lal.autofs;
         printf 'projects -fstype=nfs4,ro 192.0.2.99:/srv/projects\n' > /etc/auto.lal;
-        systemctl enable --now autofs;
-        systemctl restart autofs
+        systemctl disable --now autofs >/dev/null 2>&1 || true

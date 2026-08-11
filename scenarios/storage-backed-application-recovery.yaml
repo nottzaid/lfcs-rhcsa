@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: storage-backed-application-recovery
 version: 1
-status: draft
+status: verified
 title: A full application volume has taken the service down
 summary: Diagnose storage exhaustion, preserve data, grow LVM, and restore a persistent service.
 estimated_minutes: 60

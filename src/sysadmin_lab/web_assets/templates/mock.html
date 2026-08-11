@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}{{ mock.title }} · Linux Admin Lab{% endblock %}
+{% block content %}
+  <nav class="crumbs" aria-label="Breadcrumb"><a href="/scenarios/topic/lfcs">LFCS</a><span>/</span><strong>{{ mock.title }}</strong></nav>
+  <section class="topic-heading">
+    <div>
+      <p class="eyebrow">Mock rehearsal</p>
+      <h1>{{ mock.title }}</h1>
+      <p>{{ mock.summary }}</p>
+      <p>The suggested {{ mock.suggested_minutes }} minutes mirrors the published exam duration, but this local rehearsal never expires and never destroys your machines on a timer.</p>
+    </div>
+    <div class="topic-count"><strong>{{ tasks|length }}</strong><span>tasks</span></div>
+  </section>
+  <section class="scenario-list" aria-labelledby="mock-tasks-title">
+    <div class="section-heading"><div><h2 id="mock-tasks-title">Task set</h2><p>Start tasks in order, check the resulting state, and reset or revisit any weak area.</p></div></div>
+    <div class="table-scroll">
+      <table>
+        <thead><tr><th>#</th><th>Name</th><th>Time</th><th>Type</th><th></th></tr></thead>
+        <tbody>
+          {% for scenario in tasks %}
+            <tr>
+              <td class="row-number">{{ loop.index }}</td>
+              <td><a class="scenario-name" href="/scenarios/{{ scenario.scenario_id }}">{{ scenario.title }}</a><span class="scenario-summary">{{ scenario.summary }}</span></td>
+              <td class="nowrap">~{{ scenario.estimated_minutes }} min</td>
+              <td>{{ scenario.task_type.value|capitalize }}</td>
+              <td class="row-actions"><a class="button button-secondary" href="/scenarios/{{ scenario.scenario_id }}">Info</a><button class="button button-primary" type="button" data-job-endpoint="/api/scenarios/{{ scenario.scenario_id }}/sessions" data-job-label="Launching {{ scenario.title }}">Run</button></td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

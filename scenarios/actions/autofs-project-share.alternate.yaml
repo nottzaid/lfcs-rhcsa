@@ -8,7 +8,7 @@ actions:
       - bash
       - -c
       - >-
-        printf '/- /etc/auto.lal --timeout=45\n' > /etc/auto.master.d/lal.autofs;
-        printf '/shares/projects -fstype=nfs4,ro {{host.node1.address}}:/srv/projects\n' > /etc/auto.lal;
-        systemctl enable autofs.service;
+        printf '/shares /etc/auto.lal --timeout=45\n' > /etc/auto.master.d/lal.autofs;
+        printf 'projects -ro,fstype=nfs4 {{host.node1.address}}:/srv/projects\n' > /etc/auto.lal;
+        systemctl enable --now autofs.service;
         systemctl restart autofs.service

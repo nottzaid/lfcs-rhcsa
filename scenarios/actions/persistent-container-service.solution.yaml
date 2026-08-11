@@ -17,7 +17,7 @@ actions:
         ContainerName=lal-worker
         Environment=WORKER_SITE=amman
         Volume=/srv/worker-data:/data:Z
-        Exec=/bin/bash -c "printf '%s\n' \"$WORKER_SITE\" > /data/ready; exec /bin/bash -c 'while :; do read -r -t 60 || true; done'"
+        Exec=/bin/bash -c "printf '%%s\n' \"$WORKER_SITE\" > /data/ready; exec /bin/bash -c 'while :; do read -r -t 60 || true; done'"
 
         [Service]
         Restart=always
@@ -26,4 +26,4 @@ actions:
         WantedBy=multi-user.target
         EOF
         systemctl daemon-reload
-        systemctl enable --now lal-worker.service
+        systemctl start lal-worker.service

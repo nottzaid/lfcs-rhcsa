@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: firewall-nat-redirection
 version: 1
-status: draft
+status: verified
 title: The lab router lost forwarding, NAT, and its public redirect
 summary: Restore stateful filtering, masquerading, and port redirection with nftables.
 estimated_minutes: 40

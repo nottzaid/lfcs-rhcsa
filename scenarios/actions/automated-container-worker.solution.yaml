@@ -1,0 +1,65 @@
+schema_version: 1
+actions:
+  - action_id: repair-package-and-configuration
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        sed -i 's#file:///srv/missing-worker-repo#file:///srv/lal-worker-repo#;s/^enabled=0/enabled=1/' /etc/yum.repos.d/lal-worker.repo
+        dnf --disablerepo='*' --enablerepo=lal-worker install -y lal-worker-assets
+        git -C /etc/lal-automation restore --source approved-worker -- worker.conf
+        git -C /etc/lal-automation add worker.conf
+        git -C /etc/lal-automation commit -q -m 'Restore approved worker site'
+  - action_id: define-constrained-worker-container
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/containers/systemd/lal-automation.container <<'EOF'
+        [Container]
+        Image=localhost/lal-worker:1
+        ContainerName=lal-automation
+        EnvironmentFile=/etc/lal-automation/worker.conf
+        Volume=/var/lib/lal-automation:/data:Z
+        Volume=/usr/share/lal-worker-assets:/assets:ro,Z
+        Exec=/bin/bash -c "printf '%%s:%%s\n' \"$SITE\" \"$(</assets/payload)\" > /data/ready; exec /bin/bash -c 'while :; do read -r -t 60 || true; done'"
+        [Service]
+        Restart=always
+        MemoryMax=128M
+        CPUQuota=50%
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl start lal-automation.service
+  - action_id: install-and-prove-refresh-timer
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/systemd/system/lal-automation-refresh.service <<'EOF'
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/bash -c 'printf "refreshed %%s\n" "$(date --iso-8601=seconds)" > /var/lib/lal-automation/refreshed'
+        EOF
+        cat > /etc/systemd/system/lal-automation-refresh.timer <<'EOF'
+        [Timer]
+        OnCalendar=*-*-* *:0/15:00
+        Persistent=yes
+        Unit=lal-automation-refresh.service
+        [Install]
+        WantedBy=timers.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable --now lal-automation-refresh.timer
+        systemctl start lal-automation-refresh.service

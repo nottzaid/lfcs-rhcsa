@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: resilient-link-and-bridge
 version: 1
-status: draft
+status: verified
 title: The host needs a resilient uplink and a software bridge
 summary: Build persistent NetworkManager bond and bridge topologies from dummy lab links.
 estimated_minutes: 40
@@ -44,10 +44,15 @@ checks:
     target: node2
     description: bond0 is active-backup with both lab ports and the required address.
     parameters:
+      timeout_seconds: 25
       arguments:
         - bash
         - -c
         - >-
+          for attempt in $(seq 1 20); do
+          test -r /proc/net/bonding/bond0 &&
+          test "$(grep -c '^Slave Interface: bond-[ab]$' /proc/net/bonding/bond0)" -eq 2 && break;
+          sleep 1; done &&
           grep -q 'Bonding Mode: fault-tolerance (active-backup)' /proc/net/bonding/bond0 &&
           grep -q 'MII Polling Interval (ms): 100' /proc/net/bonding/bond0 &&
           test "$(grep -c '^Slave Interface: bond-[ab]$' /proc/net/bonding/bond0)" -eq 2 &&

@@ -1,0 +1,59 @@
+schema_version: 1
+actions:
+  - action_id: configure-time-and-file-server
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d /srv/lal-data/projects
+        printf 'remote-data-ready\n' > /srv/lal-data/projects/status.txt
+        printf '/srv/lal-data/projects *(ro,sync,no_subtree_check)\n' > /etc/exports.d/lal-data.exports
+        setsebool -P nfs_export_all_ro 1
+        systemctl enable --now nfs-server.service
+        exportfs -rav
+        firewall-cmd --quiet --permanent --add-service=nfs
+        firewall-cmd --quiet --permanent --add-service=rpc-bind
+        firewall-cmd --quiet --permanent --add-service=mountd
+        firewall-cmd --quiet --reload
+        cat > /etc/chrony.conf <<'EOF'
+        local stratum 8 distance 0.0
+        allow {{host.node2.address}}/32
+        driftfile /var/lib/chrony/drift
+        makestep 1.0 3
+        rtcsync
+        logdir /var/log/chrony
+        EOF
+        systemctl enable chronyd.service
+        systemctl restart chronyd.service
+        firewall-cmd --quiet --permanent --add-service=ntp
+        firewall-cmd --quiet --reload
+  - action_id: install-broken-remote-data-client
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        swapoff /dev/disk/by-id/virtio-lal-remoteswap >/dev/null 2>&1 || true
+        wipefs -a /dev/disk/by-id/virtio-lal-remoteswap
+        umount /run/lal-data-cache >/dev/null 2>&1 || true
+        umount -l /data/projects >/dev/null 2>&1 || true
+        sed -i '\#/run/lal-data-cache#d;\#LAL_REMOTE_SWAP#d;\#virtio-lal-remoteswap#d' /etc/fstab
+        rm -rf /run/lal-data-cache /data/projects
+        install -d /run/lal-data-cache /data
+        cat > /etc/chrony.conf <<'EOF'
+        server 192.0.2.99 iburst
+        driftfile /var/lib/chrony/drift
+        makestep 1.0 3
+        rtcsync
+        logdir /var/log/chrony
+        EOF
+        systemctl restart chronyd.service || true
+        systemctl disable --now autofs.service >/dev/null 2>&1 || true
+        rm -f /etc/auto.master.d/lal-data.autofs /etc/auto.lal-data

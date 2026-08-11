@@ -1,0 +1,42 @@
+schema_version: 1
+actions:
+  - action_id: apply-capacity-controls
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        printf 'vm.swappiness = 10\n' > /etc/sysctl.d/80-lal-capacity.conf
+        sysctl -p /etc/sysctl.d/80-lal-capacity.conf
+        install -d /etc/systemd/system/lal-capacity-cpu.service.d /etc/systemd/system/lal-capacity-io.service.d
+        printf '%s\n' '[Service]' 'CPUQuota=30%' 'Nice=5' > /etc/systemd/system/lal-capacity-cpu.service.d/resources.conf
+        printf '%s\n' '[Service]' 'IOWeight=10' > /etc/systemd/system/lal-capacity-io.service.d/resources.conf
+        systemctl daemon-reload
+        systemctl restart lal-capacity-cpu.service lal-capacity-io.service
+  - action_id: build-capacity-bridge
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        nmcli con add type bridge ifname br-lab con-name lal-capacity-bridge ipv4.method manual ipv4.addresses 192.0.2.50/24 ipv4.never-default yes ipv6.method disabled connection.autoconnect yes
+        nmcli con add type dummy ifname lab-port con-name lal-capacity-port controller br-lab port-type bridge connection.autoconnect yes
+        nmcli con up lal-capacity-bridge
+  - action_id: create-capacity-guest
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        qemu-img create -f qcow2 /var/lib/libvirt/images/capacity-guest.qcow2 768M
+        virt-install --connect qemu:///system --virt-type qemu --name capacity-guest --memory 384 --vcpus 1 \
+          --disk path=/var/lib/libvirt/images/capacity-guest.qcow2,format=qcow2,bus=virtio \
+          --network bridge=br-lab,model=virtio --import --osinfo generic --boot uefi \
+          --graphics none --noautoconsole --autostart

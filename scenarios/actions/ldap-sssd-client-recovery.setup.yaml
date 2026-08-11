@@ -58,6 +58,13 @@ actions:
         memberUid: ldapdev
         EOF
         ldapadd -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-identities.ldif
+        cat > /tmp/lal-anonymous-posix-read.ldif <<'EOF'
+        dn: dc=lab,dc=internal
+        changetype: modify
+        add: aci
+        aci: (targetattr="uid || uidNumber || gidNumber || homeDirectory || loginShell || cn || memberUid || objectClass")(version 3.0; acl "Allow anonymous POSIX identity reads"; allow (read,search,compare) userdn="ldap:///anyone";)
+        EOF
+        ldapmodify -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-anonymous-posix-read.ldif
         firewall-cmd --quiet --permanent --add-service=ldap
         firewall-cmd --quiet --reload
   - action_id: install-stale-directory-client

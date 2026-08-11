@@ -22,5 +22,6 @@ actions:
         uuid=$(findmnt -n -o UUID /srv/lal-catalog)
         sed -i '\#/srv/lal-catalog#d' /etc/fstab
         printf 'UUID=%s /srv/lal-catalog ext4 defaults 0 2\n' "$uuid" >> /etc/fstab
+        systemctl reset-failed lal-catalog.service || true
         systemctl enable lal-catalog.service
         systemctl restart lal-catalog.service

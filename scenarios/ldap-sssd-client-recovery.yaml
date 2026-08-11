@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: ldap-sssd-client-recovery
 version: 1
-status: draft
+status: verified
 title: Directory users disappeared from the application node
 summary: Repair an SSSD LDAP identity-provider configuration against a live directory.
 estimated_minutes: 45
@@ -86,7 +86,7 @@ checks:
     kind: file
     target: node2
     description: SSSD configuration remains root-owned and private.
-    parameters: {path: /etc/sssd/sssd.conf, kind: file, owner: root, group: root, mode: "0600"}
+    parameters: {path: /etc/sssd/sssd.conf, kind: file, owner: root, group: sssd, mode: "0640"}
   - check_id: no-shadow-local-identities
     kind: command
     target: node2

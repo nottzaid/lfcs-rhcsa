@@ -52,6 +52,8 @@ class SubprocessBuildRunner:
             check=check,
             env=environment,
             stdin=subprocess.DEVNULL,
+            stdout=None if check else subprocess.DEVNULL,
+            stderr=None if check else subprocess.DEVNULL,
             timeout=timeout_seconds,
         )
 

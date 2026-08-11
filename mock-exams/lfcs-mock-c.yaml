@@ -1,0 +1,28 @@
+schema_version: 1
+mock_id: lfcs-mock-c
+status: verified
+title: LFCS Mock C — Troubleshooting Depth
+summary: A balanced twenty-task rehearsal emphasizing diagnosis and persistent repair.
+suggested_minutes: 120
+time_policy: advisory-only
+tasks:
+  - persistent-kernel-tuning
+  - runaway-service-recovery
+  - recurring-user-report
+  - selinux-confined-web-service
+  - persistent-container-service
+  - network-path-diagnosis
+  - firewall-nat-redirection
+  - routed-internal-service
+  - resilient-link-and-bridge
+  - reverse-proxy-pool-recovery
+  - lvm-online-growth
+  - network-block-device-client
+  - persistent-swap-priority
+  - storage-latency-investigation
+  - systemd-service-deployment
+  - resource-bottleneck-investigation
+  - service-constraint-failure
+  - inode-exhaustion-recovery
+  - service-account-resource-limits
+  - ldap-sssd-client-recovery

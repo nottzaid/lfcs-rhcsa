@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: network-path-diagnosis
 version: 1
-status: draft
+status: verified
 title: The monitoring endpoint works locally but not from its client
 summary: Diagnose and repair both name resolution and service binding across two hosts.
 estimated_minutes: 30
@@ -56,7 +56,7 @@ checks:
       arguments:
         - bash
         - -c
-        - ss -H -ltn 'sport = :9090' | awk '$4 ~ /^(0\.0\.0\.0|\*|\[::\]):9090$/ {ok=1} END {exit !ok}'
+        - ss -H -ltn 'sport = :9090' | awk '$4=="{{host.node1.address}}:9090" || $4 ~ /^(0\.0\.0\.0|\*|\[::\]):9090$/ {ok=1} END {exit !ok}'
   - check_id: monitor-name-correct
     kind: command
     target: node2

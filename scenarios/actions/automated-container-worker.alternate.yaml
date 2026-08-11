@@ -1,0 +1,60 @@
+schema_version: 1
+actions:
+  - action_id: recover-local-inputs
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/yum.repos.d/lal-worker.repo <<'EOF'
+        [lal-worker]
+        name=Linux Admin Lab worker repository
+        baseurl=file:///srv/lal-worker-repo
+        enabled=1
+        gpgcheck=0
+        EOF
+        dnf install -y --repo lal-worker lal-worker-assets
+        git -C /etc/lal-automation checkout approved-worker -- worker.conf
+        git -C /etc/lal-automation commit -q -m 'Revert worker site' worker.conf
+  - action_id: install-worker-quadlet-and-schedule
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/containers/systemd/lal-automation.container <<'EOF'
+        [Container]
+        Image=localhost/lal-worker:1
+        ContainerName=lal-automation
+        Environment=SITE=amman
+        Volume=/var/lib/lal-automation:/data:Z
+        Volume=/usr/share/lal-worker-assets:/assets:ro,Z
+        Exec=/bin/bash -c "printf '%%s:%%s\n' \"$SITE\" \"$(</assets/payload)\" > /data/ready; exec /bin/bash -c 'while :; do read -r -t 60 || true; done'"
+        [Service]
+        Restart=always
+        MemoryMax=134217728
+        CPUQuota=50%
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        cat > /etc/systemd/system/lal-automation-refresh.service <<'EOF'
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/bash -c 'echo refreshed > /var/lib/lal-automation/refreshed'
+        EOF
+        cat > /etc/systemd/system/lal-automation-refresh.timer <<'EOF'
+        [Timer]
+        OnCalendar=*:0/15
+        Persistent=true
+        [Install]
+        WantedBy=timers.target
+        EOF
+        systemctl daemon-reload
+        systemctl start lal-automation.service
+        systemctl enable --now lal-automation-refresh.timer
+        systemctl start lal-automation-refresh.service

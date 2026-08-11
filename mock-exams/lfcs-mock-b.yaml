@@ -1,0 +1,28 @@
+schema_version: 1
+mock_id: lfcs-mock-b
+status: verified
+title: LFCS Mock B — Networked Services
+summary: A balanced twenty-task rehearsal emphasizing multi-machine administration.
+suggested_minutes: 120
+time_policy: advisory-only
+tasks:
+  - queued-handoff-job
+  - libvirt-guest-recovery
+  - persistent-container-service
+  - selinux-confined-web-service
+  - repository-trust-repair
+  - chrony-source-recovery
+  - routed-internal-service
+  - resilient-link-and-bridge
+  - reverse-proxy-pool-recovery
+  - ssh-client-server-policy
+  - virtual-mount-layout
+  - network-block-device-client
+  - autofs-project-share
+  - storage-latency-investigation
+  - configuration-history-recovery
+  - service-constraint-failure
+  - inode-exhaustion-recovery
+  - private-ca-service-certificate
+  - system-environment-policy
+  - ldap-sssd-client-recovery

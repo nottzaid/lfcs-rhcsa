@@ -1,0 +1,54 @@
+schema_version: 1
+actions:
+  - action_id: repair-directory-and-local-identities
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        sed -i 's#^ldap_uri *=.*#ldap_uri = ldap://{{host.node1.address}}#' /etc/sssd/sssd.conf
+        chmod 0600 /etc/sssd/sssd.conf
+        usermod -u 3100 -g platform teamlead
+        sss_cache -E
+        systemctl restart sssd.service
+        for try in $(seq 1 30); do getent passwd ldapdev >/dev/null && break; sleep 1; done
+  - action_id: install-team-policy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        chgrp platform /srv/platform /srv/platform/plan
+        chmod 2770 /srv/platform
+        chmod 0660 /srv/platform/plan
+        setfacl -m g:platform:rwx,g:ldapops:rwx,m::rwx,o::--- /srv/platform
+        setfacl -m d:g:platform:rwx,d:g:ldapops:rwx,d:m::rwx,d:o::--- /srv/platform
+        setfacl -m g:platform:rw-,g:ldapops:rw-,m::rw-,o::--- /srv/platform/plan
+        printf 'export TEAM_REGION=amman\n' > /etc/profile.d/lal-team.sh
+        printf '%s\n' '@platform soft nofile 4096' '@ldapops soft nofile 4096' > /etc/security/limits.d/80-lal-team.conf
+  - action_id: repair-team-ssh-policy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -o teamlead -g platform -m 0600 /tmp/lal_teamlead.pub /home/teamlead/.ssh/authorized_keys
+        semanage port -a -t ssh_port_t -p tcp 2222
+        cat > /etc/ssh/sshd_config.d/80-lal-team.conf <<'EOF'
+        Port 2222
+        Port 22
+        PubkeyAuthentication yes
+        AllowGroups platform ldapops wheel
+        EOF
+        sshd -t
+        firewall-cmd --quiet --permanent --add-port=2222/tcp
+        firewall-cmd --quiet --reload
+        systemctl enable sshd.service sssd.service
+        systemctl restart sshd.service

@@ -32,7 +32,7 @@ actions:
         After=local-fs.target
 
         [Service]
-        ExecStartPre=/usr/bin/bash -c 'test "$(df --output=avail /srv/lal-catalog | tail -1)" -ge 102400'
+        ExecStartPre=/usr/bin/dd if=/dev/zero of=/srv/lal-catalog/startup.check bs=1M count=64 status=none
         ExecStart=/usr/bin/tail -f /srv/lal-catalog/customer.db
         Restart=on-failure
 

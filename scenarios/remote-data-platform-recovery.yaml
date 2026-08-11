@@ -1,0 +1,110 @@
+schema_version: 1
+scenario_id: remote-data-platform-recovery
+version: 1
+status: verified
+title: The remote data client lost time, cache, swap, and project access
+summary: Recover a persistent client using Chrony, tmpfs, swap, NFS, and autofs.
+estimated_minutes: 65
+task_type: troubleshoot
+difficulty: exam
+task: >-
+  node1 is the session's time and NFS server. On node2, use node1 as the only configured
+  Chrony server with iburst. Configure /run/lal-data-cache as a persistent 96 MiB tmpfs with
+  mode 0750. Turn the unused disk /dev/disk/by-id/virtio-lal-remoteswap into labeled swap
+  LAL_REMOTE_SWAP, active at priority 50 and persistent by UUID or label. Finally configure
+  autofs so reading /data/projects mounts node1:/srv/lal-data/projects there and exposes
+  status.txt containing remote-data-ready. Do not put the NFS share directly in fstab.
+objectives:
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.time, title: Set and synchronize system time using time servers}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.virtual-filesystem, title: Manage and configure the virtual file system}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.remote-storage, title: Use remote filesystems and network block devices}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.swap, title: Configure and manage swap space}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.automounters, title: Configure filesystem automounters}
+sources:
+  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
+  - {kind: upstream, title: Chrony documentation, url: https://chrony-project.org/documentation.html}
+  - {kind: man-page, title: exports manual, man_page: exports(5)}
+  - {kind: man-page, title: auto.master manual, man_page: auto.master(5)}
+  - {kind: man-page, title: swapon manual, man_page: swapon(8)}
+  - {kind: man-page, title: tmpfs manual, man_page: tmpfs(5)}
+topology:
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v1, memory_mib: 1280, vcpus: 1}
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1280
+      vcpus: 1
+      disks:
+        - {name: remoteswap, size_mib: 768, role: remote data client swap disk}
+checks:
+  - check_id: designated-time-source
+    kind: command
+    target: node2
+    description: Chrony is configured only against node1 with iburst.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          awk -v ip='{{host.node1.address}}'
+          '$1=="server" || $1=="pool" {n++; if ($1=="server" && $2==ip && $0 ~ /iburst/) ok=1}
+          END {exit !(n==1 && ok)}' /etc/chrony.conf
+  - check_id: designated-time-source-selected
+    kind: command
+    target: node2
+    description: Chrony has selected node1 as its live synchronization source.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          for attempt in $(seq 1 30); do
+            chronyc -n sources |
+            grep -Eq '^\^\*[[:space:]]+{{host.node1.address}}([[:space:]]|$)' && exit 0;
+            sleep 1;
+          done;
+          exit 1
+      timeout_seconds: 40
+  - check_id: time-client-persistent
+    kind: service
+    target: node2
+    description: Chronyd is running and enabled.
+    parameters: {name: chronyd.service, active: true, enabled: true}
+  - check_id: volatile-cache-correct
+    kind: command
+    target: node2
+    description: The required tmpfs is mounted with the requested capacity and mode.
+    parameters: {arguments: [bash, -c, 'test "$(findmnt -n -o FSTYPE /run/lal-data-cache)" = tmpfs && findmnt -n -o OPTIONS /run/lal-data-cache | grep -qw size=98304k && test "$(stat -c %a /run/lal-data-cache)" = 750 && awk ''$1=="tmpfs" && $2=="/run/lal-data-cache" {ok=1} END {exit !ok}'' /etc/fstab']}
+  - check_id: priority-swap-correct
+    kind: command
+    target: node2
+    description: The labeled disk is active swap at priority 50 and persistent by stable identity.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          disk=/dev/disk/by-id/virtio-lal-remoteswap;
+          test "$(blkid -s TYPE -o value "$disk")" = swap &&
+          test "$(blkid -s LABEL -o value "$disk")" = LAL_REMOTE_SWAP &&
+          uuid=$(blkid -s UUID -o value "$disk") &&
+          swapon --show=UUID,PRIO --noheadings --raw |
+          awk -v u="$uuid" '$1==u && $2==50 {ok=1} END {exit !ok}' &&
+          awk '$1 ~ /^(UUID=|LABEL=LAL_REMOTE_SWAP$)/ && $2=="none" && $3=="swap" &&
+          $4 ~ /(^|,)pri=50(,|$)/ {ok=1} END {exit !ok}' /etc/fstab
+  - check_id: automounter-running
+    kind: service
+    target: node2
+    description: autofs is running and enabled.
+    parameters: {name: autofs.service, active: true, enabled: true}
+  - check_id: remote-project-behavior
+    kind: command
+    target: node2
+    description: Access triggers the exact NFS project share and returns its data.
+    parameters: {arguments: [bash, -c, 'test "$(cat /data/projects/status.txt)" = remote-data-ready && findmnt -n -t nfs,nfs4 /data/projects | grep -Fq ''{{host.node1.address}}:/srv/lal-data/projects'' && ! awk ''$3 ~ /^nfs/ {exit 0} END {exit 1}'' /etc/fstab']}
+persistence: {reboot: true, hosts: [node2]}
+setup: actions/remote-data-platform-recovery.setup.yaml
+reference_solution: actions/remote-data-platform-recovery.solution.yaml
+alternate_solutions: [actions/remote-data-platform-recovery.alternate.yaml]

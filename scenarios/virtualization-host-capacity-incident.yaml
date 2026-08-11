@@ -1,0 +1,86 @@
+schema_version: 1
+scenario_id: virtualization-host-capacity-incident
+version: 1
+status: verified
+title: Capacity pressure blocks a replacement utility guest
+summary: Constrain CPU and I/O workloads, tune the kernel, build a bridge, and recover libvirt capacity.
+estimated_minutes: 60
+task_type: troubleshoot
+difficulty: exam
+task: >-
+  node2 has managed CPU and storage exercisers named lal-capacity-cpu.service and
+  lal-capacity-io.service. Keep both running and enabled, but set the CPU worker to CPUQuota
+  30% and Nice 5, and set the I/O worker to IOWeight 10. Set vm.swappiness to 10 live and
+  persistently. Create an autoconnecting NetworkManager bridge br-lab with persistent dummy
+  port lab-port, address 192.0.2.50/24, and no default route. Then create and run an
+  autostarting software-emulated libvirt guest capacity-guest with one vCPU, 384 MiB RAM,
+  a 768 MiB qcow2 virtio disk at /var/lib/libvirt/images/capacity-guest.qcow2, and one NIC
+  attached to br-lab. Do not stop the exercisers or touch the lab management interface.
+objectives:
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.kernel-parameters, title: Configure kernel parameters persistent and non-persistent}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.libvirt, title: Manage Virtual Machines with libvirt}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.bridges-bonds, title: Configure bridge and bonding devices}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.performance, title: Monitor storage performance}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.performance, title: Monitor and troubleshoot system performance and services}
+sources:
+  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
+  - {kind: upstream, title: libvirt domain XML, url: https://libvirt.org/formatdomain.html}
+  - {kind: upstream, title: NetworkManager bridge settings, url: https://networkmanager.dev/docs/api/latest/settings-bridge.html}
+  - {kind: upstream, title: systemd resource control, url: https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html}
+  - {kind: man-page, title: sysctl manual, man_page: sysctl(8)}
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 2304
+      vcpus: 2
+      nested_virtualization: true
+      disks:
+        - {name: capacityio, size_mib: 1024, role: capacity investigation I/O disk}
+checks:
+  - check_id: kernel-capacity-policy
+    kind: command
+    target: node2
+    description: Swappiness is correct live and in persistent sysctl policy.
+    parameters: {sudo: true, arguments: [bash, -c, 'test "$(sysctl -n vm.swappiness)" = 10 && grep -RqsE ''^ *vm\.swappiness *= *10([[:space:]]*(#.*)?)?$'' /etc/sysctl.conf /etc/sysctl.d']}
+  - check_id: cpu-worker-constrained
+    kind: command
+    target: node2
+    description: The CPU worker remains operational with the required quota and priority.
+    parameters: {arguments: [bash, -c, 'systemctl is-active --quiet lal-capacity-cpu.service && systemctl is-enabled --quiet lal-capacity-cpu.service && test "$(systemctl show -p CPUQuotaPerSecUSec --value lal-capacity-cpu.service)" = 300ms && test "$(systemctl show -p Nice --value lal-capacity-cpu.service)" = 5']}
+  - check_id: io-worker-constrained
+    kind: command
+    target: node2
+    description: The I/O worker remains operational with low I/O weight.
+    parameters: {arguments: [bash, -c, 'systemctl is-active --quiet lal-capacity-io.service && systemctl is-enabled --quiet lal-capacity-io.service && test "$(systemctl show -p IOWeight --value lal-capacity-io.service)" = 10']}
+  - check_id: bridge-topology-live
+    kind: command
+    target: node2
+    description: The bridge owns its persistent dummy port and required address.
+    parameters: {arguments: [bash, -c, 'ip -4 addr show br-lab | grep -Fq ''192.0.2.50/24'' && test "$(basename "$(readlink /sys/class/net/lab-port/master)")" = br-lab && test "$(nmcli -g connection.autoconnect con show lal-capacity-bridge)" = yes && test "$(nmcli -g ipv4.never-default con show lal-capacity-bridge)" = yes']}
+  - check_id: capacity-guest-running
+    kind: command
+    target: node2
+    description: The exact replacement guest is running and autostarts.
+    parameters: {sudo: true, arguments: [bash, -c, 'test "$(virsh -c qemu:///system domstate capacity-guest)" = running && virsh -c qemu:///system dominfo capacity-guest | grep -Eq ''^Autostart: +enable''']}
+  - check_id: capacity-guest-resources
+    kind: command
+    target: node2
+    description: Guest compute, disk, and bridge NIC match the requested state.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(virsh -c qemu:///system dominfo capacity-guest |
+          awk -F: '/^CPU.s.:/ {gsub(/ /,"",$2); print $2}')" = 1 &&
+          test "$(virsh -c qemu:///system dominfo capacity-guest |
+          awk -F: '/^Max memory:/ {gsub(/ KiB/,"",$2); print $2+0}')" = 393216 &&
+          virsh -c qemu:///system domblklist capacity-guest |
+          grep -Fq /var/lib/libvirt/images/capacity-guest.qcow2 &&
+          virsh -c qemu:///system dumpxml capacity-guest | grep -q "source bridge='br-lab'"
+persistence: {reboot: true, hosts: [node2]}
+setup: actions/virtualization-host-capacity-incident.setup.yaml
+reference_solution: actions/virtualization-host-capacity-incident.solution.yaml
+alternate_solutions: [actions/virtualization-host-capacity-incident.alternate.yaml]

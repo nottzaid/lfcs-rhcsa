@@ -13,10 +13,19 @@ from sysadmin_lab.domain.models import ScenarioStatus
 
 pytestmark = pytest.mark.live
 ROOT = Path(__file__).parents[2]
-VERIFIED_SCENARIOS = tuple(
+ALL_VERIFIED_SCENARIOS = tuple(
     manifest.scenario_id
     for manifest in load_catalog(ROOT / "scenarios")
     if manifest.status is ScenarioStatus.VERIFIED
+)
+SHARD_TOTAL = int(os.environ.get("LAL_LIVE_SHARD_TOTAL", "1"))
+SHARD_INDEX = int(os.environ.get("LAL_LIVE_SHARD_INDEX", "0"))
+if SHARD_TOTAL < 1 or not 0 <= SHARD_INDEX < SHARD_TOTAL:
+    raise ValueError("live shard settings require 0 <= LAL_LIVE_SHARD_INDEX < LAL_LIVE_SHARD_TOTAL")
+VERIFIED_SCENARIOS = tuple(
+    scenario_id
+    for index, scenario_id in enumerate(ALL_VERIFIED_SCENARIOS)
+    if index % SHARD_TOTAL == SHARD_INDEX
 )
 
 
@@ -34,7 +43,8 @@ def test_verified_scenario_acceptance_contract(scenario_id: str) -> None:
     )
     images = {manifest.topology.hosts[0].image: Path(base_image_value).resolve()}
 
-    with open_vm_runtime(ROOT / "runtime" / "scenario-replay") as runtime:
+    runtime_root = ROOT / "runtime" / "scenario-replay" / f"shard-{SHARD_INDEX}"
+    with open_vm_runtime(runtime_root) as runtime:
         driver = VmScenarioDriver(
             scenario_directory=ROOT / "scenarios",
             base_images=images,

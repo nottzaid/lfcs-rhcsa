@@ -18,7 +18,7 @@ actions:
         rm -rf "$root"
         install -d "$root/bin" "$root/lib64" "$root/usr/lib64"
         cp --parents /bin/bash "$root"
-        ldd /bin/bash | awk '/=> \// {print $3} /^\// {print $1}' |
+        ldd /bin/bash | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
           while read -r library; do cp --parents "$library" "$root"; done
         tar -C "$root" -cf - . | podman import - localhost/lal-worker:1
         rm -rf "$root" /srv/worker-data

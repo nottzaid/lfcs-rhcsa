@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: private-ca-service-certificate
 version: 1
-status: draft
+status: verified
 title: The internal API needs a verifiable service certificate
 summary: Issue a SAN certificate from an existing private CA and protect its key material.
 estimated_minutes: 40

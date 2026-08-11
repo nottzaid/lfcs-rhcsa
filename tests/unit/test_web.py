@@ -64,6 +64,12 @@ class FakeWorkspace:
             raise LookupError("scenario does not exist")
         return self.manifest
 
+    def mock_exams(self) -> tuple:
+        return ()
+
+    def mock_exam(self, _mock_id: str):
+        raise LookupError("mock exam does not exist")
+
     def sessions(self, *, limit: int = 100) -> tuple[ScenarioSessionSnapshot, ...]:
         return (self.snapshot,)[:limit]
 
@@ -124,7 +130,7 @@ def test_lfcs_topic_and_scenario_pages_expose_hands_on_loop(tmp_path: Path) -> N
         assert "LFCS" in catalog.text
         assert workspace.manifest.title in catalog.text
         assert f"{workspace.manifest.estimated_minutes} min" in catalog.text
-        assert "Times are estimates only" in catalog.text
+        assert "Times are advisory estimates" in catalog.text
         assert "No limit" not in catalog.text
         assert "Info" in catalog.text and "Run" in catalog.text
         assert "Active" in catalog.text

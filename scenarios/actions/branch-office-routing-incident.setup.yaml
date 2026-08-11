@@ -10,6 +10,7 @@ actions:
       - -c
       - |
         set -euo pipefail
+        systemctl disable --now lal-dc-http.service >/dev/null 2>&1 || true
         systemctl disable --now firewalld.service nftables.service >/dev/null 2>&1 || true
         nft delete table inet lal_branch >/dev/null 2>&1 || true
         ip netns delete lal-branch >/dev/null 2>&1 || true
@@ -32,7 +33,21 @@ actions:
         ip netns exec lal-dc ip link set eth0 up
         install -d /srv/lal-dc
         printf 'branch-ready\n' > /srv/lal-dc/index.html
-        ip netns exec lal-dc bash -c 'cd /srv/lal-dc && python3 -m http.server 8080 --bind 172.20.0.2 >/run/lal-dc-http.log 2>&1 & echo $! >/run/lal-dc-http.pid'
+        cat > /etc/systemd/system/lal-dc-http.service <<'EOF'
+        [Unit]
+        Description=Linux Admin Lab datacenter endpoint
+        After=network.target
+
+        [Service]
+        NetworkNamespacePath=/run/netns/lal-dc
+        ExecStart=/usr/bin/python3 -m http.server 8080 --directory /srv/lal-dc --bind 172.20.0.2
+        Restart=on-failure
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl start lal-dc-http.service
         sysctl -w net.ipv4.ip_forward=0 >/dev/null
         rm -f /etc/sysctl.d/80-lal-forwarding.conf /etc/nftables/lal-branch.nft
         sed -i '\#lal-branch.nft#d' /etc/sysconfig/nftables.conf

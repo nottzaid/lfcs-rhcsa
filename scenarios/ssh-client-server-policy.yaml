@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: ssh-client-server-policy
 version: 1
-status: draft
+status: verified
 title: The deployment account cannot reach the hardened SSH endpoint
 summary: Repair coordinated OpenSSH server and client policy for key-only access.
 estimated_minutes: 30
@@ -9,7 +9,8 @@ task_type: fix
 difficulty: advanced
 task: >-
   Configure OpenSSH on node2 to listen on TCP 2222, deny root and password authentication,
-  and allow members of opsssh. The existing deploy account must be in opsssh and accept the
+  and allow members of opsssh while retaining the lab controller's wheel-group access on
+  TCP 22. The existing deploy account must be in opsssh and accept the
   public key stored at /home/deploy/.ssh/lal_deploy.pub on node1. Label and open the custom
   SSH port without disabling SELinux or the firewall. On node1, configure the deploy user's
   SSH client alias app-node for key-only access to node2:2222 using lal_deploy. A noninteractive

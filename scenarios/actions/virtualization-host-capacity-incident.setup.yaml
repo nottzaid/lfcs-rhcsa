@@ -1,0 +1,54 @@
+schema_version: 1
+actions:
+  - action_id: create-unconstrained-capacity-load
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-capacityio
+        umount /srv/capacity-io >/dev/null 2>&1 || true
+        wipefs -a "$disk"
+        mkfs.xfs -f -L LAL_CAP_IO "$disk" >/dev/null
+        install -d /srv/capacity-io
+        sed -i '\#/srv/capacity-io#d' /etc/fstab
+        printf 'LABEL=LAL_CAP_IO /srv/capacity-io xfs defaults 0 0\n' >> /etc/fstab
+        mount /srv/capacity-io
+        cat > /etc/systemd/system/lal-capacity-cpu.service <<'EOF'
+        [Service]
+        ExecStart=/usr/bin/stress-ng --cpu 1
+        Restart=always
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        cat > /etc/systemd/system/lal-capacity-io.service <<'EOF'
+        [Service]
+        ExecStart=/usr/bin/stress-ng --hdd 1 --hdd-bytes 128M --temp-path /srv/capacity-io
+        Restart=always
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        rm -rf /etc/systemd/system/lal-capacity-{cpu,io}.service.d
+        systemctl daemon-reload
+        systemctl enable --now lal-capacity-cpu.service lal-capacity-io.service
+        sysctl -w vm.swappiness=60 >/dev/null
+        rm -f /etc/sysctl.d/80-lal-capacity.conf
+  - action_id: remove-capacity-network-and-guest
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        for con in lal-capacity-port lal-capacity-bridge; do nmcli con delete "$con" >/dev/null 2>&1 || true; done
+        ip link delete br-lab >/dev/null 2>&1 || true
+        ip link delete lab-port >/dev/null 2>&1 || true
+        systemctl enable --now virtqemud.socket
+        virsh -c qemu:///system destroy capacity-guest >/dev/null 2>&1 || true
+        virsh -c qemu:///system undefine capacity-guest --nvram >/dev/null 2>&1 || true
+        rm -f /var/lib/libvirt/images/capacity-guest.qcow2

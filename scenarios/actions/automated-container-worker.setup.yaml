@@ -1,0 +1,86 @@
+schema_version: 1
+actions:
+  - action_id: build-local-worker-assets
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        rm -rf /tmp/lal-worker-rpmbuild /srv/lal-worker-repo
+        install -d /tmp/lal-worker-rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} /srv/lal-worker-repo
+        cat > /tmp/lal-worker-rpmbuild/SPECS/lal-worker-assets.spec <<'EOF'
+        Name: lal-worker-assets
+        Version: 1.0
+        Release: 1
+        Summary: Linux Admin Lab worker assets
+        License: MIT
+        BuildArch: noarch
+        %description
+        Offline worker payload for Linux Admin Lab.
+        %install
+        mkdir -p %{buildroot}/usr/share/lal-worker-assets
+        printf 'approved-worker\n' > %{buildroot}/usr/share/lal-worker-assets/payload
+        %files
+        /usr/share/lal-worker-assets/payload
+        EOF
+        rpmbuild -bb --define '_topdir /tmp/lal-worker-rpmbuild' /tmp/lal-worker-rpmbuild/SPECS/lal-worker-assets.spec
+        cp /tmp/lal-worker-rpmbuild/RPMS/noarch/lal-worker-assets-1.0-1.noarch.rpm /srv/lal-worker-repo/
+        createrepo_c /srv/lal-worker-repo
+        rpm -e lal-worker-assets >/dev/null 2>&1 || true
+        cat > /etc/yum.repos.d/lal-worker.repo <<'EOF'
+        [lal-worker]
+        name=Linux Admin Lab worker repository
+        baseurl=file:///srv/missing-worker-repo
+        enabled=0
+        gpgcheck=0
+        EOF
+        dnf clean all >/dev/null
+  - action_id: build-worker-history-and-image
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        rm -rf /etc/lal-automation
+        install -d /etc/lal-automation
+        git -C /etc/lal-automation init -q --initial-branch=main
+        git -C /etc/lal-automation config user.name 'Automation Team'
+        git -C /etc/lal-automation config user.email automation@lab.invalid
+        printf 'SITE=amman\n' > /etc/lal-automation/worker.conf
+        git -C /etc/lal-automation add worker.conf
+        git -C /etc/lal-automation commit -q -m 'Approve worker site'
+        git -C /etc/lal-automation tag approved-worker
+        printf 'Run through Quadlet.\n' > /etc/lal-automation/README
+        git -C /etc/lal-automation add README
+        git -C /etc/lal-automation commit -q -m 'Document deployment'
+        printf 'SITE=retired\n' > /etc/lal-automation/worker.conf
+        git -C /etc/lal-automation add worker.conf
+        git -C /etc/lal-automation commit -q -m 'Rejected site change'
+        podman rm -f lal-automation >/dev/null 2>&1 || true
+        podman rmi localhost/lal-worker:1 >/dev/null 2>&1 || true
+        root=/tmp/lal-worker-rootfs
+        rm -rf "$root"
+        install -d "$root/bin" "$root/lib64" "$root/usr/lib64"
+        cp --parents /bin/bash "$root"
+        ldd /bin/bash | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' | while read -r lib; do cp --parents "$lib" "$root"; done
+        tar -C "$root" -cf - . | podman import - localhost/lal-worker:1
+        rm -rf "$root" /var/lib/lal-automation
+        install -d -m 0770 /var/lib/lal-automation /etc/containers/systemd
+  - action_id: remove-incomplete-worker-units
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        systemctl disable --now lal-automation.service lal-automation-refresh.timer >/dev/null 2>&1 || true
+        rm -f /etc/containers/systemd/lal-automation.container /etc/systemd/system/lal-automation-refresh.{service,timer}
+        systemctl daemon-reload

@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: secure-web-deployment
 version: 1
-status: draft
+status: verified
 title: The internal web deployment is neither secure nor reachable
 summary: Recover a TLS web service without weakening SELinux or the host firewall.
 estimated_minutes: 60

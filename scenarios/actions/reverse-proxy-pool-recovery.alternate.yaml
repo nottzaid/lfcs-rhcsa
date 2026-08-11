@@ -9,6 +9,7 @@ actions:
       - -c
       - |
         systemctl disable --now haproxy.service
+        rm -f /etc/haproxy/haproxy.cfg
         rm -f /etc/nginx/conf.d/*.conf
         cat > /etc/nginx/conf.d/lal-application.conf <<'EOF'
         server {
@@ -20,5 +21,6 @@ actions:
             }
         }
         EOF
+        setsebool -P httpd_can_network_connect 1
         nginx -t
         systemctl enable --now nginx.service

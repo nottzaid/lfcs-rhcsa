@@ -17,4 +17,5 @@ actions:
         uuid=$(blkid -s UUID -o value /dev/vgapps/lvcatalog)
         sed -i '\#/srv/lal-catalog#d' /etc/fstab
         printf 'UUID=%s /srv/lal-catalog ext4 defaults 0 2\n' "$uuid" >> /etc/fstab
+        systemctl reset-failed lal-catalog.service || true
         systemctl enable --now lal-catalog.service

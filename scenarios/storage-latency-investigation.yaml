@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: storage-latency-investigation
 version: 1
-status: draft
+status: verified
 title: A background disk exerciser dominates the data device
 summary: Identify a managed I/O workload and apply a persistent low scheduling weight.
 estimated_minutes: 30

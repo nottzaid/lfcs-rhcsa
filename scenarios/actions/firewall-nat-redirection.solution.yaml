@@ -18,6 +18,7 @@ actions:
             tcp dport 22 accept
             iifname "lan0" accept
             iifname "wan0" tcp dport 80 accept
+            iifname "wan0" tcp dport 8080 accept
           }
           chain forward {
             type filter hook forward priority filter; policy drop;

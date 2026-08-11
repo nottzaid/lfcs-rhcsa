@@ -1,0 +1,88 @@
+schema_version: 1
+scenario_id: directory-backed-team-onboarding
+version: 1
+status: verified
+title: A mixed local and directory team cannot use the application host
+summary: Recover LDAP identities, a local operator, SSH policy, profiles, limits, and shared ACLs.
+estimated_minutes: 50
+task_type: troubleshoot
+difficulty: exam
+task: >-
+  node1 provides LDAP base dc=lab,dc=internal and holds the teamlead SSH key. On node2,
+  repair SSSD so ldapdev (UID 2300, group ldapops GID 2300) resolves from node1 without a
+  shadowing local account. Repair the local teamlead account to UID 3100 with primary group
+  platform GID 3100. Both platform and ldapops members need read/write access to
+  /srv/platform, including inherited access on new content; other users get no access.
+  Export TEAM_REGION=amman system-wide and configure soft nofile 4096 for both groups.
+  Finally, run sshd on port 2222 with SELinux enforcing, permit members of these two groups
+  while retaining the lab controller's wheel-group access on port 22, install node1's supplied
+  public key for teamlead, and leave SSSD and sshd enabled.
+objectives:
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.openssh, title: Configure the OpenSSH server and client}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.local-accounts, title: Create and manage local user and group accounts}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.environment-profiles, title: Manage personal and system-wide environment profiles}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.resource-limits, title: Configure user resource limits}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.acls, title: Configure and manage ACLs}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.ldap-accounts, title: Configure the system to use LDAP user and group accounts}
+sources:
+  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
+  - {kind: upstream, title: SSSD LDAP provider documentation, url: https://sssd.io/docs/introduction.html}
+  - {kind: upstream, title: OpenSSH server manual, url: https://man.openbsd.org/sshd_config}
+  - {kind: man-page, title: limits.conf manual, man_page: limits.conf(5)}
+  - {kind: man-page, title: acl manual, man_page: acl(5)}
+topology:
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v1, memory_mib: 1536, vcpus: 2}
+    - {name: node2, image: rocky-10.2-lab-v1, memory_mib: 1280, vcpus: 1}
+checks:
+  - check_id: directory-identities-online
+    kind: command
+    target: node2
+    description: SSSD resolves the required LDAP identity and group from node1.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'u=$(getent passwd ldapdev) && g=$(getent group ldapops) && test "$(cut -d: -f3 <<<"$u")" = 2300 && test "$(cut -d: -f3 <<<"$g")" = 2300 && sssctl domain-status lab --online >/dev/null && grep -Eq ''^ldap_uri *= *ldap://{{host.node1.address}}'' /etc/sssd/sssd.conf && ! grep -q ''^ldapdev:'' /etc/passwd']
+  - check_id: local-team-lead-correct
+    kind: command
+    target: node2
+    description: The local operator has the exact local UID and primary group.
+    parameters: {arguments: [bash, -c, 'test "$(id -u teamlead)" = 3100 && test "$(id -g teamlead)" = 3100 && test "$(getent group 3100 | cut -d: -f1)" = platform']}
+  - check_id: shared-tree-policy
+    kind: command
+    target: node2
+    description: Existing and inherited ACLs grant both teams access and deny others.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'runuser -u teamlead -- test -w /srv/platform/plan && runuser -u ldapdev -- test -w /srv/platform/plan && getfacl -cp /srv/platform | grep -qx ''default:group:platform:rwx'' && getfacl -cp /srv/platform | grep -qx ''default:group:ldapops:rwx'' && getfacl -cp /srv/platform | grep -qx ''default:other::---''']
+  - check_id: shared-login-environment
+    kind: command
+    target: node2
+    description: Both local and directory login shells receive the team region.
+    parameters: {sudo: true, arguments: [bash, -c, 'test "$(runuser -l teamlead -c ''printf %s "$TEAM_REGION"'')" = amman && test "$(runuser -l ldapdev -c ''printf %s "$TEAM_REGION"'')" = amman']}
+  - check_id: group-limits-configured
+    kind: command
+    target: node2
+    description: Both groups have the required soft file-descriptor limit.
+    parameters: {arguments: [bash, -c, 'awk ''$1=="@platform" && $2=="soft" && $3=="nofile" && $4==4096 {p=1} $1=="@ldapops" && $2=="soft" && $3=="nofile" && $4==4096 {l=1} END {exit !(p&&l)}'' /etc/security/limits.d/80-lal-team.conf']}
+  - check_id: identity-services-persistent
+    kind: service
+    target: node2
+    description: SSSD and OpenSSH are running and enabled.
+    parameters: {name: sssd.service, active: true, enabled: true}
+  - check_id: ssh-service-persistent
+    kind: service
+    target: node2
+    description: OpenSSH remains running and enabled.
+    parameters: {name: sshd.service, active: true, enabled: true}
+  - check_id: teamlead-key-login
+    kind: command
+    target: node1
+    description: The supplied client key authenticates teamlead to node2 on the required port.
+    parameters:
+      sudo: true
+      arguments: [runuser, -u, teamlead, --, ssh, -F, /dev/null, -i, /home/teamlead/.ssh/lal_teamlead, -p, '2222', -o, IdentitiesOnly=yes, -o, StrictHostKeyChecking=no, -o, UserKnownHostsFile=/dev/null, 'teamlead@{{host.node2.address}}', id, -u]
+      stdout_equals: '3100'
+persistence: {reboot: false}
+setup: actions/directory-backed-team-onboarding.setup.yaml
+reference_solution: actions/directory-backed-team-onboarding.solution.yaml
+alternate_solutions: [actions/directory-backed-team-onboarding.alternate.yaml]

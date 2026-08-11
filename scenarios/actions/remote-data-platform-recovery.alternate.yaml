@@ -1,0 +1,41 @@
+schema_version: 1
+actions:
+  - action_id: rebuild-client-foundation
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/chrony.conf <<'EOF'
+        server {{host.node1.address}} iburst
+        driftfile /var/lib/chrony/drift
+        makestep 1.0 3
+        rtcsync
+        logdir /var/log/chrony
+        EOF
+        systemctl enable --now chronyd.service
+        systemctl restart chronyd.service
+        chronyc waitsync 30 0.5
+        echo 'tmpfs /run/lal-data-cache tmpfs rw,size=98304k,mode=0750 0 0' >> /etc/fstab
+        mount -t tmpfs -o size=98304k,mode=0750 tmpfs /run/lal-data-cache
+        mkswap --label LAL_REMOTE_SWAP /dev/disk/by-id/virtio-lal-remoteswap
+        echo 'LABEL=LAL_REMOTE_SWAP none swap defaults,pri=50 0 0' >> /etc/fstab
+        swapon -p 50 /dev/disk/by-id/virtio-lal-remoteswap
+  - action_id: install-indirect-nfs-map
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /etc/auto.master.d
+        cat > /etc/auto.master.d/lal-data.autofs <<'EOF'
+        /data /etc/auto.lal-data
+        EOF
+        echo 'projects -ro,fstype=nfs {{host.node1.address}}:/srv/lal-data/projects' > /etc/auto.lal-data
+        systemctl enable autofs.service
+        systemctl restart autofs.service
+        test "$(cat /data/projects/status.txt)" = remote-data-ready

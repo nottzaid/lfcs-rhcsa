@@ -1,7 +1,7 @@
 schema_version: 1
 portfolio_id: lfcs-2026-08-complete
 curriculum_id: lfcs-2026-08
-status: planned
+status: verified
 time_policy: advisory-only
 quality_policy:
   focused_evidence_required: true
@@ -56,25 +56,25 @@ focused_scenarios:
     competencies: [operations.packages-repositories]
     capabilities: [single-node, local-package-repository]
   - scenario_id: offline-filesystem-recovery
-    status: draft
+    status: verified
     wave: 2
     estimated_minutes: 35
     competencies: [operations.recovery, storage.filesystems]
     capabilities: [single-node, extra-disk, reboot-secondary]
   - scenario_id: libvirt-guest-recovery
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 40
     competencies: [operations.libvirt]
     capabilities: [nested-virtualization]
   - scenario_id: persistent-container-service
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 35
     competencies: [operations.containers]
     capabilities: [single-node, local-container-registry]
   - scenario_id: selinux-confined-web-service
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 35
     competencies: [operations.selinux]
@@ -86,43 +86,43 @@ focused_scenarios:
     competencies: [networking.ip-hostname]
     capabilities: [multi-nic, isolated-network, ipv6]
   - scenario_id: chrony-source-recovery
-    status: draft
+    status: verified
     wave: 3
     estimated_minutes: 25
     competencies: [networking.time]
     capabilities: [multi-node, isolated-network, time-server]
   - scenario_id: network-path-diagnosis
-    status: draft
+    status: verified
     wave: 3
     estimated_minutes: 30
     competencies: [networking.troubleshoot]
     capabilities: [multi-node, isolated-network]
   - scenario_id: ssh-client-server-policy
-    status: draft
+    status: verified
     wave: 3
     estimated_minutes: 30
     competencies: [networking.openssh]
     capabilities: [multi-node, isolated-network]
   - scenario_id: firewall-nat-redirection
-    status: draft
+    status: verified
     wave: 3
     estimated_minutes: 40
     competencies: [networking.packet-filtering]
     capabilities: [multi-node, multi-nic, isolated-network]
   - scenario_id: routed-internal-service
-    status: draft
+    status: verified
     wave: 3
     estimated_minutes: 35
     competencies: [networking.static-routing]
     capabilities: [multi-node, multi-nic, isolated-network]
   - scenario_id: resilient-link-and-bridge
-    status: draft
+    status: verified
     wave: 3
     estimated_minutes: 40
     competencies: [networking.bridges-bonds]
     capabilities: [multi-nic, isolated-network]
   - scenario_id: reverse-proxy-pool-recovery
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 40
     competencies: [networking.proxies-load-balancers]
@@ -134,7 +134,7 @@ focused_scenarios:
     competencies: [storage.lvm]
     capabilities: [single-node, extra-disk]
   - scenario_id: virtual-mount-layout
-    status: draft
+    status: verified
     wave: 2
     estimated_minutes: 25
     competencies: [storage.virtual-filesystem]
@@ -146,31 +146,31 @@ focused_scenarios:
     competencies: [storage.filesystems]
     capabilities: [single-node, extra-disk, reboot-secondary]
   - scenario_id: nfs-client-recovery
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 35
     competencies: [storage.remote-storage]
     capabilities: [multi-node, extra-disk, isolated-network]
   - scenario_id: network-block-device-client
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 35
     competencies: [storage.remote-storage]
     capabilities: [multi-node, extra-disk, isolated-network]
   - scenario_id: persistent-swap-priority
-    status: draft
+    status: verified
     wave: 2
     estimated_minutes: 25
     competencies: [storage.swap]
     capabilities: [single-node, extra-disk, reboot-secondary]
   - scenario_id: autofs-project-share
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 35
     competencies: [storage.automounters]
     capabilities: [multi-node, isolated-network]
   - scenario_id: storage-latency-investigation
-    status: draft
+    status: verified
     wave: 2
     estimated_minutes: 30
     competencies: [storage.performance]
@@ -206,13 +206,13 @@ focused_scenarios:
     competencies: [essential-commands.diskspace]
     capabilities: [single-node, workload-generator]
   - scenario_id: inode-exhaustion-recovery
-    status: draft
+    status: verified
     wave: 2
     estimated_minutes: 25
     competencies: [essential-commands.diskspace]
     capabilities: [single-node, extra-disk]
   - scenario_id: private-ca-service-certificate
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 40
     competencies: [essential-commands.tls-certificates]
@@ -236,14 +236,14 @@ focused_scenarios:
     competencies: [users-groups.acls]
     capabilities: [single-node]
   - scenario_id: ldap-sssd-client-recovery
-    status: draft
+    status: verified
     wave: 4
     estimated_minutes: 45
     competencies: [users-groups.ldap-accounts]
     capabilities: [multi-node, isolated-network, directory-server]
 integrated_scenarios:
   - scenario_id: secure-web-deployment
-    status: draft
+    status: verified
     wave: 5
     estimated_minutes: 60
     competencies:
@@ -253,7 +253,7 @@ integrated_scenarios:
       - essential-commands.services
       - essential-commands.tls-certificates
   - scenario_id: storage-backed-application-recovery
-    status: draft
+    status: verified
     wave: 5
     estimated_minutes: 60
     competencies:
@@ -263,7 +263,7 @@ integrated_scenarios:
       - storage.filesystems
       - essential-commands.diskspace
   - scenario_id: branch-office-routing-incident
-    status: draft
+    status: verified
     wave: 5
     estimated_minutes: 60
     competencies:
@@ -272,7 +272,7 @@ integrated_scenarios:
       - networking.packet-filtering
       - networking.static-routing
   - scenario_id: directory-backed-team-onboarding
-    status: planned
+    status: verified
     wave: 5
     estimated_minutes: 50
     competencies:
@@ -283,7 +283,7 @@ integrated_scenarios:
       - users-groups.acls
       - users-groups.ldap-accounts
   - scenario_id: virtualization-host-capacity-incident
-    status: planned
+    status: verified
     wave: 5
     estimated_minutes: 60
     competencies:
@@ -293,7 +293,7 @@ integrated_scenarios:
       - storage.performance
       - essential-commands.performance
   - scenario_id: automated-container-worker
-    status: planned
+    status: verified
     wave: 5
     estimated_minutes: 50
     competencies:
@@ -303,7 +303,7 @@ integrated_scenarios:
       - essential-commands.git
       - essential-commands.constraints
   - scenario_id: remote-data-platform-recovery
-    status: planned
+    status: verified
     wave: 5
     estimated_minutes: 65
     competencies:
@@ -314,14 +314,14 @@ integrated_scenarios:
       - storage.automounters
 mock_exams:
   - mock_id: lfcs-mock-a
-    status: planned
+    status: verified
     wave: 6
-    task_count: 18
+    task_count: 20
   - mock_id: lfcs-mock-b
-    status: planned
+    status: verified
     wave: 6
-    task_count: 18
+    task_count: 20
   - mock_id: lfcs-mock-c
-    status: planned
+    status: verified
     wave: 6
     task_count: 20

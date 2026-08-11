@@ -13,8 +13,10 @@ from sysadmin_lab.catalog import (
     load_action_manifest,
     load_catalog,
     load_image_manifest,
+    load_mock_catalog,
 )
 from sysadmin_lab.composition import open_vm_runtime
+from sysadmin_lab.domain.mock_exams import MockExamManifest
 from sysadmin_lab.domain.models import ScenarioManifest
 from sysadmin_lab.domain.progress import ScenarioProgress
 from sysadmin_lab.domain.session_machines import SessionMachine
@@ -28,6 +30,7 @@ class WorkspacePaths:
     image_manifest: Path
     image_cache: Path
     runtime_root: Path
+    mock_exam_directory: Path
 
     @classmethod
     def under(cls, project_root: Path) -> WorkspacePaths:
@@ -38,6 +41,7 @@ class WorkspacePaths:
             image_manifest=root / "images" / "rocky-10.2" / "iso-manifest.yaml",
             image_cache=root / "runtime" / "cache" / "images",
             runtime_root=root / "runtime",
+            mock_exam_directory=root / "mock-exams",
         )
 
 
@@ -58,6 +62,15 @@ class LabWorkspace:
 
     def scenario(self, scenario_id: str) -> ScenarioManifest:
         return find_scenario(self.paths.scenario_directory, scenario_id)
+
+    def mock_exams(self) -> tuple[MockExamManifest, ...]:
+        return load_mock_catalog(self.paths.mock_exam_directory)
+
+    def mock_exam(self, mock_id: str) -> MockExamManifest:
+        try:
+            return next(mock for mock in self.mock_exams() if mock.mock_id == mock_id)
+        except StopIteration as exc:
+            raise LookupError(f"mock exam does not exist: {mock_id}") from exc
 
     def sessions(self, *, limit: int = 100) -> tuple[ScenarioSessionSnapshot, ...]:
         with open_vm_runtime(self.paths.runtime_root) as runtime:

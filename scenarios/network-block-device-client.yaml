@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: network-block-device-client
 version: 1
-status: draft
+status: verified
 title: The database node has not attached its iSCSI volume
 summary: Discover, persist, format, and mount a live network block device.
 estimated_minutes: 35

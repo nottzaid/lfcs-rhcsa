@@ -23,11 +23,11 @@ from whether a VM exists, and it must survive deletion of disposable resources.
   score, timestamp, and pass/error outcome.
 - Solved means at least one complete, error-free required pass for the current scenario
   version. Updating a scenario version does not silently inherit its previous solved mark.
-- Estimated duration is advisory. Ordinary scenarios have no countdown or forced teardown.
+- Estimated duration is advisory. Scenarios and mock rehearsals have no countdown or forced teardown.
 
 ## Consequences
 
 The current web process must run as a single worker. Durable session state still makes
 interrupted infrastructure inspectable, but durable job resumption is a later requirement
 before any multi-process mode. Learner progress remains independent of ephemeral VMs and can
-support future weakness reporting and optional timed mock exams.
+support future weakness and mock-rehearsal reporting without coupling progress to VM lifetime.

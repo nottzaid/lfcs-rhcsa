@@ -13,6 +13,7 @@ actions:
         printf 'shared project record\n' > /srv/teamshare/project.txt
         chown appshare:appshare /srv/teamshare/project.txt
         printf '/srv/teamshare {{host.node2.address}}/32(rw,sync,no_subtree_check,root_squash)\n' > /etc/exports.d/lal-teamshare.exports
+        setsebool -P nfs_export_all_rw 1
         systemctl enable --now nfs-server.service
         exportfs -ra
         firewall-cmd --quiet --permanent --add-service=nfs
