@@ -1,0 +1,31 @@
+schema_version: 1
+actions:
+  - action_id: start-atd-persistently
+    target: node2
+    arguments: [sudo, --, systemctl, enable, --now, atd]
+  - action_id: write-job-file
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        printf "%s\n" "/usr/bin/printf 'approved\\n' > /var/lib/handoff/ready" > /tmp/lal-handoff-job;
+        chown handoff:handoff /tmp/lal-handoff-job
+  - action_id: queue-job-file
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - runuser
+      - --user
+      - handoff
+      - --
+      - at
+      - -f
+      - /tmp/lal-handoff-job
+      - now
+      - +
+      - "60"
+      - minutes

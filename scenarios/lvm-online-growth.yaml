@@ -1,0 +1,78 @@
+schema_version: 1
+scenario_id: lvm-online-growth
+version: 1
+status: draft
+title: The logs logical volume is nearly full
+summary: Grow an active LVM logical volume and its filesystem without downtime.
+estimated_minutes: 35
+task_type: configure
+difficulty: intermediate
+task: >-
+  /srv/logs on node2 is an ext4 filesystem on vgdata/lvlogs. Grow the logical volume to
+  exactly 768 MiB and expand the filesystem online to use the new space. Keep the existing
+  contents, mount point, and persistent mount configuration intact. Do not recreate the
+  filesystem or reboot node2.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.lvm
+    title: Configure and manage LVM storage
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: LVM lvextend manual
+    url: https://man7.org/linux/man-pages/man8/lvextend.8.html
+  - kind: man-page
+    title: lvextend manual
+    man_page: lvextend(8)
+  - kind: man-page
+    title: resize2fs manual
+    man_page: resize2fs(8)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - name: data
+          size_mib: 2048
+          role: LVM training disk
+checks:
+  - check_id: logical-volume-size
+    kind: command
+    target: node2
+    description: lvlogs is exactly 768 MiB.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - test "$(lvs --noheadings --units m --nosuffix -o lv_size vgdata/lvlogs | awk '{printf "%d", $1}')" -eq 768
+  - check_id: filesystem-expanded
+    kind: command
+    target: node2
+    description: The mounted ext4 filesystem uses the enlarged device.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(findmnt -n -o FSTYPE /srv/logs)" = ext4 &&
+          test "$(findmnt -n -o SOURCE /srv/logs)" = /dev/mapper/vgdata-lvlogs &&
+          test "$(df -BM --output=size /srv/logs | tail -1 | tr -dc '0-9')" -ge 700
+  - check_id: existing-data-preserved
+    kind: file
+    target: node2
+    description: Existing log data remains available.
+    parameters:
+      path: /srv/logs/retain.log
+      kind: file
+      contains: preserve this record
+persistence:
+  reboot: false
+setup: actions/lvm-online-growth.setup.yaml
+reference_solution: actions/lvm-online-growth.solution.yaml
+alternate_solutions: [actions/lvm-online-growth.alternate.yaml]

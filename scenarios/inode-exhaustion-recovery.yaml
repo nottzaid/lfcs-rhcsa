@@ -1,0 +1,74 @@
+schema_version: 1
+scenario_id: inode-exhaustion-recovery
+version: 1
+status: draft
+title: The cache filesystem is full with free bytes remaining
+summary: Diagnose inode exhaustion and remove only disposable cache entries.
+estimated_minutes: 25
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  /var/lib/lal-cache on node2 cannot create files even though byte capacity remains. Diagnose
+  the filesystem and recover at least 25% of its inodes by removing stale files under
+  /var/lib/lal-cache/stale. Preserve /var/lib/lal-cache/keep and its contents, keep the
+  filesystem mounted, and do not reformat or enlarge the disk.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.diskspace
+    title: Troubleshoot diskspace issues
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: df manual
+    man_page: df(1)
+  - kind: man-page
+    title: find manual
+    man_page: find(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - name: cache
+          size_mib: 256
+          role: inode-limited cache filesystem
+checks:
+  - check_id: inode-capacity-recovered
+    kind: command
+    target: node2
+    description: At least 25 percent of filesystem inodes are free.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - test "$(df -Pi /var/lib/lal-cache | awk 'NR==2 {gsub(/%/,"",$5); print 100-$5}')" -ge 25
+  - check_id: stale-entries-removed
+    kind: command
+    target: node2
+    description: The disposable stale cache entries are gone.
+    parameters:
+      arguments: [bash, -c, '! find /var/lib/lal-cache/stale -type f -print -quit | grep -q .']
+  - check_id: retained-data-preserved
+    kind: file
+    target: node2
+    description: The protected cache record remains intact.
+    parameters:
+      path: /var/lib/lal-cache/keep/important.record
+      kind: file
+      contains: retain me
+  - check_id: cache-remains-mounted
+    kind: command
+    target: node2
+    description: The original filesystem remains mounted.
+    parameters:
+      arguments: [findmnt, --noheadings, --mountpoint, /var/lib/lal-cache]
+persistence:
+  reboot: false
+setup: actions/inode-exhaustion-recovery.setup.yaml
+reference_solution: actions/inode-exhaustion-recovery.solution.yaml
+alternate_solutions: [actions/inode-exhaustion-recovery.alternate.yaml]

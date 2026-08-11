@@ -1,0 +1,90 @@
+schema_version: 1
+scenario_id: systemd-service-deployment
+version: 1
+status: draft
+title: The collector was copied to the server but never deployed
+summary: Turn an existing program into a persistent least-privilege systemd service.
+estimated_minutes: 30
+task_type: build
+difficulty: intermediate
+task: >-
+  Deploy /opt/lal/bin/collector as lal-collector.service on node2. It must run as the
+  existing collector user and group, read COLLECTOR_SITE from /etc/lal-collector.conf,
+  start in /var/lib/lal-collector, and restart after a process failure. Start and enable
+  it. A successful start writes "warehouse-7" to /var/lib/lal-collector/ready. The service
+  must still be healthy after node2 reboots.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.services
+    title: Create and manage systemd services
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: systemd service unit documentation
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html
+  - kind: man-page
+    title: systemd.service manual
+    man_page: systemd.service(5)
+  - kind: man-page
+    title: systemd.exec manual
+    man_page: systemd.exec(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: collector-running-persistently
+    kind: service
+    target: node2
+    description: The collector is running and enabled for boot.
+    parameters:
+      name: lal-collector.service
+      active: true
+      enabled: true
+  - check_id: collector-runtime-identity
+    kind: command
+    target: node2
+    description: systemd runs the collector with its dedicated identity and working directory.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(systemctl show -p User --value lal-collector.service)" = collector &&
+          test "$(systemctl show -p Group --value lal-collector.service)" = collector &&
+          test "$(systemctl show -p WorkingDirectory --value lal-collector.service)" = /var/lib/lal-collector
+  - check_id: collector-failure-policy
+    kind: command
+    target: node2
+    description: The service is configured to recover from process failure.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          case "$(systemctl show -p Restart --value lal-collector.service)" in
+            on-failure|always) exit 0;;
+            *) exit 1;;
+          esac
+  - check_id: collector-produced-required-state
+    kind: file
+    target: node2
+    description: The service loaded its environment and wrote the readiness state.
+    parameters:
+      path: /var/lib/lal-collector/ready
+      kind: file
+      owner: collector
+      group: collector
+      mode: "0644"
+      contains: warehouse-7
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/systemd-service-deployment.setup.yaml
+reference_solution: actions/systemd-service-deployment.solution.yaml
+alternate_solutions: [actions/systemd-service-deployment.alternate.yaml]

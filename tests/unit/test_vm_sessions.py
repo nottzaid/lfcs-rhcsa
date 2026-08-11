@@ -12,7 +12,12 @@ from sysadmin_lab.application.guest_execution import (
 )
 from sysadmin_lab.application.session_artifacts import GuestAccess, SessionPaths
 from sysadmin_lab.application.sessions import SessionConflictError, SessionCoordinator
-from sysadmin_lab.application.vm_sessions import SingleHostVmSessionService, VmProvisioningError
+from sysadmin_lab.application.vm_sessions import (
+    SingleHostVmSessionService,
+    VmHostRequest,
+    VmProvisioningError,
+)
+from sysadmin_lab.domain.models import DiskSpec
 from sysadmin_lab.domain.resources import ResourceIdentity
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
@@ -84,6 +89,7 @@ class FakeArtifacts:
         hostname: str,
         base_image: Path,
         disk_gib: int = 12,
+        data_disks: tuple[DiskSpec, ...] = (),
     ) -> tuple[SessionPaths, GuestAccess]:
         if self.fail:
             raise RuntimeError("artifact failure")
@@ -220,6 +226,33 @@ def test_service_reboots_only_an_owned_ready_machine(tmp_path: Path) -> None:
     ]
     assert sessions.states[provisioned.state.session_id].status is SessionStatus.READY
     assert sessions.states[provisioned.state.session_id].revision == 4
+
+
+def test_service_provisions_multiple_hosts_in_one_session(tmp_path: Path) -> None:
+    service, _sessions, machines, artifacts, resources, readiness, executor = dependencies(tmp_path)
+    base = tmp_path / "base.qcow2"
+    base.touch()
+
+    provisioned = service.provision_many(
+        scenario_id="peer-lab",
+        requests=(
+            VmHostRequest("node1", base, 1024, 1),
+            VmHostRequest("node2", base, 1024, 1),
+        ),
+    )
+
+    assert [machine.host_name for machine in provisioned.machines] == ["node1", "node2"]
+    assert provisioned.machine == provisioned.machines[0]
+    assert len(machines.list(provisioned.state.session_id)) == 2
+    assert len(resources.registered) == 2
+    assert len(readiness.endpoints) == 2
+    assert len(executor.calls) == 2
+
+    service.destroy(provisioned.state.session_id)
+    assert artifacts.destroyed == [
+        (provisioned.state.session_id, "node1"),
+        (provisioned.state.session_id, "node2"),
+    ]
 
 
 def test_service_reboot_rejects_unknown_or_empty_targets(tmp_path: Path) -> None:

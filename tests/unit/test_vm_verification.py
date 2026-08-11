@@ -23,10 +23,7 @@ RESET_ID = UUID("20000000-0000-0000-0000-000000000002")
 def _write_action(path: Path, action_id: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
-        "actions:\n"
-        f"  - action_id: {action_id}\n"
-        "    target: node1\n"
-        '    arguments: ["true"]\n',
+        f'actions:\n  - action_id: {action_id}\n    target: node1\n    arguments: ["true"]\n',
         encoding="utf-8",
     )
 

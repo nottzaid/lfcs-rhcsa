@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: stop-file-holder
+    target: node2
+    arguments: [sudo, --, systemctl, stop, lal-writer.service]
+  - action_id: repair-writer-mode
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sed
+      - -i
+      - s/^KEEP_DELETED=.*/KEEP_DELETED=0/
+      - /etc/lal-writer.conf
+  - action_id: start-normal-writer
+    target: node2
+    arguments: [sudo, --, systemctl, start, lal-writer.service]

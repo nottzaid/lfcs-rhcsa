@@ -44,13 +44,13 @@ focused_scenarios:
     competencies: [operations.scheduled-jobs]
     capabilities: [single-node, cron]
   - scenario_id: queued-handoff-job
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 20
     competencies: [operations.scheduled-jobs]
     capabilities: [single-node, at]
   - scenario_id: repository-trust-repair
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 30
     competencies: [operations.packages-repositories]
@@ -128,19 +128,19 @@ focused_scenarios:
     competencies: [networking.proxies-load-balancers]
     capabilities: [multi-node, isolated-network]
   - scenario_id: lvm-online-growth
-    status: planned
+    status: draft
     wave: 2
     estimated_minutes: 35
     competencies: [storage.lvm]
     capabilities: [single-node, extra-disk]
   - scenario_id: virtual-mount-layout
-    status: planned
+    status: draft
     wave: 2
     estimated_minutes: 25
     competencies: [storage.virtual-filesystem]
     capabilities: [single-node, reboot-secondary]
   - scenario_id: filesystem-build-and-persist
-    status: planned
+    status: draft
     wave: 2
     estimated_minutes: 30
     competencies: [storage.filesystems]
@@ -158,7 +158,7 @@ focused_scenarios:
     competencies: [storage.remote-storage]
     capabilities: [multi-node, extra-disk, isolated-network]
   - scenario_id: persistent-swap-priority
-    status: planned
+    status: draft
     wave: 2
     estimated_minutes: 25
     competencies: [storage.swap]
@@ -176,37 +176,37 @@ focused_scenarios:
     competencies: [storage.performance]
     capabilities: [single-node, extra-disk, workload-generator]
   - scenario_id: configuration-history-recovery
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 25
     competencies: [essential-commands.git]
     capabilities: [single-node]
   - scenario_id: systemd-service-deployment
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 30
     competencies: [essential-commands.services]
     capabilities: [single-node, reboot-secondary]
   - scenario_id: resource-bottleneck-investigation
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 30
     competencies: [essential-commands.performance]
     capabilities: [single-node, workload-generator]
   - scenario_id: service-constraint-failure
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 30
     competencies: [essential-commands.constraints]
     capabilities: [single-node]
   - scenario_id: deleted-open-log-recovery
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 25
     competencies: [essential-commands.diskspace]
     capabilities: [single-node, workload-generator]
   - scenario_id: inode-exhaustion-recovery
-    status: planned
+    status: draft
     wave: 2
     estimated_minutes: 25
     competencies: [essential-commands.diskspace]
@@ -224,13 +224,13 @@ focused_scenarios:
     competencies: [users-groups.environment-profiles]
     capabilities: [single-node]
   - scenario_id: service-account-resource-limits
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 25
     competencies: [users-groups.resource-limits]
     capabilities: [single-node]
   - scenario_id: collaborative-tree-acls
-    status: planned
+    status: draft
     wave: 1
     estimated_minutes: 25
     competencies: [users-groups.acls]

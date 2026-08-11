@@ -1,0 +1,80 @@
+schema_version: 1
+scenario_id: persistent-swap-priority
+version: 1
+status: draft
+title: The emergency swap disk is unused
+summary: Build, activate, prioritize, and persist dedicated swap space.
+estimated_minutes: 25
+task_type: build
+difficulty: foundation
+task: >-
+  Configure /dev/disk/by-id/virtio-lal-swap on node2 as 768 MiB of swap labeled LAL_SWAP.
+  Activate it now with priority 50 and configure it in /etc/fstab by UUID or label so the
+  same priority is restored after reboot. Do not create a swap file or alter other swap.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.swap
+    title: Configure and manage swap space
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: mkswap manual
+    man_page: mkswap(8)
+  - kind: man-page
+    title: swapon manual
+    man_page: swapon(8)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - name: swap
+          size_mib: 768
+          role: dedicated swap disk
+checks:
+  - check_id: swap-signature
+    kind: command
+    target: node2
+    description: The dedicated disk has the required swap signature and label.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(blkid -s TYPE -o value /dev/disk/by-id/virtio-lal-swap)" = swap &&
+          test "$(blkid -s LABEL -o value /dev/disk/by-id/virtio-lal-swap)" = LAL_SWAP
+  - check_id: swap-active-with-priority
+    kind: command
+    target: node2
+    description: The dedicated disk is active at priority 50.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          device=$(readlink -f /dev/disk/by-id/virtio-lal-swap);
+          swapon --show=NAME,PRIO --noheadings --raw | awk -v d="$device" '$1==d && $2==50 {ok=1} END {exit !ok}'
+  - check_id: swap-persistent-by-stable-id
+    kind: command
+    target: node2
+    description: fstab uses UUID or label and records priority 50.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          awk '$3=="swap" && $1 ~ /^(UUID=|LABEL=LAL_SWAP$)/ && $4 ~ /(^|,)pri=50(,|$)/ {ok=1}
+               END {exit !ok}' /etc/fstab
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/persistent-swap-priority.setup.yaml
+reference_solution: actions/persistent-swap-priority.solution.yaml
+alternate_solutions: [actions/persistent-swap-priority.alternate.yaml]

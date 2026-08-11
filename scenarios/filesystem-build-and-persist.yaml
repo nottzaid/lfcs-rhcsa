@@ -1,0 +1,84 @@
+schema_version: 1
+scenario_id: filesystem-build-and-persist
+version: 1
+status: draft
+title: A new archive disk has no filesystem or mount policy
+summary: Build an XFS filesystem and mount it persistently by stable identity.
+estimated_minutes: 30
+task_type: build
+difficulty: foundation
+task: >-
+  The unused disk identified as /dev/disk/by-id/virtio-lal-archive belongs at /srv/archive
+  on node2. Create an XFS filesystem labeled LAL_ARCHIVE, mount it there, and configure a
+  persistent mount using either its UUID or label rather than /dev/vdX naming. The mount
+  point must be owned by root:archivists with mode 2770. Node2 may be rebooted if you wish.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.filesystems
+    title: Create, manage, and troubleshoot filesystems
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: mkfs.xfs manual
+    man_page: mkfs.xfs(8)
+  - kind: man-page
+    title: fstab manual
+    man_page: fstab(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - name: archive
+          size_mib: 1536
+          role: unused archive disk
+checks:
+  - check_id: archive-filesystem
+    kind: command
+    target: node2
+    description: The archive disk contains the correctly labeled XFS filesystem.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(blkid -s TYPE -o value /dev/disk/by-id/virtio-lal-archive)" = xfs &&
+          test "$(blkid -s LABEL -o value /dev/disk/by-id/virtio-lal-archive)" = LAL_ARCHIVE
+  - check_id: archive-mounted
+    kind: command
+    target: node2
+    description: The filesystem is mounted at the required path.
+    parameters:
+      arguments: [findmnt, --noheadings, --types, xfs, --mountpoint, /srv/archive]
+  - check_id: stable-fstab-identity
+    kind: command
+    target: node2
+    description: fstab uses the filesystem UUID or label, not a volatile kernel name.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          awk '$2=="/srv/archive" && $1 ~ /^(UUID=|LABEL=LAL_ARCHIVE$)/ {ok=1} END {exit !ok}' /etc/fstab
+  - check_id: archive-access-policy
+    kind: file
+    target: node2
+    description: The mounted root has the collaboration ownership and mode.
+    parameters:
+      path: /srv/archive
+      kind: directory
+      owner: root
+      group: archivists
+      mode: "2770"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/filesystem-build-and-persist.setup.yaml
+reference_solution: actions/filesystem-build-and-persist.solution.yaml
+alternate_solutions: [actions/filesystem-build-and-persist.alternate.yaml]

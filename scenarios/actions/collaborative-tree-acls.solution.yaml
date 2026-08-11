@@ -1,0 +1,32 @@
+schema_version: 1
+actions:
+  - action_id: set-project-directory-ownership
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        find /srv/project -type d -exec chgrp project {} +;
+        find /srv/project -type d -exec chmod 2770 {} +
+  - action_id: set-existing-access
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        setfacl -Rm g:project:rwX,u:auditor:r-X,m::rwx,o::--- /srv/project;
+        find /srv/project -type f -exec setfacl -m m::rw {} +
+  - action_id: set-inherited-access
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        find /srv/project -type d -exec setfacl -m
+        d:u::rwx,d:g::rwx,d:g:project:rwx,d:u:auditor:r-x,d:m::rwx,d:o::--- {} +

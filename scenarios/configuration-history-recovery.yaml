@@ -1,0 +1,73 @@
+schema_version: 1
+scenario_id: configuration-history-recovery
+version: 1
+status: draft
+title: A rejected configuration is still in the working tree
+summary: Recover one tracked file from approved Git history without discarding later work.
+estimated_minutes: 25
+task_type: fix
+difficulty: foundation
+task: >-
+  The Git repository in /etc/lal-app contains configuration history. The tag approved-v1
+  identifies the approved worker settings, but app.conf now has an uncommitted rejected
+  change. Restore only app.conf from approved-v1 and commit that restoration on the current
+  branch. Preserve the later README commit and leave the working tree clean. Do not delete
+  or recreate the repository.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.git
+    title: Use Git to manage files
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: Git restore documentation
+    url: https://git-scm.com/docs/git-restore
+  - kind: upstream
+    title: Git commit documentation
+    url: https://git-scm.com/docs/git-commit
+  - kind: man-page
+    title: git manual
+    man_page: git(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: approved-configuration-restored
+    kind: command
+    target: node2
+    description: The current app.conf matches the approved tag.
+    parameters:
+      sudo: true
+      arguments: [git, -C, /etc/lal-app, diff, --quiet, approved-v1, --, app.conf]
+  - check_id: later-history-preserved
+    kind: command
+    target: node2
+    description: The later documentation commit remains in current history.
+    parameters:
+      sudo: true
+      arguments: [git, -C, /etc/lal-app, merge-base, --is-ancestor, docs-update, HEAD]
+  - check_id: restoration-committed
+    kind: command
+    target: node2
+    description: The restoration is a focused commit rather than an uncommitted edit.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          test -z "$(git -C /etc/lal-app status --porcelain)" &&
+          test "$(git -C /etc/lal-app diff-tree --no-commit-id --name-only -r HEAD)" = app.conf &&
+          test "$(git -C /etc/lal-app show HEAD^:app.conf)" = 'workers=2' &&
+          test "$(git -C /etc/lal-app show HEAD:app.conf)" = 'workers=8'
+persistence:
+  reboot: false
+setup: actions/configuration-history-recovery.setup.yaml
+reference_solution: actions/configuration-history-recovery.solution.yaml
+alternate_solutions: [actions/configuration-history-recovery.alternate.yaml]

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import json
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Literal, Self
 
@@ -60,6 +62,37 @@ class ImageManifest(StrictModel):
         return self
 
 
+class BuiltImageRecord(StrictModel):
+    """Provenance needed to reproduce and independently audit a golden image."""
+
+    schema_version: int = 1
+    image_id: str = Field(pattern=r"^[a-z][a-z0-9]*(?:-[a-z0-9.]+)*$")
+    source_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    recipe_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifact_sha256: str = Field(pattern=r"^[0-9a-f]{64}$")
+    artifact_size_bytes: int = Field(gt=0)
+    built_at: datetime
+
+    @classmethod
+    def create(
+        cls,
+        *,
+        image_id: str,
+        source_sha256: str,
+        recipe_sha256: str,
+        artifact_sha256: str,
+        artifact_size_bytes: int,
+    ) -> Self:
+        return cls(
+            image_id=image_id,
+            source_sha256=source_sha256,
+            recipe_sha256=recipe_sha256,
+            artifact_sha256=artifact_sha256,
+            artifact_size_bytes=artifact_size_bytes,
+            built_at=datetime.now(UTC),
+        )
+
+
 class ImageVerificationError(ValueError):
     pass
 
@@ -91,3 +124,16 @@ def verify_installation_source(
             f"found {actual_digest}"
         )
     return actual_digest
+
+
+def sha256_file(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def image_recipe_sha256(manifest: ImageManifest, kickstart: str) -> str:
+    recipe = json.dumps(manifest.model_dump(mode="json"), sort_keys=True).encode()
+    return hashlib.sha256(recipe + b"\0" + kickstart.encode()).hexdigest()

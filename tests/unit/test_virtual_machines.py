@@ -40,3 +40,18 @@ def test_domain_xml_contains_boot_console_and_guest_agent_contract(tmp_path: Pat
     assert root.find("./devices/console") is not None
     assert root.find("./devices/graphics").attrib["type"] == "spice"
     assert root.find("./devices/channel/target").attrib["name"] == "org.qemu.guest_agent.0"
+
+
+def test_domain_xml_attaches_named_data_disks_after_root(tmp_path: Path) -> None:
+    identity = domain_identity("storage-lab", SESSION_ID)
+    spec = DomainSpec(
+        identity,
+        tmp_path / "root.qcow2",
+        tmp_path / "seed.iso",
+        data_disks=(("data", tmp_path / "data.qcow2"),),
+    )
+
+    disks = ET.fromstring(render_domain_xml(spec)).findall("./devices/disk")
+    assert disks[0].find("target").attrib["dev"] == "vda"
+    assert disks[1].find("target").attrib["dev"] == "vdb"
+    assert disks[1].findtext("serial") == "lal-data"

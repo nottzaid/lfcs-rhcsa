@@ -1,0 +1,24 @@
+schema_version: 1
+actions:
+  - action_id: repair-tree-by-object-type
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        find /srv/project -type d -exec chgrp project {} + -exec chmod 2770 {} +
+        find /srv/project -type d -exec setfacl -b -m g:project:rwx,u:auditor:r-x,m::rwx,o::--- {} +
+        find /srv/project -type f -exec chgrp project {} + -exec chmod 0660 {} +
+        find /srv/project -type f -exec setfacl -b -m g:project:rw-,u:auditor:r--,m::rw-,o::--- {} +
+  - action_id: install-default-directory-acls
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        find /srv/project -type d -exec setfacl -m
+        d:u::rwx,d:g::rwx,d:g:project:rwx,d:u:auditor:r-x,d:m::rwx,d:o::--- {} +

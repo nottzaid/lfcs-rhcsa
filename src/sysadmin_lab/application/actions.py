@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 
 from sysadmin_lab.application.guest_execution import GuestEndpoint, GuestExecutor
@@ -36,7 +37,7 @@ class ActionRunner:
                 )
             result = self._executor.run(
                 endpoint,
-                action.arguments,
+                self._render_arguments(action.arguments, endpoints),
                 timeout_seconds=action.timeout_seconds,
             )
             if result.stdout_truncated or result.stderr_truncated:
@@ -48,3 +49,18 @@ class ActionRunner:
                 )
             completed.append(ActionResult(action.action_id, result.exit_code))
         return tuple(completed)
+
+    @staticmethod
+    def _render_arguments(
+        arguments: tuple[str, ...], endpoints: dict[str, GuestEndpoint]
+    ) -> tuple[str, ...]:
+        pattern = re.compile(r"\{\{host\.([a-z][a-z0-9-]*)\.address\}\}")
+
+        def replace(match: re.Match[str]) -> str:
+            host = match.group(1)
+            try:
+                return endpoints[host].host
+            except KeyError as exc:
+                raise ActionExecutionError(f"action references unknown host {host}") from exc
+
+        return tuple(pattern.sub(replace, argument) for argument in arguments)

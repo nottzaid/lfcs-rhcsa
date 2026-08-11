@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: replace-repository-file
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        rm -f /etc/yum.repos.d/lal-training.repo;
+        printf '%s\n' '[lal-training]' 'name=Approved offline packages'
+        'enabled=1' 'baseurl=file:///srv/lal-repo/' 'gpgcheck=0'
+        > /etc/yum.repos.d/lal-offline.repo
+  - action_id: install-package-by-path-independent-repository
+    target: node2
+    arguments: [sudo, --, dnf, --repo=lal-training, install, -y, lal-release-notes]

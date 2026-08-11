@@ -1,0 +1,8 @@
+schema_version: 1
+actions:
+  - action_id: grow-logical-volume
+    target: node2
+    arguments: [sudo, --, lvextend, -L, 768M, /dev/vgdata/lvlogs]
+  - action_id: grow-ext4-filesystem
+    target: node2
+    arguments: [sudo, --, resize2fs, /dev/vgdata/lvlogs]

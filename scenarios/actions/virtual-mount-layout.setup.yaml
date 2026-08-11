@@ -1,0 +1,16 @@
+schema_version: 1
+actions:
+  - action_id: prepare-mount-layout
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        umount /opt/app/current >/dev/null 2>&1 || true;
+        umount /run/lal-cache >/dev/null 2>&1 || true;
+        sed -i '\#/run/lal-cache#d;\#/opt/app/current#d' /etc/fstab;
+        rm -rf /run/lal-cache /opt/app/current /srv/releases/current;
+        install -d /run/lal-cache /opt/app/current /srv/releases/current;
+        printf 'release-2026.08\n' > /srv/releases/current/version.txt

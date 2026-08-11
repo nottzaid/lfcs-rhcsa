@@ -16,7 +16,7 @@ from sysadmin_lab.application.machines import (
 from sysadmin_lab.application.resources import ResourceManager
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder
 from sysadmin_lab.application.sessions import SessionCoordinator
-from sysadmin_lab.domain.resources import ResourceIdentity
+from sysadmin_lab.domain.models import DiskSpec
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import DomainSpec, domain_identity, render_domain_xml
@@ -30,10 +30,20 @@ class VmProvisioningError(RuntimeError):
 class ProvisionedSession:
     state: SessionState
     machine: SessionMachine
+    machines: tuple[SessionMachine, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class VmHostRequest:
+    host_name: str
+    base_image: Path
+    memory_mib: int = 2048
+    vcpus: int = 2
+    data_disks: tuple[DiskSpec, ...] = ()
 
 
 class SingleHostVmSessionService:
-    """Production vertical slice for one default-network KVM guest."""
+    """Production lifecycle for one or more default-network KVM guests."""
 
     def __init__(
         self,
@@ -62,53 +72,74 @@ class SingleHostVmSessionService:
         base_image: Path,
         memory_mib: int = 2048,
         vcpus: int = 2,
+        data_disks: tuple[DiskSpec, ...] = (),
     ) -> ProvisionedSession:
+        request = VmHostRequest(host_name, base_image, memory_mib, vcpus, data_disks)
+        return self.provision_many(scenario_id=scenario_id, requests=(request,))
+
+    def provision_many(
+        self, *, scenario_id: str, requests: tuple[VmHostRequest, ...]
+    ) -> ProvisionedSession:
+        if not requests:
+            raise VmProvisioningError("at least one VM host is required")
+        if len({request.host_name for request in requests}) != len(requests):
+            raise VmProvisioningError("VM host names must be unique")
         state = self._sessions.declare(scenario_id)
         state = self._sessions.transition(state.session_id, SessionStatus.PROVISIONING)
-        identity = domain_identity(scenario_id, state.session_id, host_name)
-        machine: SessionMachine | None = None
+        created: list[SessionMachine] = []
+        attempted_roles: list[str] = []
         try:
-            paths, access = self._artifacts.create(
-                session_id=state.session_id,
-                role=host_name,
-                hostname=identity.name,
-                base_image=base_image,
-            )
-            machine = SessionMachine(
-                session_id=state.session_id,
-                host_name=host_name,
-                identity=identity,
-                username=access.username,
-                password=access.password,
-                private_key=access.private_key,
-            )
-            self._machines.add(machine)
-            xml = render_domain_xml(
-                DomainSpec(
-                    identity=identity,
-                    disk=paths.overlay,
-                    seed_iso=paths.seed_iso,
-                    memory_mib=memory_mib,
-                    vcpus=vcpus,
+            for request in requests:
+                attempted_roles.append(request.host_name)
+                identity = domain_identity(scenario_id, state.session_id, request.host_name)
+                paths, access = self._artifacts.create(
+                    session_id=state.session_id,
+                    role=request.host_name,
+                    hostname=identity.name,
+                    base_image=request.base_image,
+                    data_disks=request.data_disks,
                 )
-            )
-            self._resources.define(xml, identity, start=True)
-            address = self._leases.wait(identity.name)
-            machine = self._machines.update_address(machine, address)
-            endpoint = GuestEndpoint(address, access.username, access.private_key)
-            self._guest_readiness.wait(endpoint)
-            cloud_init = self._guest_executor.run(
-                endpoint,
-                ("sudo", "cloud-init", "status", "--wait"),
-                timeout_seconds=240,
-            )
-            if not cloud_init.succeeded:
-                detail = cloud_init.stderr.strip() or cloud_init.stdout.strip()
-                raise VmProvisioningError(f"cloud-init failed: {detail}")
+                machine = SessionMachine(
+                    session_id=state.session_id,
+                    host_name=request.host_name,
+                    identity=identity,
+                    username=access.username,
+                    password=access.password,
+                    private_key=access.private_key,
+                )
+                self._machines.add(machine)
+                created.append(machine)
+                xml = render_domain_xml(
+                    DomainSpec(
+                        identity=identity,
+                        disk=paths.overlay,
+                        seed_iso=paths.seed_iso,
+                        memory_mib=request.memory_mib,
+                        vcpus=request.vcpus,
+                        data_disks=paths.data_disks,
+                    )
+                )
+                self._resources.define(xml, identity, start=True)
+
+            ready: list[SessionMachine] = []
+            for machine in created:
+                address = self._leases.wait(machine.identity.name)
+                machine = self._machines.update_address(machine, address)
+                endpoint = GuestEndpoint(address, machine.username, machine.private_key)
+                self._guest_readiness.wait(endpoint)
+                cloud_init = self._guest_executor.run(
+                    endpoint,
+                    ("sudo", "cloud-init", "status", "--wait"),
+                    timeout_seconds=240,
+                )
+                if not cloud_init.succeeded:
+                    detail = cloud_init.stderr.strip() or cloud_init.stdout.strip()
+                    raise VmProvisioningError(f"cloud-init failed: {detail}")
+                ready.append(machine)
             state = self._sessions.transition(state.session_id, SessionStatus.READY)
-            return ProvisionedSession(state, machine)
+            return ProvisionedSession(state, ready[0], tuple(ready))
         except Exception as exc:
-            self._cleanup_failed_provision(state, identity, machine)
+            self._cleanup_failed_provision(state, tuple(attempted_roles))
             self._sessions.transition(state.session_id, SessionStatus.FAILED, error=str(exc))
             raise
 
@@ -166,14 +197,15 @@ class SingleHostVmSessionService:
         self._sessions.transition(session_id, SessionStatus.READY)
 
     def _cleanup_failed_provision(
-        self,
-        state: SessionState,
-        identity: ResourceIdentity,
-        machine: SessionMachine | None,
+        self, state: SessionState, attempted_roles: tuple[str, ...]
     ) -> None:
-        typed_identity = machine.identity if machine is not None else identity
-        if self._resources.is_registered(typed_identity):
-            self._resources.remove(typed_identity)
-        self._artifacts.destroy(state.session_id, typed_identity.role)
-        if machine is not None and self._machines.get(state.session_id, machine.host_name):
+        cleaned: set[str] = set()
+        for machine in self._machines.list(state.session_id):
+            if self._resources.is_registered(machine.identity):
+                self._resources.remove(machine.identity)
+            self._artifacts.destroy(state.session_id, machine.host_name)
+            cleaned.add(machine.host_name)
             self._machines.remove(machine)
+        for role in attempted_roles:
+            if role not in cleaned:
+                self._artifacts.destroy(state.session_id, role)

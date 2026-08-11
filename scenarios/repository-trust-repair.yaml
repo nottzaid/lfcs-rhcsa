@@ -1,0 +1,73 @@
+schema_version: 1
+scenario_id: repository-trust-repair
+version: 1
+status: draft
+title: The approved local repository cannot be used
+summary: Repair a repository definition and install the approved local package.
+estimated_minutes: 30
+task_type: fix
+difficulty: intermediate
+task: >-
+  A signed-off training package is already published in the local repository at
+  /srv/lal-repo on node2, but the repository definition is broken. Configure an enabled
+  DNF repository named lal-training that uses file:///srv/lal-repo. This isolated local
+  repository intentionally publishes unsigned training RPMs, so configure gpgcheck=0 for
+  this repository only. Install lal-release-notes from it. Do not disable signature checking
+  globally or alter the other Rocky repositories.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.packages-repositories
+    title: Manage software packages and repositories
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: distribution
+    title: DNF configuration reference
+    url: https://dnf.readthedocs.io/en/latest/conf_ref.html
+  - kind: man-page
+    title: DNF manual
+    man_page: dnf(8)
+  - kind: man-page
+    title: DNF configuration manual
+    man_page: dnf.conf(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: package-installed
+    kind: command
+    target: node2
+    description: The approved package is installed.
+    parameters:
+      arguments: [rpm, --query, lal-release-notes]
+  - check_id: repository-usable
+    kind: command
+    target: node2
+    description: DNF can query the enabled local repository.
+    parameters:
+      sudo: true
+      arguments: [dnf, --quiet, repoquery, --repo, lal-training, lal-release-notes]
+      stdout_contains: lal-release-notes
+  - check_id: signature-policy-scoped
+    kind: command
+    target: node2
+    description: Signature checking is disabled only in the isolated repository definition.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          file=$(grep -Rsl '^\[lal-training\]$' /etc/yum.repos.d) &&
+          test "$(grep -Ec '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*0[[:space:]]*$' "$file")" -eq 1 &&
+          ! grep -RqsE '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*0' /etc/dnf/dnf.conf
+persistence:
+  reboot: false
+setup: actions/repository-trust-repair.setup.yaml
+reference_solution: actions/repository-trust-repair.solution.yaml
+alternate_solutions: [actions/repository-trust-repair.alternate.yaml]

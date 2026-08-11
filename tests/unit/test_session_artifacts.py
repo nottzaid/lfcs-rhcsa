@@ -9,6 +9,7 @@ import pytest
 import yaml
 
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder
+from sysadmin_lab.domain.models import DiskSpec
 
 SESSION_ID = UUID("10000000-0000-0000-0000-000000000001")
 
@@ -69,6 +70,26 @@ def test_builder_reuses_key_but_never_existing_session(tmp_path: Path) -> None:
     builder.create(session_id=SESSION_ID, role="node1", hostname="one", base_image=base)
     with pytest.raises(FileExistsError, match="already exist"):
         builder.create(session_id=SESSION_ID, role="node1", hostname="one", base_image=base)
+
+
+def test_builder_creates_exact_declared_data_disks(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    builder = SessionArtifactBuilder(tmp_path / "runtime", runner)
+    base = tmp_path / "base.qcow2"
+    base.touch()
+
+    paths, _access = builder.create(
+        session_id=SESSION_ID,
+        role="node2",
+        hostname="storage-node",
+        base_image=base,
+        data_disks=(DiskSpec(name="data", size_mib=768, role="unused training disk"),),
+    )
+
+    assert paths.data_disks == (("data", paths.directory / "data.qcow2"),)
+    assert paths.data_disks[0][1].is_file()
+    data_command = [call for call in runner.calls if call[0] == "qemu-img"][1]
+    assert data_command[-1] == "768M"
 
 
 def test_builder_cleans_partial_session_on_failure(tmp_path: Path) -> None:

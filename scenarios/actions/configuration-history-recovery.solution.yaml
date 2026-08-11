@@ -1,0 +1,8 @@
+schema_version: 1
+actions:
+  - action_id: restore-approved-file
+    target: node2
+    arguments: [git, -C, /etc/lal-app, restore, --source=approved-v1, --, app.conf]
+  - action_id: commit-restoration
+    target: node2
+    arguments: [git, -C, /etc/lal-app, commit, -am, Restore approved worker configuration]

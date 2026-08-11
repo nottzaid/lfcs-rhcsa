@@ -1,0 +1,30 @@
+schema_version: 1
+actions:
+  - action_id: install-alternate-service-layout
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/systemd/system/lal-collector.service <<'EOF'
+        [Unit]
+        Description=Warehouse collector daemon
+
+        [Service]
+        Type=exec
+        User=collector
+        Group=collector
+        WorkingDirectory=/var/lib/lal-collector
+        EnvironmentFile=-/etc/lal-collector.conf
+        ExecStart=/opt/lal/bin/collector
+        Restart=always
+        RestartSec=1
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable lal-collector.service
+        systemctl start lal-collector.service

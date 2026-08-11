@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: create-handoff-account
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        id handoff >/dev/null 2>&1 || useradd --create-home handoff;
+        install -d -o handoff -g handoff -m 0750 /var/lib/handoff;
+        rm -f /var/lib/handoff/ready;
+        for job in $(atq | awk '$NF == "handoff" {print $1}'); do atrm "$job"; done
+  - action_id: leave-atd-disabled
+    target: node2
+    arguments: [sudo, --, systemctl, disable, --now, atd.service]

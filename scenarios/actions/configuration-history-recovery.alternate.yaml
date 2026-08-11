@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: extract-approved-blob
+    target: node2
+    arguments:
+      - bash
+      - -c
+      - git -C /etc/lal-app show approved-v1:app.conf > /etc/lal-app/app.conf
+  - action_id: stage-and-commit-restoration
+    target: node2
+    arguments: [git, -C, /etc/lal-app, add, app.conf]
+  - action_id: create-audit-commit
+    target: node2
+    arguments: [git, -C, /etc/lal-app, commit, -m, Return app.conf to approved-v1]

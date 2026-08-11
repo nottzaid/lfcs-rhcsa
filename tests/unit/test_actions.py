@@ -64,3 +64,42 @@ def test_action_runner_reports_missing_target_failure_and_truncation(tmp_path: P
     truncated = Executor([GuestCommandResult(0, "", "", stdout_truncated=True)])
     with pytest.raises(ActionExecutionError, match="output limit"):
         ActionRunner(truncated).run(manifest(), {"node1": endpoint(tmp_path)})
+
+
+def test_action_runner_substitutes_declared_peer_address_without_a_shell(tmp_path: Path) -> None:
+    action = ActionManifest.model_validate(
+        {
+            "actions": [
+                {
+                    "action_id": "write-peer",
+                    "target": "node1",
+                    "arguments": ["printf", "peer={{host.node2.address}}"],
+                }
+            ]
+        }
+    )
+    executor = Executor([GuestCommandResult(0, "", "")])
+    endpoints = {
+        "node1": endpoint(tmp_path),
+        "node2": GuestEndpoint("192.0.2.22", "labadmin", (tmp_path / "key").resolve()),
+    }
+
+    ActionRunner(executor).run(action, endpoints)
+
+    assert executor.commands == [("printf", "peer=192.0.2.22")]
+
+
+def test_action_runner_rejects_unknown_address_placeholder(tmp_path: Path) -> None:
+    action = ActionManifest.model_validate(
+        {
+            "actions": [
+                {
+                    "action_id": "write-peer",
+                    "target": "node1",
+                    "arguments": ["printf", "{{host.missing.address}}"],
+                }
+            ]
+        }
+    )
+    with pytest.raises(ActionExecutionError, match="unknown host missing"):
+        ActionRunner(Executor([])).run(action, {"node1": endpoint(tmp_path)})

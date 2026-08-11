@@ -1,0 +1,30 @@
+schema_version: 1
+actions:
+  - action_id: define-collector-service
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/systemd/system/lal-collector.service <<'EOF'
+        [Unit]
+        Description=Linux Admin Lab collector
+        After=local-fs.target
+
+        [Service]
+        Type=simple
+        User=collector
+        Group=collector
+        WorkingDirectory=/var/lib/lal-collector
+        EnvironmentFile=/etc/lal-collector.conf
+        ExecStart=/opt/lal/bin/collector
+        Restart=on-failure
+        RestartSec=2s
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable --now lal-collector.service

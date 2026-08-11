@@ -6,6 +6,7 @@ from uuid import UUID
 
 from sysadmin_lab.application.checking import CheckReport
 from sysadmin_lab.application.image_acquisition import HttpsDownloader, ImageAcquirer
+from sysadmin_lab.application.image_building import resolve_built_image
 from sysadmin_lab.application.scenario_sessions import StartedScenario
 from sysadmin_lab.catalog import (
     find_scenario,
@@ -34,7 +35,7 @@ class WorkspacePaths:
         return cls(
             project_root=root,
             scenario_directory=root / "scenarios",
-            image_manifest=root / "images" / "rocky-10.2" / "manifest.yaml",
+            image_manifest=root / "images" / "rocky-10.2" / "iso-manifest.yaml",
             image_cache=root / "runtime" / "cache" / "images",
             runtime_root=root / "runtime",
         )
@@ -102,7 +103,12 @@ class LabWorkspace:
 
     def _acquire_images(self) -> dict[str, Path]:
         image_manifest = load_image_manifest(self.paths.image_manifest)
-        image_path = ImageAcquirer(HttpsDownloader()).acquire(
-            image_manifest, self.paths.image_cache
-        )
+        if image_manifest.build.method == "kickstart":
+            image_path = resolve_built_image(
+                image_manifest, self.paths.image_manifest, self.paths.image_cache
+            ).artifact
+        else:
+            image_path = ImageAcquirer(HttpsDownloader()).acquire(
+                image_manifest, self.paths.image_cache
+            )
         return {image_manifest.image_id: image_path.resolve()}

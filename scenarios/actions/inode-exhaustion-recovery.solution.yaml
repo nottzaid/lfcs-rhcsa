@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: remove-stale-cache-files
+    target: node2
+    arguments: [sudo, --, find, /var/lib/lal-cache/stale, -type, f, -delete]

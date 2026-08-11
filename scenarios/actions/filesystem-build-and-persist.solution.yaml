@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: create-archive-filesystem
+    target: node2
+    arguments: [sudo, --, mkfs.xfs, -f, -L, LAL_ARCHIVE, /dev/disk/by-id/virtio-lal-archive]
+  - action_id: configure-uuid-mount
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        uuid=$(blkid -s UUID -o value /dev/disk/by-id/virtio-lal-archive);
+        printf 'UUID=%s /srv/archive xfs defaults 0 0\n' "$uuid" >> /etc/fstab;
+        mount /srv/archive;
+        chown root:archivists /srv/archive;
+        chmod 2770 /srv/archive

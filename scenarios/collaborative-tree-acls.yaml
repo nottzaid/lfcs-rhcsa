@@ -1,0 +1,98 @@
+schema_version: 1
+scenario_id: collaborative-tree-acls
+version: 1
+status: draft
+title: The project tree has contradictory access rules
+summary: Repair current and inherited ACLs for collaborators and a read-only auditor.
+estimated_minutes: 25
+task_type: fix
+difficulty: intermediate
+task: >-
+  Repair /srv/project on node2. The devone and devtwo users are members of project and
+  must be able to read and modify all existing project content. Auditor must be able to
+  traverse directories and read files but never modify them. Outsider and other users get
+  no access. All directories must be owned by group project and setgid, and their default
+  ACLs must make new content group-writable and auditor-readable/traversable. Apply the
+  policy throughout the existing tree without making regular files executable.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.acls
+    title: Manage access control lists
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: setfacl manual
+    man_page: setfacl(1)
+  - kind: man-page
+    title: acl manual
+    man_page: acl(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: existing-collaborator-access
+    kind: command
+    target: node2
+    description: Both collaborators can modify existing content.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          runuser -u devone -- test -w /srv/project/specs/plan.txt &&
+          runuser -u devtwo -- test -w /srv/project/specs/plan.txt
+  - check_id: existing-auditor-access
+    kind: command
+    target: node2
+    description: Auditor can read but cannot modify existing content.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          runuser -u auditor -- test -r /srv/project/specs/plan.txt &&
+          ! runuser -u auditor -- test -w /srv/project/specs/plan.txt
+  - check_id: outsiders-denied
+    kind: command
+    target: node2
+    description: An unrelated account cannot traverse the project tree.
+    parameters:
+      sudo: true
+      arguments: [runuser, -u, outsider, --, test, '!', -x, /srv/project]
+  - check_id: directory-inheritance-policy
+    kind: command
+    target: node2
+    description: Every directory is setgid and carries the required default ACL.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          while IFS= read -r -d '' dir; do
+            test "$(stat -c %G "$dir")" = project || exit 1;
+            test $((8#$(stat -c %a "$dir") & 8#2000)) -ne 0 || exit 1;
+            getfacl -cp "$dir" | grep -qx 'default:group:project:rwx' || exit 1;
+            getfacl -cp "$dir" | grep -qx 'default:user:auditor:r-x' || exit 1;
+            getfacl -cp "$dir" | grep -qx 'default:other::---' || exit 1;
+          done < <(find /srv/project -type d -print0)
+  - check_id: regular-files-not-executable
+    kind: command
+    target: node2
+    description: ACL repair did not grant execute permission to regular files.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, '! find /srv/project -type f -perm /111 -print -quit | grep -q .']
+persistence:
+  reboot: false
+setup: actions/collaborative-tree-acls.setup.yaml
+reference_solution: actions/collaborative-tree-acls.solution.yaml
+alternate_solutions: [actions/collaborative-tree-acls.alternate.yaml]

@@ -31,11 +31,7 @@ class VerificationReport:
 
     @property
     def passed(self) -> bool:
-        if any(
-            observation.error
-            for phase in self.phases
-            for observation in phase.observations
-        ):
+        if any(observation.error for phase in self.phases for observation in phase.observations):
             return False
         present = {phase.phase for phase in self.phases}
         if not {

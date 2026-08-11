@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: initialize-swap
+    target: node2
+    arguments: [sudo, --, mkswap, -L, LAL_SWAP, /dev/disk/by-id/virtio-lal-swap]
+  - action_id: configure-label-based-swap
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        printf 'LABEL=LAL_SWAP swap swap pri=50 0 0\n' >> /etc/fstab;
+        swapon -a

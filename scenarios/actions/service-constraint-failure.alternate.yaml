@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: let-systemd-manage-state-directory
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /etc/systemd/system/lal-api.service.d
+        cat > /etc/systemd/system/lal-api.service.d/state-directory.conf <<'EOF'
+        [Service]
+        StateDirectory=lal-api
+        StateDirectoryMode=0750
+        EOF
+        systemctl daemon-reload
+        systemctl restart lal-api.service

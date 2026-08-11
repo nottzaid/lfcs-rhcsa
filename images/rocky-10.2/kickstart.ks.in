@@ -1,5 +1,4 @@
-# Linux Admin Lab Rocky Linux 10.2 base image
-# @@SSH_PUBLIC_KEY@@ is replaced by the local image builder.
+# Linux Admin Lab Rocky Linux 10.2 golden image
 
 text
 cdrom
@@ -11,27 +10,67 @@ network --bootproto=dhcp --device=link --activate --hostname=lal-base.invalid
 
 rootpw --lock
 user --name=labadmin --groups=wheel --lock
-sshkey --username=labadmin "@@SSH_PUBLIC_KEY@@"
+firstboot --disable
 
 selinux --enforcing
 firewall --enabled --service=ssh
-services --enabled=sshd,qemu-guest-agent,NetworkManager,firewalld,chronyd
+services --enabled=sshd,qemu-guest-agent,NetworkManager,firewalld,chronyd,cloud-init-local,cloud-init,cloud-config,cloud-final
 
 zerombr
 clearpart --all --initlabel
 autopart --type=lvm
 bootloader --append="console=tty0 console=ttyS0,115200n8"
 
-reboot --eject
+shutdown
 
 %packages
 @^minimal-environment
+NetworkManager
+acl
+at
+autofs
+bind-utils
 chrony
+cloud-init
+cloud-utils-growpart
+createrepo_c
+cronie
+dnf-plugins-core
+e2fsprogs
+firewalld
+git-core
+haproxy
+iproute
+iscsi-initiator-utils
+libvirt-client
+lsof
+lvm2
+nginx
+nfs-utils
+nftables
+openldap-clients
+openssh-clients
 openssh-server
+openssl
+perf
+podman
 policycoreutils-python-utils
 python3
 qemu-guest-agent
+qemu-kvm
+rsync
+rpm-build
+setools-console
+sssd
+stress-ng
 sudo
+sysstat
+targetcli
+tcpdump
+traceroute
+tuned
+virt-install
+xfsprogs
 %end
 
 %post --erroronfail
@@ -47,8 +86,8 @@ PermitRootLogin no
 EOF
 
 dnf clean all
-rm -f /var/lib/dbus/machine-id
-truncate -s 0 /etc/machine-id
+cloud-init clean --logs --machine-id --seed
+rm -f /var/lib/dbus/machine-id /etc/machine-id
+touch /etc/machine-id
 rm -f /etc/ssh/ssh_host_*
 %end
-

@@ -6,6 +6,7 @@ from pathlib import Path
 from uuid import UUID, uuid5
 
 from sysadmin_lab.domain.resources import (
+    NAME_COMPONENT,
     ResourceIdentity,
     ResourceKind,
     build_resource_name,
@@ -20,6 +21,7 @@ class DomainSpec:
     memory_mib: int = 2048
     vcpus: int = 2
     network: str = "default"
+    data_disks: tuple[tuple[str, Path], ...] = ()
 
     def __post_init__(self) -> None:
         if self.identity.kind is not ResourceKind.DOMAIN:
@@ -32,6 +34,11 @@ class DomainSpec:
             raise ValueError("domain must have at least one vCPU")
         if not self.network:
             raise ValueError("domain network must not be empty")
+        for name, path in self.data_disks:
+            if not NAME_COMPONENT.fullmatch(name):
+                raise ValueError(f"invalid data disk name: {name}")
+            if not path.is_absolute():
+                raise ValueError("domain data disk paths must be absolute")
 
 
 def domain_identity(scenario_id: str, session_id: UUID, role: str = "node1") -> ResourceIdentity:
@@ -83,6 +90,22 @@ def render_domain_xml(spec: DomainSpec) -> str:
     )
     ET.SubElement(disk, "source", {"file": str(spec.disk)})
     ET.SubElement(disk, "target", {"dev": "vda", "bus": "virtio"})
+
+    for index, (name, path) in enumerate(spec.data_disks, start=1):
+        data_disk = ET.SubElement(devices, "disk", {"type": "file", "device": "disk"})
+        ET.SubElement(
+            data_disk,
+            "driver",
+            {
+                "name": "qemu",
+                "type": "qcow2",
+                "cache": "none",
+                "discard": "unmap",
+            },
+        )
+        ET.SubElement(data_disk, "source", {"file": str(path)})
+        ET.SubElement(data_disk, "target", {"dev": f"vd{chr(ord('a') + index)}", "bus": "virtio"})
+        ET.SubElement(data_disk, "serial").text = f"lal-{name}"
 
     seed = ET.SubElement(devices, "disk", {"type": "file", "device": "cdrom"})
     ET.SubElement(seed, "driver", {"name": "qemu", "type": "raw"})

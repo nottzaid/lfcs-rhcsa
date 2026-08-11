@@ -1,0 +1,24 @@
+schema_version: 1
+actions:
+  - action_id: set-persistent-unit-properties
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - systemctl
+      - set-property
+      - --runtime=false
+      - lal-indexer.service
+      - CPUQuota=25%
+  - action_id: add-priority-override
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        install -d /etc/systemd/system/lal-indexer.service.d;
+        printf '%s\n' '[Service]' 'Nice=10' > /etc/systemd/system/lal-indexer.service.d/priority.conf;
+        systemctl daemon-reload;
+        systemctl restart lal-indexer.service

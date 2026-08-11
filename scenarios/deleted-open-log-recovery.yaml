@@ -1,0 +1,72 @@
+schema_version: 1
+scenario_id: deleted-open-log-recovery
+version: 1
+status: draft
+title: Disk space vanished after a log was deleted
+summary: Recover blocks held by an open deleted file and restore normal logging.
+estimated_minutes: 25
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  Space on node2 was not recovered when an operator deleted lal-writer.log. Identify the
+  process holding the deleted file, configure lal-writer to use normal visible logging by
+  setting KEEP_DELETED=0 in /etc/lal-writer.conf, and recover the held blocks. Keep
+  lal-writer.service running and enabled. Do not reboot node2 or kill unrelated processes.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.diskspace
+    title: Troubleshoot diskspace issues
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: lsof manual
+    man_page: lsof(8)
+  - kind: man-page
+    title: proc pid fd documentation
+    man_page: proc_pid_fd(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: writer-operational
+    kind: service
+    target: node2
+    description: The writer remains running and enabled.
+    parameters:
+      name: lal-writer.service
+      active: true
+      enabled: true
+  - check_id: deleted-file-released
+    kind: command
+    target: node2
+    description: No process holds a deleted file from the writer log directory.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, '! lsof +L1 -- /var/log 2>/dev/null | grep -Fq lal-writer']
+  - check_id: visible-log-restored
+    kind: file
+    target: node2
+    description: The service writes to its visible log again.
+    parameters:
+      path: /var/log/lal-writer.log
+      kind: file
+      owner: root
+      group: root
+      contains: heartbeat
+  - check_id: writer-mode-corrected
+    kind: command
+    target: node2
+    description: Subsequent service starts use normal logging.
+    parameters:
+      arguments: [bash, -c, grep -Eq '^KEEP_DELETED=0$' /etc/lal-writer.conf]
+persistence:
+  reboot: false
+setup: actions/deleted-open-log-recovery.setup.yaml
+reference_solution: actions/deleted-open-log-recovery.solution.yaml
+alternate_solutions: [actions/deleted-open-log-recovery.alternate.yaml]

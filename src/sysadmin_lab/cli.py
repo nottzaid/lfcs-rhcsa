@@ -11,6 +11,12 @@ import typer
 
 from sysadmin_lab.application.checking import CheckReport
 from sysadmin_lab.application.image_acquisition import HttpsDownloader, ImageAcquirer
+from sysadmin_lab.application.image_building import (
+    ImageBuildError,
+    KickstartImageBuilder,
+    SubprocessBuildRunner,
+    resolve_built_image,
+)
 from sysadmin_lab.application.scenario_sessions import StartedScenario
 from sysadmin_lab.application.verification import ScenarioVerifier
 from sysadmin_lab.application.vm_verification import VmScenarioDriver
@@ -64,7 +70,7 @@ def up(
         typer.echo("labctl up only binds to a loopback address", err=True)
         raise typer.Exit(code=2)
     root = project_root.resolve()
-    required = (root / "scenarios", root / "images" / "rocky-10.2" / "manifest.yaml")
+    required = (root / "scenarios", root / "images" / "rocky-10.2" / "iso-manifest.yaml")
     missing = [str(path) for path in required if not path.exists()]
     if missing:
         typer.echo(f"project root is missing required paths: {', '.join(missing)}", err=True)
@@ -129,6 +135,30 @@ def fetch_image_source(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"ready {manifest.image_id}: {path}")
+
+
+@image_app.command("build")
+def build_image(
+    manifest_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True)],
+    source_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/isos"),
+    output_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
+) -> None:
+    """Build a traceable immutable qcow2 from pinned ISO media and Kickstart."""
+    try:
+        manifest = load_image_manifest(manifest_path)
+        source = ImageAcquirer(HttpsDownloader()).acquire(manifest, source_cache)
+        built = KickstartImageBuilder(SubprocessBuildRunner()).build(
+            manifest,
+            manifest_path,
+            source,
+            output_directory,
+        )
+    except (CatalogError, ImageVerificationError, ImageBuildError, OSError) as exc:
+        typer.echo(f"image build failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"built {manifest.image_id}: {built.artifact}")
+    typer.echo(f"sha256:{built.record.artifact_sha256}")
+    typer.echo(f"provenance: {built.record_path}")
 
 
 @session_app.command("start")
@@ -230,7 +260,10 @@ def _scenario_launch_inputs(
     manifest = find_scenario(scenario_directory, scenario_id)
     setup = load_action_manifest(scenario_directory / manifest.setup)
     image_manifest = load_image_manifest(image_manifest_path)
-    image_path = ImageAcquirer(HttpsDownloader()).acquire(image_manifest, image_cache)
+    if image_manifest.build.method == "kickstart":
+        image_path = resolve_built_image(image_manifest, image_manifest_path, image_cache).artifact
+    else:
+        image_path = ImageAcquirer(HttpsDownloader()).acquire(image_manifest, image_cache)
     return manifest, setup, {image_manifest.image_id: image_path.resolve()}
 
 
@@ -258,7 +291,7 @@ def start_scenario(
     scenario_id: str,
     scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
     image_manifest_path: Annotated[Path, typer.Option(dir_okay=False)] = Path(
-        "images/rocky-10.2/manifest.yaml"
+        "images/rocky-10.2/iso-manifest.yaml"
     ),
     image_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
     runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
@@ -311,7 +344,7 @@ def reset_scenario(
     session_id: UUID,
     scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
     image_manifest_path: Annotated[Path, typer.Option(dir_okay=False)] = Path(
-        "images/rocky-10.2/manifest.yaml"
+        "images/rocky-10.2/iso-manifest.yaml"
     ),
     image_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
     runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
@@ -354,12 +387,10 @@ def verify_scenario(
     scenario_id: str,
     scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
     image_manifest_path: Annotated[Path, typer.Option(dir_okay=False)] = Path(
-        "images/rocky-10.2/manifest.yaml"
+        "images/rocky-10.2/iso-manifest.yaml"
     ),
     image_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
-    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path(
-        "runtime/acceptance"
-    ),
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/acceptance"),
 ) -> None:
     """Destructively replay a scenario's complete disposable-VM acceptance contract."""
     try:

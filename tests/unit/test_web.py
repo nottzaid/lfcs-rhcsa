@@ -118,9 +118,9 @@ def test_lfcs_topic_and_scenario_pages_expose_hands_on_loop(tmp_path: Path) -> N
         assert catalog.status_code == 200
         assert "LFCS" in catalog.text
         assert workspace.manifest.title in catalog.text
-        assert "20 min" in catalog.text
+        assert f"{workspace.manifest.estimated_minutes} min" in catalog.text
         assert "Times are estimates only" in catalog.text
-        assert "No limit" in catalog.text
+        assert "No limit" not in catalog.text
         assert "Info" in catalog.text and "Run" in catalog.text
         assert "Active" in catalog.text
         assert catalog.headers["cache-control"] == "no-store"
@@ -128,7 +128,7 @@ def test_lfcs_topic_and_scenario_pages_expose_hands_on_loop(tmp_path: Path) -> N
         detail = client.get(f"/scenarios/{workspace.manifest.scenario_id}")
         assert workspace.manifest.task in detail.text
         assert "Launch scenario" in detail.text
-        assert "node1" in detail.text
+        assert workspace.manifest.topology.hosts[0].name in detail.text
 
 
 def test_session_page_and_api_show_connection_and_state_grading(tmp_path: Path) -> None:

@@ -1,0 +1,92 @@
+schema_version: 1
+scenario_id: virtual-mount-layout
+version: 1
+status: draft
+title: Runtime and release mounts disappear at boot
+summary: Configure persistent tmpfs and bind mounts in the virtual filesystem tree.
+estimated_minutes: 25
+task_type: configure
+difficulty: intermediate
+task: >-
+  Configure node2 so /run/lal-cache is a 64 MiB tmpfs with mode 0750 and
+  /opt/app/current is a bind mount of /srv/releases/current. Mount both now and configure
+  them in /etc/fstab so they return after reboot. Preserve the release file already present
+  at /srv/releases/current/version.txt.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.virtual-filesystem
+    title: Manage and configure the virtual file system
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: mount manual
+    man_page: mount(8)
+  - kind: man-page
+    title: fstab manual
+    man_page: fstab(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: cache-tmpfs
+    kind: command
+    target: node2
+    description: The runtime cache is a size-limited tmpfs.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(findmnt -n -o FSTYPE /run/lal-cache)" = tmpfs &&
+          findmnt -n -o OPTIONS /run/lal-cache | grep -qw size=65536k
+  - check_id: cache-mode
+    kind: file
+    target: node2
+    description: The runtime cache has the required access mode.
+    parameters:
+      path: /run/lal-cache
+      kind: directory
+      mode: "0750"
+  - check_id: current-release-bind
+    kind: command
+    target: node2
+    description: The current release path is a bind mount of the release source.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          mountpoint -q /opt/app/current &&
+          test "$(stat -c %d:%i /opt/app/current/version.txt)" = "$(stat -c %d:%i /srv/releases/current/version.txt)"
+  - check_id: mount-layout-persistent
+    kind: command
+    target: node2
+    description: fstab records both virtual mounts.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          awk '$1=="tmpfs" && $2=="/run/lal-cache" && $3=="tmpfs" {cache=1}
+               $1=="/srv/releases/current" && $2=="/opt/app/current" && $4 ~ /(^|,)bind(,|$)/ {bind=1}
+               END {exit !(cache && bind)}' /etc/fstab
+  - check_id: release-content-preserved
+    kind: file
+    target: node2
+    description: The existing release remains visible through the bind mount.
+    parameters:
+      path: /opt/app/current/version.txt
+      kind: file
+      contains: release-2026.08
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/virtual-mount-layout.setup.yaml
+reference_solution: actions/virtual-mount-layout.solution.yaml
+alternate_solutions: [actions/virtual-mount-layout.alternate.yaml]

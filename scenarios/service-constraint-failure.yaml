@@ -1,0 +1,79 @@
+schema_version: 1
+scenario_id: service-constraint-failure
+version: 1
+status: draft
+title: Hardening prevents the API from writing its state
+summary: Diagnose a systemd sandbox failure and grant only the required write path.
+estimated_minutes: 30
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  lal-api.service fails on node2 after a hardening change. Make it start successfully and
+  remain enabled while preserving ProtectSystem=strict. Grant write access only to the
+  service state directory /var/lib/lal-api; do not make /usr, /etc, or all of /var writable.
+  A healthy service writes "ready" to /var/lib/lal-api/state.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.constraints
+    title: Determine application and service specific constraints
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: systemd execution environment documentation
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html
+  - kind: man-page
+    title: systemd.exec manual
+    man_page: systemd.exec(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: api-running
+    kind: service
+    target: node2
+    description: The API service is running and enabled.
+    parameters:
+      name: lal-api.service
+      active: true
+      enabled: true
+  - check_id: strict-filesystem-hardening-retained
+    kind: command
+    target: node2
+    description: ProtectSystem remains strict.
+    parameters:
+      arguments: [systemctl, show, -p, ProtectSystem, --value, lal-api.service]
+      stdout_equals: strict
+  - check_id: write-exception-is-narrow
+    kind: command
+    target: node2
+    description: The service has a writable state directory without broad exceptions.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          rw=$(systemctl show -p ReadWritePaths --value lal-api.service);
+          state=$(systemctl show -p StateDirectory --value lal-api.service);
+          { grep -qw -- /var/lib/lal-api <<<"$rw" || grep -qw -- lal-api <<<"$state"; } &&
+          ! grep -Eq '(^| )/( |$)|(^| )/var( |$)|(^| )/etc( |$)|(^| )/usr( |$)' <<<"$rw"
+  - check_id: api-state-created
+    kind: file
+    target: node2
+    description: The service can write the required state.
+    parameters:
+      path: /var/lib/lal-api/state
+      kind: file
+      owner: lalapi
+      group: lalapi
+      contains: ready
+persistence:
+  reboot: false
+setup: actions/service-constraint-failure.setup.yaml
+reference_solution: actions/service-constraint-failure.solution.yaml
+alternate_solutions: [actions/service-constraint-failure.alternate.yaml]

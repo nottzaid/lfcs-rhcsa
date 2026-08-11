@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: configure-virtual-mounts
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        printf '%s\n' 'tmpfs /run/lal-cache tmpfs size=64M,mode=0750 0 0'
+        '/srv/releases/current /opt/app/current none bind 0 0' >> /etc/fstab;
+        mount /run/lal-cache;
+        mount /opt/app/current

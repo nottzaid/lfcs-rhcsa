@@ -1,0 +1,28 @@
+schema_version: 1
+actions:
+  - action_id: create-configuration-history
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        rm -rf /etc/lal-app
+        install -d -m 0755 /etc/lal-app
+        git -C /etc/lal-app init --quiet --initial-branch=main
+        git -C /etc/lal-app config user.name 'Operations Team'
+        git -C /etc/lal-app config user.email 'ops@lab.invalid'
+        printf 'workers=8\n' > /etc/lal-app/app.conf
+        git -C /etc/lal-app add app.conf
+        git -C /etc/lal-app commit --quiet -m 'Approve worker configuration'
+        git -C /etc/lal-app tag approved-v1
+        printf 'Configuration is managed in Git.\n' > /etc/lal-app/README
+        git -C /etc/lal-app add README
+        git -C /etc/lal-app commit --quiet -m 'Document configuration ownership'
+        git -C /etc/lal-app tag docs-update
+        printf 'workers=2\n' > /etc/lal-app/app.conf
+  - action_id: make-repository-administrable
+    target: node2
+    arguments: [sudo, --, chown, -R, labadmin:labadmin, /etc/lal-app]

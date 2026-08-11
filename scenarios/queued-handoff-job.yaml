@@ -1,0 +1,79 @@
+schema_version: 1
+scenario_id: queued-handoff-job
+version: 1
+status: draft
+title: The handoff must happen once, not every night
+summary: Queue a one-time unattended job under the correct service identity.
+estimated_minutes: 20
+task_type: configure
+difficulty: foundation
+task: >-
+  The release team needs a one-time handoff exactly one hour from now on node2. As the
+  handoff user, queue a job with at(1) that writes the single line "approved" to
+  /var/lib/handoff/ready. The atd service must be running and enabled. Do not use cron,
+  a systemd timer, sleep, or an interactive process; the handoff must remain queued if
+  you disconnect.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.scheduled-jobs
+    title: Manage scheduling of jobs and services
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: at manual
+    man_page: at(1)
+  - kind: man-page
+    title: atd manual
+    man_page: atd(8)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: scheduler-ready
+    kind: service
+    target: node2
+    description: The one-time job scheduler is running and enabled.
+    parameters:
+      name: atd.service
+      active: true
+      enabled: true
+  - check_id: one-handoff-job
+    kind: command
+    target: node2
+    description: Exactly one queued job belongs to the handoff account.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(atq | awk '$NF == "handoff" {count++} END {print count+0}')" -eq 1
+  - check_id: correct-handoff-state
+    kind: command
+    target: node2
+    description: The queued or completed job writes the required state as handoff.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          if test -f /var/lib/handoff/ready; then
+            test "$(cat /var/lib/handoff/ready)" = approved &&
+            test "$(stat -c %U /var/lib/handoff/ready)" = handoff;
+          else
+            job=$(atq | awk '$NF == "handoff" {print $1}');
+            test -n "$job" &&
+            at -c "$job" | grep -Fq "/usr/bin/printf 'approved\\n' > /var/lib/handoff/ready";
+          fi
+persistence:
+  reboot: false
+setup: actions/queued-handoff-job.setup.yaml
+reference_solution: actions/queued-handoff-job.solution.yaml
+alternate_solutions: [actions/queued-handoff-job.alternate.yaml]

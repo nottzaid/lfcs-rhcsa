@@ -1,0 +1,73 @@
+schema_version: 1
+scenario_id: resource-bottleneck-investigation
+version: 1
+status: draft
+title: An indexing worker is starving interactive services
+summary: Identify a managed CPU workload and constrain it without disabling the work.
+estimated_minutes: 30
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  Interactive work on node2 is slow because one managed background workload consumes an
+  entire CPU. Diagnose the running processes and services. Keep the indexing workload
+  running and enabled, but constrain it to at most 25% of one CPU and set its process nice
+  level to 10. Do not constrain sshd or change the VM's CPU count.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.performance
+    title: Monitor and troubleshoot system performance and services
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: systemd resource-control documentation
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html
+  - kind: man-page
+    title: systemd.resource-control manual
+    man_page: systemd.resource-control(5)
+  - kind: man-page
+    title: ps manual
+    man_page: ps(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: indexer-remains-operational
+    kind: service
+    target: node2
+    description: The indexing worker remains running and enabled.
+    parameters:
+      name: lal-indexer.service
+      active: true
+      enabled: true
+  - check_id: cpu-budget-applied
+    kind: command
+    target: node2
+    description: systemd enforces a 25 percent CPU quota for the worker.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - test "$(systemctl show -p CPUQuotaPerSecUSec --value lal-indexer.service)" = 250ms
+  - check_id: scheduling-priority-applied
+    kind: command
+    target: node2
+    description: The running worker has nice level 10.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(systemctl show -p Nice --value lal-indexer.service)" -eq 10 &&
+          pid=$(systemctl show -p MainPID --value lal-indexer.service) &&
+          test "$(ps -o ni= -p "$pid" | tr -d ' ')" -eq 10
+persistence:
+  reboot: false
+setup: actions/resource-bottleneck-investigation.setup.yaml
+reference_solution: actions/resource-bottleneck-investigation.solution.yaml
+alternate_solutions: [actions/resource-bottleneck-investigation.alternate.yaml]

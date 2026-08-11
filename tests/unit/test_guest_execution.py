@@ -79,9 +79,7 @@ def test_restart_waits_for_offline_then_online(tmp_path: Path) -> None:
 
 
 def test_restart_rejects_a_guest_that_never_goes_offline(tmp_path: Path) -> None:
-    executor = FakeExecutor(
-        [GuestCommandResult(0, "", ""), GuestCommandResult(0, "", "")]
-    )
+    executor = FakeExecutor([GuestCommandResult(0, "", ""), GuestCommandResult(0, "", "")])
 
     with pytest.raises(GuestReadinessError, match="did not go offline"):
         GuestReadiness(executor, sleep=lambda _seconds: None).wait_for_restart(

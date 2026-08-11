@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: constrain-indexer-with-drop-in
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /etc/systemd/system/lal-indexer.service.d
+        cat > /etc/systemd/system/lal-indexer.service.d/resources.conf <<'EOF'
+        [Service]
+        CPUQuota=25%
+        Nice=10
+        EOF
+        systemctl daemon-reload
+        systemctl restart lal-indexer.service

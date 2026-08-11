@@ -16,7 +16,7 @@ from sysadmin_lab.application.scenario_sessions import (
 from sysadmin_lab.application.session_artifacts import GuestAccess
 from sysadmin_lab.application.vm_sessions import ProvisionedSession
 from sysadmin_lab.domain.actions import ActionManifest
-from sysadmin_lab.domain.models import ScenarioManifest, ScenarioStatus, TopologySpec
+from sysadmin_lab.domain.models import ScenarioManifest, ScenarioStatus
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
@@ -91,7 +91,7 @@ class VmSessions:
     provisioned: ProvisionedSession
     destroyed: list[UUID] = field(default_factory=list)
 
-    def provision(self, **_kwargs: object) -> ProvisionedSession:
+    def provision_many(self, **_kwargs: object) -> ProvisionedSession:
         return self.provisioned
 
     def destroy(self, session_id: UUID) -> SessionState:
@@ -195,27 +195,13 @@ def test_start_cleans_setup_failure_and_missing_address(tmp_path: Path) -> None:
     assert vm.destroyed == [SESSION_ID]
 
 
-def test_start_rejects_draft_unsupported_topology_and_missing_image(tmp_path: Path) -> None:
+def test_start_rejects_draft_and_missing_image(tmp_path: Path) -> None:
     verified = manifest()
     scenario, _vm, _actions, _progress = service(tmp_path, [report(verified, passed=False)])
     with pytest.raises(ScenarioLaunchError, match="not verified"):
         scenario.start(manifest(status=ScenarioStatus.DRAFT), setup(), {})
     with pytest.raises(ScenarioLaunchError, match="no verified base image"):
         scenario.start(verified, setup(), {})
-
-    two_hosts = verified.model_copy(
-        update={
-            "topology": TopologySpec(
-                hosts=(
-                    verified.topology.hosts[0],
-                    verified.topology.hosts[0].model_copy(update={"name": "node2"}),
-                )
-            )
-        }
-    )
-    with pytest.raises(ScenarioLaunchError, match="one-host"):
-        scenario.start(two_hosts, setup(), {})
-
 
 def test_acceptance_path_can_start_an_unreleased_draft(tmp_path: Path) -> None:
     draft = manifest(status=ScenarioStatus.DRAFT)

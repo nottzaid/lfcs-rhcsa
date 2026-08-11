@@ -13,6 +13,7 @@ from uuid import UUID
 
 import yaml
 
+from sysadmin_lab.domain.models import DiskSpec
 from sysadmin_lab.domain.resources import NAME_COMPONENT
 
 
@@ -33,6 +34,7 @@ class SessionPaths:
     seed_source: Path
     private_key: Path
     public_key: Path
+    data_disks: tuple[tuple[str, Path], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -69,7 +71,8 @@ class SessionArtifactBuilder:
         role: str,
         hostname: str,
         base_image: Path,
-        disk_gib: int = 12,
+        disk_gib: int = 20,
+        data_disks: tuple[DiskSpec, ...] = (),
     ) -> tuple[SessionPaths, GuestAccess]:
         paths = self.paths(session_id, role)
         if paths.directory.exists():
@@ -85,10 +88,20 @@ class SessionArtifactBuilder:
             password = secrets.token_urlsafe(18)
             public_key = paths.public_key.read_text(encoding="utf-8").strip()
             self._create_overlay(base_image.resolve(), paths.overlay, disk_gib)
+            created_data_disks = self._create_data_disks(paths.directory, data_disks)
             self._create_seed(paths, hostname, "labadmin", password, public_key)
         except Exception:
             shutil.rmtree(paths.directory, ignore_errors=True)
             raise
+        paths = SessionPaths(
+            paths.directory,
+            paths.overlay,
+            paths.seed_iso,
+            paths.seed_source,
+            paths.private_key,
+            paths.public_key,
+            created_data_disks,
+        )
         return paths, GuestAccess("labadmin", password, paths.private_key, paths.public_key)
 
     def _ensure_ssh_key(self, paths: SessionPaths) -> None:
@@ -130,6 +143,27 @@ class SessionArtifactBuilder:
                 f"{disk_gib}G",
             ]
         )
+
+    def _create_data_disks(
+        self, directory: Path, specifications: tuple[DiskSpec, ...]
+    ) -> tuple[tuple[str, Path], ...]:
+        created: list[tuple[str, Path]] = []
+        for specification in specifications:
+            path = directory / f"{specification.name}.qcow2"
+            self._runner.run(
+                [
+                    "qemu-img",
+                    "create",
+                    "-f",
+                    "qcow2",
+                    "-o",
+                    "lazy_refcounts=on",
+                    str(path),
+                    f"{specification.size_mib}M",
+                ]
+            )
+            created.append((specification.name, path))
+        return tuple(created)
 
     def _create_seed(
         self,

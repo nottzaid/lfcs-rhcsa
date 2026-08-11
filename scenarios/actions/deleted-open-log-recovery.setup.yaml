@@ -1,0 +1,38 @@
+schema_version: 1
+actions:
+  - action_id: install-log-writer
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /usr/local/sbin/lal-writer <<'EOF'
+        #!/bin/bash
+        set -eu
+        . /etc/lal-writer.conf
+        if test "$KEEP_DELETED" = 1; then
+          exec 3>/var/log/lal-writer.log
+          fallocate -l 256M /var/log/lal-writer.log
+          rm -f /var/log/lal-writer.log
+          while :; do printf 'heartbeat\n' >&3; sleep 10; done
+        fi
+        while :; do printf 'heartbeat\n' >> /var/log/lal-writer.log; sleep 10; done
+        EOF
+        chmod 0755 /usr/local/sbin/lal-writer
+        printf 'KEEP_DELETED=1\n' > /etc/lal-writer.conf
+        cat > /etc/systemd/system/lal-writer.service <<'EOF'
+        [Unit]
+        Description=Training log writer
+
+        [Service]
+        ExecStart=/usr/local/sbin/lal-writer
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable --now lal-writer.service
+        sleep 1

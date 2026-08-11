@@ -11,7 +11,11 @@ from sysadmin_lab.application.machines import SessionMachineRepository
 from sysadmin_lab.application.progress import ProgressService
 from sysadmin_lab.application.session_checks import SessionCheckService
 from sysadmin_lab.application.sessions import SessionCoordinator
-from sysadmin_lab.application.vm_sessions import ProvisionedSession, SingleHostVmSessionService
+from sysadmin_lab.application.vm_sessions import (
+    ProvisionedSession,
+    SingleHostVmSessionService,
+    VmHostRequest,
+)
 from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.models import HostSpec, ScenarioManifest, ScenarioStatus
 from sysadmin_lab.domain.progress import CheckAttempt
@@ -56,19 +60,27 @@ class ScenarioSessionService:
         *,
         require_verified: bool = True,
     ) -> StartedScenario:
-        host = self._supported_host(manifest, require_verified=require_verified)
-        try:
-            base_image = base_images[host.image]
-        except KeyError as exc:
-            raise ScenarioLaunchError(
-                f"no verified base image is available for {host.image}"
-            ) from exc
-        provisioned = self._vm_sessions.provision(
+        hosts = self._supported_hosts(manifest, require_verified=require_verified)
+        requests: list[VmHostRequest] = []
+        for host in hosts:
+            try:
+                base_image = base_images[host.image]
+            except KeyError as exc:
+                raise ScenarioLaunchError(
+                    f"no verified base image is available for {host.image}"
+                ) from exc
+            requests.append(
+                VmHostRequest(
+                    host_name=host.name,
+                    base_image=base_image,
+                    memory_mib=host.memory_mib,
+                    vcpus=host.vcpus,
+                    data_disks=host.disks,
+                )
+            )
+        provisioned = self._vm_sessions.provision_many(
             scenario_id=manifest.scenario_id,
-            host_name=host.name,
-            base_image=base_image,
-            memory_mib=host.memory_mib,
-            vcpus=host.vcpus,
+            requests=tuple(requests),
         )
         try:
             endpoints = self._endpoints(provisioned.state.session_id)
@@ -136,16 +148,14 @@ class ScenarioSessionService:
         return endpoints
 
     @staticmethod
-    def _supported_host(
+    def _supported_hosts(
         manifest: ScenarioManifest, *, require_verified: bool = True
-    ) -> HostSpec:
+    ) -> tuple[HostSpec, ...]:
         if require_verified and manifest.status is not ScenarioStatus.VERIFIED:
             raise ScenarioLaunchError(f"scenario is not verified: {manifest.scenario_id}")
-        if len(manifest.topology.hosts) != 1:
-            raise ScenarioLaunchError("this release supports one-host scenarios only")
         if manifest.topology.networks:
             raise ScenarioLaunchError("custom scenario networks are not supported yet")
-        host = manifest.topology.hosts[0]
-        if host.nics or host.disks or host.nested_virtualization:
-            raise ScenarioLaunchError("this scenario topology needs an unsupported VM feature")
-        return host
+        for host in manifest.topology.hosts:
+            if host.nics or host.nested_virtualization:
+                raise ScenarioLaunchError("this scenario topology needs an unsupported VM feature")
+        return manifest.topology.hosts
