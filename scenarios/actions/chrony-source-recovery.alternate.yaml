@@ -1,0 +1,21 @@
+schema_version: 1
+actions:
+  - action_id: replace-client-chrony-configuration
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/chrony.conf <<'EOF'
+        server {{host.node1.address}} iburst prefer minpoll 4 maxpoll 6
+        driftfile /var/lib/chrony/drift
+        makestep 1.0 3
+        rtcsync
+        logdir /var/log/chrony
+        EOF
+        systemctl enable chronyd.service
+        systemctl restart chronyd.service
+        chronyc waitsync 30 0.5

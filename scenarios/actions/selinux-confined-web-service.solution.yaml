@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: define-web-content-context
+    target: node2
+    arguments: [sudo, --, semanage, fcontext, -a, -t, httpd_sys_content_t, '/srv/lal-web(/.*)?']
+  - action_id: apply-web-content-context
+    target: node2
+    arguments: [sudo, --, restorecon, -RFv, /srv/lal-web]
+  - action_id: label-custom-http-port
+    target: node2
+    arguments: [sudo, --, semanage, port, -a, -t, http_port_t, -p, tcp, "8088"]
+  - action_id: start-confined-web-service
+    target: node2
+    arguments: [sudo, --, systemctl, enable, --now, nginx.service]

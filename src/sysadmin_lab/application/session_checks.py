@@ -5,6 +5,7 @@ from uuid import UUID
 from sysadmin_lab.application.checking import CheckEngine, CheckReport
 from sysadmin_lab.application.guest_execution import GuestEndpoint
 from sysadmin_lab.application.machines import SessionMachineRepository
+from sysadmin_lab.application.placeholders import render_host_addresses
 from sysadmin_lab.application.sessions import SessionCoordinator
 from sysadmin_lab.domain.models import ScenarioManifest
 from sysadmin_lab.domain.sessions import SessionStatus
@@ -42,7 +43,13 @@ class SessionCheckService:
                 for machine in self._machines.list(session_id)
                 if machine.address is not None
             }
-            report = self._engine.run(manifest.checks, endpoints)
+            checks = tuple(
+                check.model_copy(
+                    update={"parameters": render_host_addresses(check.parameters, endpoints)}
+                )
+                for check in manifest.checks
+            )
+            report = self._engine.run(checks, endpoints)
         except Exception as exc:
             self._sessions.transition(session_id, SessionStatus.FAILED, error=str(exc))
             raise

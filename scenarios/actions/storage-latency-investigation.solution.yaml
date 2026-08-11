@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: set-low-io-weight
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /etc/systemd/system/lal-io-load.service.d
+        cat > /etc/systemd/system/lal-io-load.service.d/io-weight.conf <<'EOF'
+        [Service]
+        IOWeight=10
+        EOF
+        systemctl daemon-reload
+        systemctl restart lal-io-load.service

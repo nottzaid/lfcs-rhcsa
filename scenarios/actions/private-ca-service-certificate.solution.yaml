@@ -1,0 +1,49 @@
+schema_version: 1
+actions:
+  - action_id: create-api-key-and-request
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - openssl
+      - req
+      - -new
+      - -newkey
+      - rsa:2048
+      - -nodes
+      - -subj
+      - /CN=api.internal
+      - -addext
+      - subjectAltName=DNS:api.internal,IP:127.0.0.1
+      - -keyout
+      - /etc/lal-pki/private/api.key
+      - -out
+      - /etc/lal-pki/api.csr
+  - action_id: sign-api-certificate
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - openssl
+      - x509
+      - -req
+      - -days
+      - "365"
+      - -sha256
+      - -in
+      - /etc/lal-pki/api.csr
+      - -CA
+      - /etc/lal-pki/ca.crt
+      - -CAkey
+      - /etc/lal-pki/private/ca.key
+      - -CAcreateserial
+      - -copy_extensions
+      - copy
+      - -out
+      - /etc/lal-pki/api.crt
+  - action_id: protect-api-material
+    target: node2
+    arguments: [sudo, --, chmod, "0600", /etc/lal-pki/private/api.key]
+  - action_id: publish-api-certificate
+    target: node2
+    arguments: [sudo, --, chmod, "0644", /etc/lal-pki/api.crt]

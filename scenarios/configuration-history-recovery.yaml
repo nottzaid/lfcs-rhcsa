@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: configuration-history-recovery
 version: 1
-status: draft
+status: verified
 title: A rejected configuration is still in the working tree
 summary: Recover one tracked file from approved Git history without discarding later work.
 estimated_minutes: 25
@@ -9,9 +9,9 @@ task_type: fix
 difficulty: foundation
 task: >-
   The Git repository in /etc/lal-app contains configuration history. The tag approved-v1
-  identifies the approved worker settings, but app.conf now has an uncommitted rejected
+  identifies the approved worker settings, but app.conf was later committed with a rejected
   change. Restore only app.conf from approved-v1 and commit that restoration on the current
-  branch. Preserve the later README commit and leave the working tree clean. Do not delete
+  branch. Preserve the README history and leave the working tree clean. Do not delete
   or recreate the repository.
 objectives:
   - track: lfcs

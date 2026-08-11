@@ -1,0 +1,24 @@
+schema_version: 1
+actions:
+  - action_id: define-controllers-and-dummy-ports
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        nmcli connection add type bond con-name lal-bond ifname bond0
+        nmcli connection modify lal-bond bond.options mode=active-backup,miimon=100 \
+          ipv4.method manual ipv4.addresses 192.0.2.20/24 ipv4.never-default yes ipv6.method disabled
+        nmcli connection add type dummy con-name lal-bond-a ifname bond-a master lal-bond
+        nmcli connection add type dummy con-name lal-bond-b ifname bond-b master lal-bond
+        nmcli connection add type bridge con-name lal-bridge ifname br0
+        nmcli connection modify lal-bridge ipv4.method manual ipv4.addresses 198.51.100.20/24 \
+          ipv4.never-default yes ipv6.method disabled
+        nmcli connection add type dummy con-name lal-bridge-port ifname bridge-port master lal-bridge
+        nmcli connection up lal-bond
+        nmcli connection up lal-bond-a
+        nmcli connection up lal-bond-b
+        nmcli connection up lal-bridge
+        nmcli connection up lal-bridge-port

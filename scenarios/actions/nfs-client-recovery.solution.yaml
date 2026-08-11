@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: repair-and-mount-nfs-client
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        sed -i '\#/mnt/teamshare#d' /etc/fstab;
+        printf '{{host.node1.address}}:/srv/teamshare /mnt/teamshare nfs4 rw,_netdev 0 0\n' >> /etc/fstab;
+        mount /mnt/teamshare

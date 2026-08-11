@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: repository-trust-repair
 version: 1
-status: draft
+status: verified
 title: The approved local repository cannot be used
 summary: Repair a repository definition and install the approved local package.
 estimated_minutes: 30

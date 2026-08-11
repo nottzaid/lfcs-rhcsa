@@ -203,6 +203,7 @@ def test_start_rejects_draft_and_missing_image(tmp_path: Path) -> None:
     with pytest.raises(ScenarioLaunchError, match="no verified base image"):
         scenario.start(verified, setup(), {})
 
+
 def test_acceptance_path_can_start_an_unreleased_draft(tmp_path: Path) -> None:
     draft = manifest(status=ScenarioStatus.DRAFT)
     scenario, _vm, actions, _progress = service(tmp_path, [report(draft, passed=False)])

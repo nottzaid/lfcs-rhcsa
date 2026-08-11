@@ -177,7 +177,10 @@ class SessionArtifactBuilder:
         metadata = {"instance-id": paths.directory.parent.name, "local-hostname": hostname}
         userdata = {
             "hostname": hostname,
-            "manage_etc_hosts": True,
+            # Scenarios may legitimately administer /etc/hosts.  Cloud-init still applies
+            # the per-session hostname, but must not rewrite learner configuration after a
+            # reboot and invalidate an otherwise persistent solution.
+            "manage_etc_hosts": False,
             "ssh_pwauth": True,
             "users": [
                 "default",

@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: configure-designated-time-source
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        sed -i 's/^server .*/server {{host.node1.address}} iburst/' /etc/chrony.conf
+        systemctl restart chronyd.service
+        chronyc waitsync 30 0.5

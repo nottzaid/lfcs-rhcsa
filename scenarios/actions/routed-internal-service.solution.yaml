@@ -1,0 +1,12 @@
+schema_version: 1
+actions:
+  - action_id: add-persistent-internal-route
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        nmcli con modify lal-uplink +ipv4.routes '198.51.100.0/24 192.0.2.2';
+        nmcli con up lal-uplink

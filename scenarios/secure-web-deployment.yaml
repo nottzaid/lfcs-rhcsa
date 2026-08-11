@@ -1,0 +1,77 @@
+schema_version: 1
+scenario_id: secure-web-deployment
+version: 1
+status: draft
+title: The internal web deployment is neither secure nor reachable
+summary: Recover a TLS web service without weakening SELinux or the host firewall.
+estimated_minutes: 60
+task_type: fix
+difficulty: exam
+task: >-
+  The supplied certificate and key on node2 belong to service.internal, but the deployment
+  was left serving plain HTTP on the wrong port. Configure nginx to serve the exact text
+  secure-ready from /srv/lal-secure on HTTPS port 8443 using /etc/lal-pki/service.crt and
+  /etc/lal-pki/private/service.key. Keep SELinux enforcing, create persistent SELinux rules
+  for the custom content tree and TCP port, permit 8443/tcp in firewalld's active zone, and
+  leave nginx enabled. The certificate must continue to verify against /etc/lal-pki/ca.crt.
+objectives:
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.selinux, title: Create and enforce MAC using SELinux}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.packet-filtering, title: Implement packet filtering}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.proxies-load-balancers, title: Configure reverse proxies and load balancers}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.services, title: Manage services}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.tls-certificates, title: Work with SSL certificates}
+sources:
+  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
+  - {kind: upstream, title: nginx HTTPS configuration, url: https://nginx.org/en/docs/http/configuring_https_servers.html}
+  - {kind: distribution, title: RHEL 10 SELinux file contexts, url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/using_selinux/changing-selinux-states-and-modes}
+  - {kind: man-page, title: firewall-cmd manual, man_page: firewall-cmd(1)}
+  - {kind: man-page, title: semanage manual, man_page: semanage(8)}
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v1, memory_mib: 1280, vcpus: 1}
+checks:
+  - check_id: mandatory-access-control-remains-enforcing
+    kind: command
+    target: node2
+    description: SELinux remains enforcing.
+    parameters: {arguments: [getenforce], stdout_equals: Enforcing}
+  - check_id: secure-content-has-persistent-label
+    kind: command
+    target: node2
+    description: The custom content tree is persistently labeled for read-only web use.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'matchpathcon -V /srv/lal-secure /srv/lal-secure/index.html >/dev/null && test "$(stat -c %C /srv/lal-secure/index.html | cut -d: -f3)" = httpd_sys_content_t']
+  - check_id: secure-port-has-http-label
+    kind: command
+    target: node2
+    description: TCP port 8443 has the persistent SELinux HTTP port type.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'semanage port -l | awk ''$1=="http_port_t" && $2=="tcp" && $0 ~ /(^|,| )8443(,| |$)/ {ok=1} END {exit !ok}''']
+  - check_id: secure-port-is-allowed
+    kind: command
+    target: node2
+    description: firewalld permits HTTPS port 8443 in the active zone.
+    parameters: {sudo: true, arguments: [firewall-cmd, --query-port=8443/tcp]}
+  - check_id: web-service-is-persistent
+    kind: service
+    target: node2
+    description: nginx is running and enabled.
+    parameters: {name: nginx.service, active: true, enabled: true}
+  - check_id: certificate-remains-trusted
+    kind: command
+    target: node2
+    description: The service certificate still verifies against the supplied CA.
+    parameters: {arguments: [openssl, verify, -CAfile, /etc/lal-pki/ca.crt, /etc/lal-pki/service.crt], stdout_contains: '/etc/lal-pki/service.crt: OK'}
+  - check_id: secure-service-behavior
+    kind: command
+    target: node2
+    description: The required name, certificate, TLS endpoint, and content work together.
+    parameters:
+      arguments: [curl, --fail, --silent, --cacert, /etc/lal-pki/ca.crt, --resolve, 'service.internal:8443:127.0.0.1', https://service.internal:8443/]
+      stdout_equals: secure-ready
+persistence: {reboot: true, hosts: [node2]}
+setup: actions/secure-web-deployment.setup.yaml
+reference_solution: actions/secure-web-deployment.solution.yaml
+alternate_solutions: [actions/secure-web-deployment.alternate.yaml]

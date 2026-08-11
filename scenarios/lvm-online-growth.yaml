@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: lvm-online-growth
 version: 1
-status: draft
+status: verified
 title: The logs logical volume is nearly full
 summary: Grow an active LVM logical volume and its filesystem without downtime.
 estimated_minutes: 35

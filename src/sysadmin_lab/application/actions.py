@@ -1,9 +1,12 @@
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 
 from sysadmin_lab.application.guest_execution import GuestEndpoint, GuestExecutor
+from sysadmin_lab.application.placeholders import (
+    UnknownHostPlaceholderError,
+    render_host_addresses,
+)
 from sysadmin_lab.domain.actions import ActionManifest
 
 
@@ -54,13 +57,8 @@ class ActionRunner:
     def _render_arguments(
         arguments: tuple[str, ...], endpoints: dict[str, GuestEndpoint]
     ) -> tuple[str, ...]:
-        pattern = re.compile(r"\{\{host\.([a-z][a-z0-9-]*)\.address\}\}")
-
-        def replace(match: re.Match[str]) -> str:
-            host = match.group(1)
-            try:
-                return endpoints[host].host
-            except KeyError as exc:
-                raise ActionExecutionError(f"action references unknown host {host}") from exc
-
-        return tuple(pattern.sub(replace, argument) for argument in arguments)
+        try:
+            rendered = render_host_addresses(arguments, endpoints)
+        except UnknownHostPlaceholderError as exc:
+            raise ActionExecutionError(str(exc).replace("manifest", "action")) from exc
+        return tuple(rendered)

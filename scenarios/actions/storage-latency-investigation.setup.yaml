@@ -1,0 +1,32 @@
+schema_version: 1
+actions:
+  - action_id: prepare-io-test-filesystem
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-iotest
+        umount /srv/io-test >/dev/null 2>&1 || true
+        wipefs -a "$disk"
+        mkfs.xfs -f -L LAL_IOTEST "$disk" >/dev/null
+        rm -rf /srv/io-test
+        install -d /srv/io-test
+        mount "$disk" /srv/io-test
+        cat > /etc/systemd/system/lal-io-load.service <<'EOF'
+        [Unit]
+        Description=Background storage exerciser
+
+        [Service]
+        ExecStart=/usr/bin/stress-ng --hdd 1 --hdd-bytes 128M --temp-path /srv/io-test
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        rm -rf /etc/systemd/system/lal-io-load.service.d
+        systemctl daemon-reload
+        systemctl enable --now lal-io-load.service

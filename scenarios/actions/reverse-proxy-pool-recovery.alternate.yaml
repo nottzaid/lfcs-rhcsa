@@ -1,0 +1,24 @@
+schema_version: 1
+actions:
+  - action_id: deploy-nginx-reverse-proxy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        systemctl disable --now haproxy.service
+        rm -f /etc/nginx/conf.d/*.conf
+        cat > /etc/nginx/conf.d/lal-application.conf <<'EOF'
+        server {
+            listen 8080;
+            location / {
+                proxy_pass http://{{host.node1.address}}:8081;
+                proxy_set_header Host $host;
+                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            }
+        }
+        EOF
+        nginx -t
+        systemctl enable --now nginx.service

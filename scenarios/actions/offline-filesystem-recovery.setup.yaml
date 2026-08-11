@@ -1,0 +1,23 @@
+schema_version: 1
+actions:
+  - action_id: create-and-damage-records-filesystem
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-records
+        umount /srv/records >/dev/null 2>&1 || true
+        sed -i '\#/srv/records#d' /etc/fstab
+        wipefs -a "$disk"
+        mkfs.ext4 -q -F -L LAL_RECORDS "$disk"
+        rm -rf /srv/records
+        install -d /srv/records
+        mount "$disk" /srv/records
+        printf 'preserve after recovery\n' > /srv/records/important.record
+        sync
+        umount /srv/records
+        debugfs -w -R 'set_super_value state 2' "$disk"

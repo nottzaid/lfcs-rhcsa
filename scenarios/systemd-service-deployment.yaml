@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: systemd-service-deployment
 version: 1
-status: draft
+status: verified
 title: The collector was copied to the server but never deployed
 summary: Turn an existing program into a persistent least-privilege systemd service.
 estimated_minutes: 30

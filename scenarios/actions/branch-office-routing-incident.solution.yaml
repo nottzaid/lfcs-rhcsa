@@ -1,0 +1,35 @@
+schema_version: 1
+actions:
+  - action_id: install-routes-and-forwarding
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        ip netns exec lal-branch ip route replace 172.20.0.0/24 via 10.70.0.1
+        ip netns exec lal-dc ip route replace 10.70.0.0/24 via 172.20.0.1
+        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/80-lal-forwarding.conf
+        sysctl --system >/dev/null
+  - action_id: install-branch-filter
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /etc/nftables
+        cat > /etc/nftables/lal-branch.nft <<'EOF'
+        table inet lal_branch {
+          chain forward {
+            type filter hook forward priority 0; policy drop;
+            ct state established,related accept
+            ip saddr 10.70.0.0/24 ip daddr 172.20.0.0/24 tcp dport 8080 accept
+          }
+        }
+        EOF
+        nft delete table inet lal_branch
+        nft -f /etc/nftables/lal-branch.nft
+        grep -qF 'include "/etc/nftables/lal-branch.nft"' /etc/sysconfig/nftables.conf || printf 'include "/etc/nftables/lal-branch.nft"\n' >> /etc/sysconfig/nftables.conf

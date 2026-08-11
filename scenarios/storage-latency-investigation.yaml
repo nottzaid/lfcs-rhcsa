@@ -1,0 +1,72 @@
+schema_version: 1
+scenario_id: storage-latency-investigation
+version: 1
+status: draft
+title: A background disk exerciser dominates the data device
+summary: Identify a managed I/O workload and apply a persistent low scheduling weight.
+estimated_minutes: 30
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  Diagnose the sustained writes on the filesystem mounted at /srv/io-test on node2. The
+  responsible managed workload must remain running and enabled, but give its systemd service
+  an I/O scheduling weight of 10 so production work wins under contention. Keep the workload
+  on the existing filesystem and do not change the global block scheduler.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.performance
+    title: Monitor storage performance
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: systemd I/O resource control
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html
+  - kind: man-page
+    title: iostat manual
+    man_page: iostat(1)
+  - kind: man-page
+    title: systemd.resource-control manual
+    man_page: systemd.resource-control(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - name: iotest
+          size_mib: 1024
+          role: storage performance workload disk
+checks:
+  - check_id: io-workload-running
+    kind: service
+    target: node2
+    description: The managed I/O workload remains running and enabled.
+    parameters: {name: lal-io-load.service, active: true, enabled: true}
+  - check_id: low-io-weight
+    kind: command
+    target: node2
+    description: systemd applies the required persistent I/O weight.
+    parameters:
+      arguments: [systemctl, show, -p, IOWeight, --value, lal-io-load.service]
+      stdout_equals: "10"
+  - check_id: workload-on-designated-filesystem
+    kind: command
+    target: node2
+    description: The workload still operates under /srv/io-test.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          mountpoint -q /srv/io-test &&
+          pid=$(systemctl show -p MainPID --value lal-io-load.service) &&
+          grep -Fq '/srv/io-test' "/proc/$pid/cmdline"
+persistence:
+  reboot: false
+setup: actions/storage-latency-investigation.setup.yaml
+reference_solution: actions/storage-latency-investigation.solution.yaml
+alternate_solutions: [actions/storage-latency-investigation.alternate.yaml]

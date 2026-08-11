@@ -1,0 +1,75 @@
+schema_version: 1
+scenario_id: branch-office-routing-incident
+version: 1
+status: draft
+title: The branch office cannot reach its datacenter service
+summary: Repair addressing, routes, forwarding, and a least-privilege nftables policy.
+estimated_minutes: 60
+task_type: troubleshoot
+difficulty: exam
+task: >-
+  node2 is the router between namespace lal-branch (10.70.0.0/24 through 10.70.0.1) and
+  lal-dc (172.20.0.0/24 through 172.20.0.1). Their endpoint addresses are already correct,
+  but routing and forwarding are broken. Configure persistent IPv4 forwarding, install the
+  necessary namespace routes, and create a persistent nftables inet table named lal_branch.
+  Permit branch clients to initiate TCP connections only to datacenter port 8080, permit
+  established return traffic, and keep other forwarded traffic dropped. The service at
+  172.20.0.2:8080 must return branch-ready. Do not change endpoint or router addresses.
+objectives:
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.ip-hostname, title: Configure IPv4 and IPv6 networking and hostname resolution}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.troubleshoot, title: Troubleshoot networking}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.packet-filtering, title: Implement packet filtering}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.static-routing, title: Configure static routing}
+sources:
+  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
+  - {kind: upstream, title: nftables official wiki, url: https://wiki.nftables.org/wiki-nftables/index.php/Main_Page}
+  - {kind: man-page, title: ip-netns manual, man_page: ip-netns(8)}
+  - {kind: man-page, title: ip-route manual, man_page: ip-route(8)}
+  - {kind: man-page, title: sysctl manual, man_page: sysctl(8)}
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v1, memory_mib: 1280, vcpus: 1}
+checks:
+  - check_id: forwarding-live-and-persistent
+    kind: command
+    target: node2
+    description: IPv4 forwarding is active and represented in persistent sysctl configuration.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'test "$(sysctl -n net.ipv4.ip_forward)" = 1 && grep -RqsE ''^[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$'' /etc/sysctl.conf /etc/sysctl.d']
+  - check_id: branch-route-installed
+    kind: command
+    target: node2
+    description: The branch endpoint routes datacenter traffic through node2.
+    parameters: {sudo: true, arguments: [ip, netns, exec, lal-branch, ip, route, get, 172.20.0.2], stdout_contains: 'via 10.70.0.1'}
+  - check_id: datacenter-return-route-installed
+    kind: command
+    target: node2
+    description: The datacenter endpoint has a return route through node2.
+    parameters: {sudo: true, arguments: [ip, netns, exec, lal-dc, ip, route, get, 10.70.0.2], stdout_contains: 'via 172.20.0.1'}
+  - check_id: filtering-policy-live
+    kind: command
+    target: node2
+    description: The named forwarding chain defaults to drop and has stateful port-8080 rules.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'rules=$(nft list table inet lal_branch) && grep -q ''hook forward.*policy drop'' <<<"$rules" && grep -q ''ct state established,related accept'' <<<"$rules" && grep -Eq ''ip saddr 10\.70\.0\.0/24 ip daddr 172\.20\.0\.0/24 tcp dport 8080.*accept'' <<<"$rules"']
+  - check_id: filtering-policy-persisted
+    kind: file
+    target: node2
+    description: The repaired nftables policy is loaded from the distribution configuration.
+    parameters: {path: /etc/nftables/lal-branch.nft, kind: file, contains: 'table inet lal_branch'}
+  - check_id: allowed-service-reachable
+    kind: command
+    target: node2
+    description: The branch reaches the required datacenter service through the router.
+    parameters: {sudo: true, arguments: [ip, netns, exec, lal-branch, curl, --fail, --silent, --max-time, '3', http://172.20.0.2:8080/], stdout_equals: branch-ready}
+  - check_id: unrelated-forwarding-remains-blocked
+    kind: command
+    target: node2
+    description: An unrelated datacenter TCP port is not reachable from the branch.
+    parameters: {sudo: true, arguments: [bash, -c, '! ip netns exec lal-branch timeout 2 bash -c ''</dev/tcp/172.20.0.2/22''']}
+persistence: {reboot: false}
+setup: actions/branch-office-routing-incident.setup.yaml
+reference_solution: actions/branch-office-routing-incident.solution.yaml
+alternate_solutions: [actions/branch-office-routing-incident.alternate.yaml]

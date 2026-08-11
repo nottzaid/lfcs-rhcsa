@@ -40,7 +40,7 @@ sources:
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-base-v1
+      image: rocky-10.2-lab-v1
       memory_mib: 1024
       vcpus: 1
 checks:

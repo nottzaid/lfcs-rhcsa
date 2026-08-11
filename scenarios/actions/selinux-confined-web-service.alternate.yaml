@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: install-persistent-selinux-policy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        semanage fcontext -a -t httpd_sys_content_t '/srv/lal-web(/.*)?';
+        restorecon -RF /srv/lal-web;
+        semanage port -a -p tcp -t http_port_t 8088;
+        systemctl enable nginx;
+        systemctl restart nginx

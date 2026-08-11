@@ -25,4 +25,4 @@ actions:
         setfacl -Rb /srv/project
   - action_id: install-contradictory-acl
     target: node2
-    arguments: [sudo, --, setfacl, -m, u:auditor:rwx,m::rwx, /srv/project/specs/plan.txt]
+    arguments: [sudo, --, setfacl, -m, "u:auditor:rwx,m::rwx", /srv/project/specs/plan.txt]

@@ -1,0 +1,44 @@
+schema_version: 1
+actions:
+  - action_id: create-full-application-volume
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-appdata
+        systemctl disable --now lal-catalog.service >/dev/null 2>&1 || true
+        umount /srv/lal-catalog >/dev/null 2>&1 || true
+        vgremove -ff -y vgapps >/dev/null 2>&1 || true
+        wipefs -a "$disk"
+        pvcreate -ff -y "$disk"
+        vgcreate vgapps "$disk"
+        lvcreate -L 512M -n lvcatalog vgapps
+        mkfs.ext4 -q -L LAL_CATALOG /dev/vgapps/lvcatalog
+        install -d /srv/lal-catalog
+        sed -i '\#/srv/lal-catalog#d' /etc/fstab
+        printf '/dev/mapper/vgapps-lvcatalog /srv/lal-catalog ext4 defaults 0 2\n' >> /etc/fstab
+        mount /srv/lal-catalog
+        printf 'customer-record: 1042\n' > /srv/lal-catalog/customer.db
+        dd if=/dev/zero of=/srv/lal-catalog/archive.fill bs=1M count=470 status=none
+        cat > /etc/systemd/system/lal-catalog.service <<'EOF'
+        [Unit]
+        Description=Linux Admin Lab catalog reader
+        RequiresMountsFor=/srv/lal-catalog
+        After=local-fs.target
+
+        [Service]
+        ExecStartPre=/usr/bin/bash -c 'test "$(df --output=avail /srv/lal-catalog | tail -1)" -ge 102400'
+        ExecStart=/usr/bin/tail -f /srv/lal-catalog/customer.db
+        Restart=on-failure
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable lal-catalog.service
+        systemctl start lal-catalog.service || true

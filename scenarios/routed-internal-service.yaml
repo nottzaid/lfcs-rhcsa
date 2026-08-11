@@ -1,0 +1,67 @@
+schema_version: 1
+scenario_id: routed-internal-service
+version: 1
+status: draft
+title: The internal service network has no route from the host
+summary: Diagnose a routed namespace topology and persist the missing static route.
+estimated_minutes: 35
+task_type: troubleshoot
+difficulty: advanced
+task: >-
+  A lab gateway at 192.0.2.2 on node2 routes to the internal service network
+  198.51.100.0/24. The host-side NetworkManager profile is lal-uplink on uplink0, but the
+  route is missing. Add a persistent route for 198.51.100.0/24 via 192.0.2.2 to that profile,
+  activate it without changing the default route, and restore reachability to 198.51.100.2.
+  Do not add a one-off route without updating NetworkManager.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.static-routing
+    title: Configure static routing
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: NetworkManager IP settings reference
+    url: https://networkmanager.dev/docs/api/latest/settings-ipv4.html
+  - kind: man-page
+    title: ip-route manual
+    man_page: ip-route(8)
+  - kind: man-page
+    title: nmcli manual
+    man_page: nmcli(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: service-network-route-live
+    kind: command
+    target: node2
+    description: The kernel routes the internal prefix through the designated gateway.
+    parameters:
+      arguments: [bash, -c, "ip route show 198.51.100.0/24 | grep -Eq '^198.51.100.0/24 via 192.0.2.2 dev uplink0'"]
+  - check_id: service-network-route-persistent
+    kind: command
+    target: node2
+    description: NetworkManager records the static route on lal-uplink.
+    parameters:
+      arguments: [bash, -c, "nmcli -g ipv4.routes con show lal-uplink | grep -Fq '198.51.100.0/24 192.0.2.2'"]
+  - check_id: service-network-reachable
+    kind: command
+    target: node2
+    description: The routed internal service endpoint is reachable.
+    parameters: {arguments: [ping, -c, "2", -W, "2", 198.51.100.2]}
+  - check_id: default-route-untouched
+    kind: command
+    target: node2
+    description: The lab uplink did not become a default route.
+    parameters: {arguments: [bash, -c, '! ip route show default | grep -qw uplink0']}
+persistence:
+  reboot: false
+setup: actions/routed-internal-service.setup.yaml
+reference_solution: actions/routed-internal-service.solution.yaml
+alternate_solutions: [actions/routed-internal-service.alternate.yaml]

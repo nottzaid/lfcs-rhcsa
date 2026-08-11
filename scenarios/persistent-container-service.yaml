@@ -1,0 +1,77 @@
+schema_version: 1
+scenario_id: persistent-container-service
+version: 1
+status: draft
+title: The worker container must survive host maintenance
+summary: Run a prebuilt local image as a persistent systemd-managed Podman workload.
+estimated_minutes: 35
+task_type: build
+difficulty: advanced
+task: >-
+  The local image localhost/lal-worker:1 is already present on node2. Run it as a rootful
+  container named lal-worker under systemd. Pass WORKER_SITE=amman, bind-mount
+  /srv/worker-data at /data with SELinux relabeling, and execute the image's /bin/bash to
+  write the site value to /data/ready before remaining active. The container must start at
+  boot and be running now. Do not pull an image from the internet.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.containers
+    title: Configure container engines, create and manage containers
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: Podman systemd Quadlet documentation
+    url: https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html
+  - kind: upstream
+    title: Podman run documentation
+    url: https://docs.podman.io/en/latest/markdown/podman-run.1.html
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1536
+      vcpus: 2
+checks:
+  - check_id: worker-container-running
+    kind: command
+    target: node2
+    description: The named Podman container is running.
+    parameters:
+      sudo: true
+      arguments: [podman, inspect, --format, '{{.State.Running}}', lal-worker]
+      stdout_equals: "true"
+  - check_id: worker-container-state
+    kind: command
+    target: node2
+    description: The container has the required environment and data mount.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          podman inspect --format '{{range .Config.Env}}{{println .}}{{end}}' lal-worker | grep -qx WORKER_SITE=amman &&
+          podman inspect --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}' lal-worker |
+          grep -qx '/srv/worker-data /data'
+  - check_id: worker-systemd-persistent
+    kind: service
+    target: node2
+    description: systemd manages the worker and starts it at boot.
+    parameters: {name: lal-worker.service, active: true, enabled: true}
+  - check_id: worker-produced-state
+    kind: file
+    target: node2
+    description: The container wrote the required persistent result.
+    parameters:
+      path: /srv/worker-data/ready
+      kind: file
+      contains: amman
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/persistent-container-service.setup.yaml
+reference_solution: actions/persistent-container-service.solution.yaml
+alternate_solutions: [actions/persistent-container-service.alternate.yaml]

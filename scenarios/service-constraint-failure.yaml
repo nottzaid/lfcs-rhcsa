@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: service-constraint-failure
 version: 1
-status: draft
+status: verified
 title: Hardening prevents the API from writing its state
 summary: Diagnose a systemd sandbox failure and grant only the required write path.
 estimated_minutes: 30

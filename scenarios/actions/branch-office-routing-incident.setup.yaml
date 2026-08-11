@@ -1,0 +1,40 @@
+schema_version: 1
+actions:
+  - action_id: build-broken-branch-topology
+    target: node2
+    timeout_seconds: 90
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl disable --now firewalld.service nftables.service >/dev/null 2>&1 || true
+        nft delete table inet lal_branch >/dev/null 2>&1 || true
+        ip netns delete lal-branch >/dev/null 2>&1 || true
+        ip netns delete lal-dc >/dev/null 2>&1 || true
+        ip link delete branch0 >/dev/null 2>&1 || true
+        ip link delete dc0 >/dev/null 2>&1 || true
+        ip netns add lal-branch
+        ip netns add lal-dc
+        ip link add branch0 type veth peer name eth0 netns lal-branch
+        ip link add dc0 type veth peer name eth0 netns lal-dc
+        ip addr add 10.70.0.1/24 dev branch0
+        ip addr add 172.20.0.1/24 dev dc0
+        ip link set branch0 up
+        ip link set dc0 up
+        ip netns exec lal-branch ip link set lo up
+        ip netns exec lal-branch ip addr add 10.70.0.2/24 dev eth0
+        ip netns exec lal-branch ip link set eth0 up
+        ip netns exec lal-dc ip link set lo up
+        ip netns exec lal-dc ip addr add 172.20.0.2/24 dev eth0
+        ip netns exec lal-dc ip link set eth0 up
+        install -d /srv/lal-dc
+        printf 'branch-ready\n' > /srv/lal-dc/index.html
+        ip netns exec lal-dc bash -c 'cd /srv/lal-dc && python3 -m http.server 8080 --bind 172.20.0.2 >/run/lal-dc-http.log 2>&1 & echo $! >/run/lal-dc-http.pid'
+        sysctl -w net.ipv4.ip_forward=0 >/dev/null
+        rm -f /etc/sysctl.d/80-lal-forwarding.conf /etc/nftables/lal-branch.nft
+        sed -i '\#lal-branch.nft#d' /etc/sysconfig/nftables.conf
+        nft add table inet lal_branch
+        nft 'add chain inet lal_branch forward { type filter hook forward priority 0; policy drop; }'

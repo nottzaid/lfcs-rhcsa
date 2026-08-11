@@ -1,0 +1,44 @@
+schema_version: 1
+actions:
+  - action_id: install-router-policy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /etc/nftables
+        cat > /etc/nftables/lal-router.nft <<'EOF'
+        table inet lal_filter {
+          chain input {
+            type filter hook input priority filter; policy drop;
+            iifname "lo" accept
+            ct state established,related accept
+            tcp dport 22 accept
+            iifname "lan0" accept
+            iifname "wan0" tcp dport 80 accept
+          }
+          chain forward {
+            type filter hook forward priority filter; policy drop;
+            ct state established,related accept
+            iifname "lan0" oifname "wan0" accept
+          }
+        }
+        table ip lal_nat {
+          chain prerouting {
+            type nat hook prerouting priority dstnat; policy accept;
+            iifname "wan0" tcp dport 80 redirect to :8080
+          }
+          chain postrouting {
+            type nat hook postrouting priority srcnat; policy accept;
+            iifname "lan0" oifname "wan0" masquerade
+          }
+        }
+        EOF
+        grep -Fqx 'include "/etc/nftables/lal-router.nft"' /etc/sysconfig/nftables.conf ||
+          printf 'include "/etc/nftables/lal-router.nft"\n' >> /etc/sysconfig/nftables.conf
+        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-lal-router.conf
+        sysctl --load /etc/sysctl.d/90-lal-router.conf
+        nft -f /etc/nftables/lal-router.nft
+        systemctl enable --now nftables.service

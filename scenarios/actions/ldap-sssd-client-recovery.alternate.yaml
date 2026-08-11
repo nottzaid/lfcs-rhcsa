@@ -1,0 +1,31 @@
+schema_version: 1
+actions:
+  - action_id: replace-sssd-domain-configuration
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/sssd/sssd.conf <<'EOF'
+        [sssd]
+        config_file_version = 2
+        services = nss, pam
+        domains = lab
+
+        [domain/lab]
+        id_provider = ldap
+        auth_provider = ldap
+        ldap_uri = ldap://{{host.node1.address}}
+        ldap_search_base = dc=lab,dc=internal
+        ldap_id_use_start_tls = false
+        cache_credentials = true
+        enumerate = true
+        EOF
+        chmod 0600 /etc/sssd/sssd.conf
+        systemctl enable sssd.service
+        systemctl restart sssd.service
+        for attempt in $(seq 1 30); do getent group ldapops >/dev/null && exit 0; sleep 1; done
+        exit 1

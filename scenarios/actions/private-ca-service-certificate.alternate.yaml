@@ -1,0 +1,19 @@
+schema_version: 1
+actions:
+  - action_id: issue-api-certificate-with-extension-file
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /etc/lal-pki/private/api.key
+        openssl req -new -key /etc/lal-pki/private/api.key -subj /CN=api.internal -out /etc/lal-pki/api.csr
+        printf 'subjectAltName=DNS:api.internal,IP:127.0.0.1\n' > /etc/lal-pki/api.ext
+        openssl x509 -req -in /etc/lal-pki/api.csr -CA /etc/lal-pki/ca.crt \
+          -CAkey /etc/lal-pki/private/ca.key -CAcreateserial -days 365 -sha256 \
+          -extfile /etc/lal-pki/api.ext -out /etc/lal-pki/api.crt
+        chmod 0600 /etc/lal-pki/private/api.key
+        chmod 0644 /etc/lal-pki/api.crt

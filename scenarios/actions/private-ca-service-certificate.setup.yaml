@@ -1,0 +1,19 @@
+schema_version: 1
+actions:
+  - action_id: create-private-ca
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        rm -rf /etc/lal-pki
+        install -d -m 0755 /etc/lal-pki
+        install -d -m 0700 /etc/lal-pki/private
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -sha256 \
+          -subj /CN=LAL-Training-CA \
+          -keyout /etc/lal-pki/private/ca.key -out /etc/lal-pki/ca.crt >/dev/null 2>&1
+        chmod 0600 /etc/lal-pki/private/ca.key
+        chmod 0644 /etc/lal-pki/ca.crt

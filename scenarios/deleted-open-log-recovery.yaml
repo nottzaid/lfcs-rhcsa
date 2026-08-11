@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: deleted-open-log-recovery
 version: 1
-status: draft
+status: verified
 title: Disk space vanished after a log was deleted
 summary: Recover blocks held by an open deleted file and restore normal logging.
 estimated_minutes: 25

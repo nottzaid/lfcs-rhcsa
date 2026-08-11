@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: replace-stale-client-entry
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        sed -i '\#/mnt/teamshare#d' /etc/fstab;
+        printf '{{host.node1.address}}:/srv/teamshare /mnt/teamshare nfs4 defaults,_netdev,nofail 0 0\n' >> /etc/fstab;
+        mount -a -t nfs4

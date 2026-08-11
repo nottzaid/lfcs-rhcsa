@@ -25,6 +25,7 @@ shutdown
 
 %packages
 @^minimal-environment
+389-ds-base
 NetworkManager
 acl
 at
@@ -43,6 +44,8 @@ haproxy
 iproute
 iscsi-initiator-utils
 libvirt-client
+libvirt-daemon-config-network
+libvirt-daemon-kvm
 lsof
 lvm2
 nginx

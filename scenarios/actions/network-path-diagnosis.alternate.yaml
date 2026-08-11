@@ -1,0 +1,29 @@
+schema_version: 1
+actions:
+  - action_id: edit-monitor-bind-address
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - sed
+      - -i
+      - s/MONITOR_BIND=127\.0\.0\.1/MONITOR_BIND=0.0.0.0/
+      - /etc/systemd/system/lal-monitor.service
+  - action_id: reload-monitor-service
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - systemctl daemon-reload && systemctl restart lal-monitor.service
+  - action_id: replace-client-host-entry
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        sed -i '/monitor\.internal/d' /etc/hosts;
+        echo '{{host.node1.address}} monitor.internal' >> /etc/hosts

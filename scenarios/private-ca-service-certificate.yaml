@@ -1,0 +1,83 @@
+schema_version: 1
+scenario_id: private-ca-service-certificate
+version: 1
+status: draft
+title: The internal API needs a verifiable service certificate
+summary: Issue a SAN certificate from an existing private CA and protect its key material.
+estimated_minutes: 40
+task_type: build
+difficulty: advanced
+task: >-
+  The private CA certificate and key are /etc/lal-pki/ca.crt and /etc/lal-pki/private/ca.key
+  on node2. Issue /etc/lal-pki/api.crt with private key /etc/lal-pki/private/api.key for
+  common name api.internal. The certificate must be signed by this CA, valid for 365 days,
+  and include SAN entries DNS:api.internal and IP:127.0.0.1. Protect private keys with mode
+  0600 and make the certificate mode 0644. Do not replace the CA.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.tls-certificates
+    title: Work with SSL certificates
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: OpenSSL req documentation
+    url: https://docs.openssl.org/3.5/man1/openssl-req/
+  - kind: upstream
+    title: OpenSSL x509 documentation
+    url: https://docs.openssl.org/3.5/man1/openssl-x509/
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: certificate-verifies
+    kind: command
+    target: node2
+    description: The API certificate validates against the provided private CA.
+    parameters:
+      arguments: [openssl, verify, -CAfile, /etc/lal-pki/ca.crt, /etc/lal-pki/api.crt]
+      stdout_contains: "/etc/lal-pki/api.crt: OK"
+  - check_id: certificate-identity
+    kind: command
+    target: node2
+    description: The certificate has the required subject and SAN identities.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(openssl x509 -in /etc/lal-pki/api.crt -noout -subject -nameopt RFC2253)" = 'subject=CN=api.internal' &&
+          san=$(openssl x509 -in /etc/lal-pki/api.crt -noout -ext subjectAltName) &&
+          grep -Fq 'DNS:api.internal' <<<"$san" && grep -Fq 'IP Address:127.0.0.1' <<<"$san"
+  - check_id: certificate-key-match
+    kind: command
+    target: node2
+    description: The certificate public key matches the API private key.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(openssl x509 -in /etc/lal-pki/api.crt -pubkey -noout | sha256sum | cut -d' ' -f1)" =
+          "$(openssl pkey -in /etc/lal-pki/private/api.key -pubout | sha256sum | cut -d' ' -f1)"
+  - check_id: api-private-key-protected
+    kind: file
+    target: node2
+    description: The API private key is root-owned and private.
+    parameters: {path: /etc/lal-pki/private/api.key, kind: file, owner: root, group: root, mode: "0600"}
+  - check_id: api-certificate-readable
+    kind: file
+    target: node2
+    description: The issued certificate is safely readable by services.
+    parameters: {path: /etc/lal-pki/api.crt, kind: file, owner: root, group: root, mode: "0644"}
+persistence:
+  reboot: false
+setup: actions/private-ca-service-certificate.setup.yaml
+reference_solution: actions/private-ca-service-certificate.solution.yaml
+alternate_solutions: [actions/private-ca-service-certificate.alternate.yaml]

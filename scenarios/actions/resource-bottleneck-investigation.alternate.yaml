@@ -7,7 +7,6 @@ actions:
       - --
       - systemctl
       - set-property
-      - --runtime=false
       - lal-indexer.service
       - CPUQuota=25%
   - action_id: add-priority-override

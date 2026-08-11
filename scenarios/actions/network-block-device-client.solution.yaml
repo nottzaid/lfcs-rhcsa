@@ -1,0 +1,29 @@
+schema_version: 1
+actions:
+  - action_id: discover-and-login-target
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        iscsiadm -m discovery -t sendtargets -p {{host.node1.address}};
+        iscsiadm -m node -T iqn.2026-08.internal.lab:storage -p {{host.node1.address}}:3260
+        --op update -n node.startup -v automatic;
+        iscsiadm -m node -T iqn.2026-08.internal.lab:storage -p {{host.node1.address}}:3260 --login;
+        udevadm settle
+  - action_id: build-and-mount-network-filesystem
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        device=/dev/disk/by-path/ip-{{host.node1.address}}:3260-iscsi-iqn.2026-08.internal.lab:storage-lun-0
+        mkfs.xfs -f -L LAL_DATABASE "$device"
+        uuid=$(blkid -s UUID -o value "$device")
+        printf 'UUID=%s /srv/database xfs defaults,_netdev 0 0\n' "$uuid" >> /etc/fstab
+        mount /srv/database

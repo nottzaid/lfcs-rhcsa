@@ -1,0 +1,90 @@
+schema_version: 1
+scenario_id: nfs-client-recovery
+version: 1
+status: draft
+title: The application node lost its shared data mount
+summary: Repair a persistent NFS client mount against a live local server.
+estimated_minutes: 35
+task_type: fix
+difficulty: intermediate
+task: >-
+  node1 exports /srv/teamshare for node2, but node2's stale mount configuration points to
+  the wrong server. Mount node1:/srv/teamshare at /mnt/teamshare on node2 using NFSv4 and
+  make it persistent with _netdev. The appshare user must retain read/write access and the
+  server's root_squash policy must remain in effect. Do not alter the exported data.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.remote-storage
+    title: Use remote filesystems and network block devices
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: exports manual
+    man_page: exports(5)
+  - kind: man-page
+    title: nfs manual
+    man_page: nfs(5)
+topology:
+  hosts:
+    - name: node1
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: remote-share-mounted
+    kind: command
+    target: node2
+    description: node2 has the designated NFSv4 share mounted.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(findmnt -n -o FSTYPE /mnt/teamshare)" = nfs4 &&
+          test "$(findmnt -n -o SOURCE /mnt/teamshare)" = '{{host.node1.address}}:/srv/teamshare'
+  - check_id: remote-content-visible
+    kind: file
+    target: node2
+    description: Existing server data is visible on the client.
+    parameters:
+      path: /mnt/teamshare/project.txt
+      kind: file
+      contains: shared project record
+  - check_id: application-write-access
+    kind: command
+    target: node2
+    description: The application identity can write to the mounted share.
+    parameters:
+      sudo: true
+      arguments: [runuser, -u, appshare, --, test, -w, /mnt/teamshare]
+  - check_id: persistent-network-mount
+    kind: command
+    target: node2
+    description: fstab records the designated share as a network-dependent NFS mount.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          awk '$1=="{{host.node1.address}}:/srv/teamshare" && $2=="/mnt/teamshare" &&
+               $3=="nfs4" && $4 ~ /(^|,)_netdev(,|$)/ {ok=1} END {exit !ok}' /etc/fstab
+  - check_id: root-squash-retained
+    kind: command
+    target: node1
+    description: The server export retains root squashing.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'exportfs -v | grep -A1 -F /srv/teamshare | grep -qw root_squash']
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/nfs-client-recovery.setup.yaml
+reference_solution: actions/nfs-client-recovery.solution.yaml
+alternate_solutions: [actions/nfs-client-recovery.alternate.yaml]

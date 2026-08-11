@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: remove-management-profile
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        nmcli connection delete lal-mgmt >/dev/null 2>&1 || true;
+        ip link delete mgmt0 >/dev/null 2>&1 || true;
+        sed -i '/[[:space:]]app\.internal\([[:space:]]\|$\)/d' /etc/hosts;
+        hostnamectl set-hostname stale-node.invalid

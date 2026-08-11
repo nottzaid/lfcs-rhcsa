@@ -1,0 +1,73 @@
+schema_version: 1
+scenario_id: chrony-source-recovery
+version: 1
+status: draft
+title: The application node has no usable time source
+summary: Point Chrony at the designated internal time server and verify synchronization.
+estimated_minutes: 25
+task_type: fix
+difficulty: intermediate
+task: >-
+  node1 is the designated internal time server for this session. Chrony on node2 currently
+  points at an unreachable address. Configure node2 to use node1's session address as its
+  time source with iburst, keep chronyd running and enabled, and establish synchronization.
+  Do not change node1 or use an unrelated public time service.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.time
+    title: Set and synchronize system time using time servers
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: chrony documentation
+    url: https://chrony-project.org/documentation.html
+  - kind: man-page
+    title: chrony.conf manual
+    man_page: chrony.conf(5)
+  - kind: man-page
+    title: chronyc manual
+    man_page: chronyc(1)
+topology:
+  hosts:
+    - name: node1
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: chrony-client-running
+    kind: service
+    target: node2
+    description: chronyd is running and enabled on the client.
+    parameters:
+      name: chronyd.service
+      active: true
+      enabled: true
+  - check_id: designated-source-selected
+    kind: command
+    target: node2
+    description: node2 has selected node1 as its current synchronization source.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          chronyc -n sources | awk -v peer='{{host.node1.address}}' '$1=="^*" && $2==peer {ok=1} END {exit !ok}'
+      timeout_seconds: 30
+  - check_id: clock-synchronized
+    kind: command
+    target: node2
+    description: Chrony reports a normal synchronized clock.
+    parameters:
+      arguments: [bash, -c, 'chronyc tracking | grep -Eq "^Leap status[[:space:]]*:[[:space:]]*Normal$"']
+persistence:
+  reboot: false
+setup: actions/chrony-source-recovery.setup.yaml
+reference_solution: actions/chrony-source-recovery.solution.yaml
+alternate_solutions: [actions/chrony-source-recovery.alternate.yaml]

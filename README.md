@@ -11,11 +11,10 @@ outcome, and checks the resulting behavior after the learner has administered th
 
 ## Quick start
 
-From a development checkout on the current supported host:
+From a checkout on a supported Linux host with QEMU/KVM, system libvirt, and `uv`:
 
 ```bash
-uv sync
-uv run labctl up
+./lab
 ```
 
 This opens the LFCS scenario collection at `http://127.0.0.1:8787/scenarios/topic/lfcs`.
@@ -23,9 +22,9 @@ Choose **Info** to inspect a task or **Run** to acquire/verify its image and lau
 disposable VM in the background. Active machines are visible in virt-manager. Scenario time
 values are estimates only: ordinary labs never expire or destroy a VM on a timer.
 
-The stable release target remains the shorter installed command, `labctl up`, plus a
-one-command bootstrap tested on a clean supported host. This README will not advertise an
-installation URL until that release path is real and replay-verified.
+The first launch verifies or downloads the pinned Rocky Linux 10.2 installation media and
+builds the immutable lab image; later launches reuse it after validating its provenance and
+checksum. The equivalent development command is `uv run labctl up`.
 
 ## Non-negotiable properties
 

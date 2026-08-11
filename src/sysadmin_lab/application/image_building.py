@@ -42,9 +42,15 @@ class SubprocessBuildRunner:
         timeout_seconds: float | None = None,
         check: bool = True,
     ) -> None:
+        environment = os.environ.copy()
+        environment.pop("VIRTUAL_ENV", None)
+        environment.pop("PYTHONHOME", None)
+        environment.pop("PYTHONPATH", None)
+        environment["PATH"] = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
         subprocess.run(
             arguments,
             check=check,
+            env=environment,
             stdin=subprocess.DEVNULL,
             timeout=timeout_seconds,
         )
@@ -97,6 +103,9 @@ class KickstartImageBuilder:
         temporary_root = Path(
             tempfile.mkdtemp(prefix=f".{manifest.image_id}-", dir=output_directory)
         )
+        # system libvirt changes disk ownership to its unprivileged QEMU account, which
+        # still needs search permission through this exact short-lived build directory.
+        os.chmod(temporary_root, 0o711)
         install_disk = temporary_root / "install.qcow2"
         kickstart_path = temporary_root / "ks.cfg"
         converted = temporary_root / "published.qcow2"

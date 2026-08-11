@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: prepare-nested-libvirt
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        systemctl enable --now virtqemud.socket;
+        virsh -c qemu:///system destroy lfcs-guest >/dev/null 2>&1 || true;
+        virsh -c qemu:///system undefine lfcs-guest --nvram >/dev/null 2>&1 || true;
+        rm -f /var/lib/libvirt/images/lfcs-guest.qcow2

@@ -1,0 +1,39 @@
+schema_version: 1
+actions:
+  - action_id: configure-internal-time-server
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/chrony.conf <<'EOF'
+        local stratum 8
+        allow {{host.node2.address}}/32
+        driftfile /var/lib/chrony/drift
+        makestep 1.0 3
+        rtcsync
+        logdir /var/log/chrony
+        EOF
+        systemctl enable --now chronyd.service
+        systemctl restart chronyd.service
+        firewall-cmd --quiet --permanent --add-service=ntp
+        firewall-cmd --quiet --reload
+  - action_id: install-unreachable-client-source
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        cat > /etc/chrony.conf <<'EOF'
+        server 192.0.2.123 iburst
+        driftfile /var/lib/chrony/drift
+        makestep 1.0 3
+        rtcsync
+        logdir /var/log/chrony
+        EOF
+        systemctl enable --now chronyd.service
+        systemctl restart chronyd.service

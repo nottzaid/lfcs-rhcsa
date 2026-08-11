@@ -43,6 +43,27 @@ scenario_app = typer.Typer(help="Start, check, reset, and destroy learner scenar
 app.add_typer(scenario_app, name="scenario")
 
 
+def _ensure_default_image(root: Path) -> Path:
+    """Return the verified default image, building it from pinned media when absent."""
+    manifest_path = root / "images" / "rocky-10.2" / "iso-manifest.yaml"
+    manifest = load_image_manifest(manifest_path)
+    image_cache = root / "runtime" / "cache" / "images"
+    try:
+        return resolve_built_image(manifest, manifest_path, image_cache).artifact
+    except ImageBuildError:
+        typer.echo("The verified Rocky 10.2 lab image is not present; building it now.")
+        typer.echo("The first launch downloads the pinned installation ISO and can take a while.")
+        source = ImageAcquirer(HttpsDownloader()).acquire(
+            manifest, root / "runtime" / "cache" / "isos"
+        )
+        return KickstartImageBuilder(SubprocessBuildRunner()).build(
+            manifest,
+            manifest_path,
+            source,
+            image_cache,
+        ).artifact
+
+
 def _loopback_port_available(host: str, port: int) -> bool:
     family = AF_INET6 if host == "::1" else AF_INET
     bind_host = "::1" if family == AF_INET6 else "127.0.0.1"
@@ -78,6 +99,13 @@ def up(
     if not _loopback_port_available(host, port):
         typer.echo(f"loopback port {port} is already in use; choose another with --port", err=True)
         raise typer.Exit(code=2)
+
+    try:
+        image = _ensure_default_image(root)
+    except (CatalogError, ImageVerificationError, ImageBuildError, OSError) as exc:
+        typer.echo(f"lab image preparation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Verified lab image: {image}")
 
     import uvicorn
 

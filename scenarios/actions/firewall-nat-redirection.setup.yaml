@@ -1,0 +1,49 @@
+schema_version: 1
+actions:
+  - action_id: build-router-test-topology
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl disable --now firewalld.service >/dev/null 2>&1 || true
+        systemctl disable --now nftables.service >/dev/null 2>&1 || true
+        nft delete table inet lal_filter >/dev/null 2>&1 || true
+        nft delete table ip lal_nat >/dev/null 2>&1 || true
+        ip netns delete lal-lan >/dev/null 2>&1 || true
+        ip netns delete lal-wan >/dev/null 2>&1 || true
+        ip link delete lan0 >/dev/null 2>&1 || true
+        ip link delete wan0 >/dev/null 2>&1 || true
+        ip netns add lal-lan
+        ip netns add lal-wan
+        ip link add lan0 type veth peer name lan-client
+        ip link add wan0 type veth peer name wan-client
+        ip link set lan-client netns lal-lan
+        ip link set wan-client netns lal-wan
+        ip address add 10.60.0.1/24 dev lan0
+        ip address add 198.51.100.1/24 dev wan0
+        ip link set lan0 up
+        ip link set wan0 up
+        ip netns exec lal-lan ip address add 10.60.0.2/24 dev lan-client
+        ip netns exec lal-lan ip link set lo up
+        ip netns exec lal-lan ip link set lan-client up
+        ip netns exec lal-lan ip route add default via 10.60.0.1
+        ip netns exec lal-wan ip address add 198.51.100.2/24 dev wan-client
+        ip netns exec lal-wan ip link set lo up
+        ip netns exec lal-wan ip link set wan-client up
+        install -d /srv/lal-router
+        printf 'router-service\n' > /srv/lal-router/index.html
+        cat > /etc/systemd/system/lal-router-http.service <<'EOF'
+        [Service]
+        WorkingDirectory=/srv/lal-router
+        ExecStart=/usr/bin/python3 -m http.server 8080 --bind 0.0.0.0
+        Restart=always
+        EOF
+        systemctl daemon-reload
+        systemctl restart lal-router-http.service
+        sysctl -w net.ipv4.ip_forward=0 >/dev/null
+        rm -f /etc/nftables/lal-router.nft
+        sed -i '\#lal-router.nft#d' /etc/sysconfig/nftables.conf

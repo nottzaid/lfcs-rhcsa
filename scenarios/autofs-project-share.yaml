@@ -1,0 +1,75 @@
+schema_version: 1
+scenario_id: autofs-project-share
+version: 1
+status: draft
+title: The project share should mount only when used
+summary: Repair an on-demand AutoFS map backed by a live NFS server.
+estimated_minutes: 35
+task_type: fix
+difficulty: advanced
+task: >-
+  node1 exports /srv/projects to node2. Configure autofs on node2 so accessing
+  /shares/projects mounts node1:/srv/projects using NFSv4, while the share remains eligible
+  for automatic expiry when idle. Keep autofs enabled and use a persistent master/map
+  configuration. Do not add a conventional always-mounted /etc/fstab entry.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.automounters
+    title: Configure filesystem automounters
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: auto.master manual
+    man_page: auto.master(5)
+  - kind: man-page
+    title: autofs manual
+    man_page: autofs(5)
+topology:
+  hosts:
+    - name: node1
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: automounter-running
+    kind: service
+    target: node2
+    description: autofs is running and enabled.
+    parameters: {name: autofs.service, active: true, enabled: true}
+  - check_id: project-share-triggerable
+    kind: command
+    target: node2
+    description: Accessing the path triggers the designated NFSv4 share.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          timeout 10 cat /shares/projects/status.txt | grep -qx project-share-ready &&
+          test "$(findmnt -n -o FSTYPE /shares/projects)" = nfs4 &&
+          test "$(findmnt -n -o SOURCE /shares/projects)" = '{{host.node1.address}}:/srv/projects'
+      timeout_seconds: 20
+  - check_id: persistent-autofs-map
+    kind: command
+    target: node2
+    description: The active autofs maps reference node1 without an fstab mount.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          automount -m | grep -Fq '{{host.node1.address}}:/srv/projects' &&
+          ! grep -Eq '^[^#]+[[:space:]]+/shares/projects[[:space:]]' /etc/fstab
+persistence:
+  reboot: false
+setup: actions/autofs-project-share.setup.yaml
+reference_solution: actions/autofs-project-share.solution.yaml
+alternate_solutions: [actions/autofs-project-share.alternate.yaml]

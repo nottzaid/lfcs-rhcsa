@@ -1,0 +1,12 @@
+schema_version: 1
+actions:
+  - action_id: repair-indirect-project-map
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        printf 'projects -fstype=nfs4,ro {{host.node1.address}}:/srv/projects\n' > /etc/auto.lal;
+        systemctl restart autofs.service

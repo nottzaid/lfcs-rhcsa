@@ -26,7 +26,7 @@ from sysadmin_lab.application.lab_workspace import (
     WorkspacePaths,
 )
 from sysadmin_lab.application.scenario_sessions import StartedScenario
-from sysadmin_lab.domain.models import ScenarioManifest
+from sysadmin_lab.domain.models import ScenarioManifest, ScenarioStatus
 from sysadmin_lab.domain.progress import ScenarioProgress
 from sysadmin_lab.domain.sessions import SessionState
 
@@ -231,7 +231,11 @@ def create_app(
 
     @app.get("/scenarios/topic/lfcs", response_class=HTMLResponse)
     def catalog_page(request: Request) -> HTMLResponse:
-        scenarios = active_workspace.scenarios()
+        scenarios = tuple(
+            scenario
+            for scenario in active_workspace.scenarios()
+            if scenario.status is ScenarioStatus.VERIFIED
+        )
         sessions = active_workspace.sessions(limit=20)
         progress = active_workspace.progress()
         active_by_scenario = {
@@ -284,7 +288,11 @@ def create_app(
 
     @app.get("/api/scenarios")
     def list_scenarios() -> list[dict[str, Any]]:
-        return [_manifest_json(manifest) for manifest in active_workspace.scenarios()]
+        return [
+            _manifest_json(manifest)
+            for manifest in active_workspace.scenarios()
+            if manifest.status is ScenarioStatus.VERIFIED
+        ]
 
     @app.get("/api/scenarios/{scenario_id}")
     def get_scenario(scenario_id: str) -> dict[str, Any]:

@@ -1,0 +1,33 @@
+schema_version: 1
+actions:
+  - action_id: configure-project-export
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        install -d -m 0755 /srv/projects;
+        printf 'project-share-ready\n' > /srv/projects/status.txt;
+        printf '/srv/projects {{host.node2.address}}/32(ro,sync,no_subtree_check,root_squash)\n'
+        > /etc/exports.d/lal-projects.exports;
+        systemctl enable --now nfs-server;
+        exportfs -ra;
+        firewall-cmd --quiet --permanent --add-service=nfs;
+        firewall-cmd --quiet --reload
+  - action_id: install-stale-automount-map
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        umount -l /shares/projects >/dev/null 2>&1 || true;
+        rm -rf /shares;
+        install -d /etc/auto.master.d;
+        printf '/shares /etc/auto.lal --timeout=30\n' > /etc/auto.master.d/lal.autofs;
+        printf 'projects -fstype=nfs4,ro 192.0.2.99:/srv/projects\n' > /etc/auto.lal;
+        systemctl enable --now autofs;
+        systemctl restart autofs

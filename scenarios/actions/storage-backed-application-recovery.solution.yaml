@@ -1,0 +1,20 @@
+schema_version: 1
+actions:
+  - action_id: remove-obsolete-archive
+    target: node2
+    arguments: [sudo, --, rm, -f, /srv/lal-catalog/archive.fill]
+  - action_id: grow-volume-and-filesystem
+    target: node2
+    arguments: [sudo, --, lvextend, --resizefs, -L, 1024M, /dev/vgapps/lvcatalog]
+  - action_id: stabilize-mount-and-service
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        uuid=$(blkid -s UUID -o value /dev/vgapps/lvcatalog)
+        sed -i '\#/srv/lal-catalog#d' /etc/fstab
+        printf 'UUID=%s /srv/lal-catalog ext4 defaults 0 2\n' "$uuid" >> /etc/fstab
+        systemctl enable --now lal-catalog.service

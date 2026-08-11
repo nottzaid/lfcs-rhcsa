@@ -1,0 +1,30 @@
+schema_version: 1
+actions:
+  - action_id: repair-network-path
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        ip -n lal-branch route add 172.20.0.0/24 via 10.70.0.1
+        ip -n lal-dc route add 10.70.0.0/24 via 172.20.0.1
+        cat > /etc/sysctl.d/80-lal-forwarding.conf <<'EOF'
+        net.ipv4.ip_forward=1
+        EOF
+        sysctl -p /etc/sysctl.d/80-lal-forwarding.conf
+  - action_id: write-and-load-stateful-filter
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /etc/nftables
+        nft flush table inet lal_branch
+        nft 'add rule inet lal_branch forward ct state established,related accept'
+        nft 'add rule inet lal_branch forward ip saddr 10.70.0.0/24 ip daddr 172.20.0.0/24 tcp dport 8080 accept'
+        nft list table inet lal_branch > /etc/nftables/lal-branch.nft
+        grep -qF 'include "/etc/nftables/lal-branch.nft"' /etc/sysconfig/nftables.conf || echo 'include "/etc/nftables/lal-branch.nft"' >> /etc/sysconfig/nftables.conf

@@ -1,0 +1,86 @@
+schema_version: 1
+scenario_id: libvirt-guest-recovery
+version: 1
+status: draft
+title: The utility guest was removed from libvirt
+summary: Recreate and persist a small nested guest through the libvirt toolchain.
+estimated_minutes: 40
+task_type: build
+difficulty: advanced
+task: >-
+  On node2, create a libvirt guest named lfcs-guest with one vCPU, 384 MiB of memory, and a
+  768 MiB qcow2 virtio disk at /var/lib/libvirt/images/lfcs-guest.qcow2. This utility guest
+  has no operating system yet, so an import-style guest that remains at firmware is expected.
+  Run it with software emulation if nested KVM is unavailable. It must be running now and
+  configured to autostart when node2 boots. Do not modify any other libvirt guest.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.libvirt
+    title: Manage Virtual Machines (libvirt)
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: libvirt domain XML format
+    url: https://libvirt.org/formatdomain.html
+  - kind: man-page
+    title: virsh manual
+    man_page: virsh(1)
+  - kind: man-page
+    title: virt-install manual
+    man_page: virt-install(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 2048
+      vcpus: 2
+      nested_virtualization: true
+checks:
+  - check_id: utility-guest-running
+    kind: command
+    target: node2
+    description: The exact requested libvirt guest is running.
+    parameters:
+      sudo: true
+      arguments: [virsh, --connect, qemu:///system, domstate, lfcs-guest]
+      stdout_equals: running
+  - check_id: utility-guest-resources
+    kind: command
+    target: node2
+    description: The guest has one vCPU and 384 MiB of configured memory.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          test "$(virsh -c qemu:///system dominfo lfcs-guest | awk -F: '/^CPU.s.:/ {gsub(/ /,"",$2); print $2}')" -eq 1 &&
+          test "$(virsh -c qemu:///system dominfo lfcs-guest | awk -F: '/^Max memory:/ {gsub(/ KiB/,"",$2); print $2+0}')" -eq 393216
+  - check_id: utility-guest-disk
+    kind: command
+    target: node2
+    description: The guest uses the exact qcow2 disk with at least 768 MiB virtual size.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          virsh -c qemu:///system domblklist lfcs-guest --details | grep -Fq '/var/lib/libvirt/images/lfcs-guest.qcow2' &&
+          test "$(qemu-img info --output=json /var/lib/libvirt/images/lfcs-guest.qcow2 | python3 -c 'import json,sys; print(json.load(sys.stdin)["virtual-size"] )')" -ge 805306368
+  - check_id: utility-guest-autostart
+    kind: command
+    target: node2
+    description: libvirt records the guest for autostart.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, "virsh -c qemu:///system dominfo lfcs-guest | grep -Eq '^Autostart:[[:space:]]+enable'" ]
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/libvirt-guest-recovery.setup.yaml
+reference_solution: actions/libvirt-guest-recovery.solution.yaml
+alternate_solutions: [actions/libvirt-guest-recovery.alternate.yaml]

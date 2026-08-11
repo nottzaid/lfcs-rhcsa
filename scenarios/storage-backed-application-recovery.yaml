@@ -1,0 +1,73 @@
+schema_version: 1
+scenario_id: storage-backed-application-recovery
+version: 1
+status: draft
+title: A full application volume has taken the service down
+summary: Diagnose storage exhaustion, preserve data, grow LVM, and restore a persistent service.
+estimated_minutes: 60
+task_type: troubleshoot
+difficulty: exam
+task: >-
+  lal-catalog.service on node2 is down because its ext4 data volume at /srv/lal-catalog ran
+  out of space. Preserve customer.db, remove the obsolete archive.fill file, grow
+  vgapps/lvcatalog to exactly 1024 MiB, and expand the filesystem online. Keep the volume
+  persistently mounted at /srv/lal-catalog by filesystem UUID, then leave lal-catalog.service
+  running and enabled. Do not recreate the filesystem or customer database.
+objectives:
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.processes-services, title: Diagnose and manage processes and services}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.recovery, title: Diagnose and recover Linux systems}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.lvm, title: Configure and manage LVM storage}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.filesystems, title: Create manage and troubleshoot filesystems}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.diskspace, title: Troubleshoot diskspace usage}
+sources:
+  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
+  - {kind: man-page, title: lvextend manual, man_page: lvextend(8)}
+  - {kind: man-page, title: resize2fs manual, man_page: resize2fs(8)}
+  - {kind: man-page, title: fstab manual, man_page: fstab(5)}
+  - {kind: man-page, title: systemctl manual, man_page: systemctl(1)}
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1280
+      vcpus: 1
+      disks:
+        - {name: appdata, size_mib: 2048, role: LVM application data disk}
+checks:
+  - check_id: application-volume-grown
+    kind: command
+    target: node2
+    description: The logical volume is exactly 1024 MiB and ext4 uses the enlarged device.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, 'test "$(lvs --noheadings --units m --nosuffix -o lv_size vgapps/lvcatalog | awk ''{printf "%d", $1}'')" -eq 1024 && test "$(findmnt -n -o FSTYPE /srv/lal-catalog)" = ext4 && test "$(df -BM --output=size /srv/lal-catalog | tail -1 | tr -dc ''0-9'')" -ge 930']
+  - check_id: customer-data-preserved
+    kind: file
+    target: node2
+    description: The original customer database remains intact.
+    parameters: {path: /srv/lal-catalog/customer.db, kind: file, contains: 'customer-record: 1042'}
+  - check_id: obsolete-archive-removed
+    kind: file
+    target: node2
+    description: The obsolete space-consuming archive is gone.
+    parameters: {path: /srv/lal-catalog/archive.fill, exists: false}
+  - check_id: stable-volume-policy
+    kind: command
+    target: node2
+    description: fstab uses the filesystem UUID and the live mount agrees.
+    parameters:
+      arguments: [bash, -c, 'uuid=$(findmnt -n -o UUID /srv/lal-catalog); test -n "$uuid" && awk -v id="UUID=$uuid" ''$1==id && $2=="/srv/lal-catalog" && $3=="ext4" {ok=1} END {exit !ok}'' /etc/fstab']
+  - check_id: catalog-service-restored
+    kind: service
+    target: node2
+    description: The application service is running and enabled.
+    parameters: {name: lal-catalog.service, active: true, enabled: true}
+  - check_id: catalog-service-owns-process
+    kind: command
+    target: node2
+    description: The service has a live process reading the preserved database.
+    parameters: {arguments: [bash, -c, 'pid=$(systemctl show -p MainPID --value lal-catalog.service); test "$pid" -gt 1 && tr ''\0'' '' '' < /proc/$pid/cmdline | grep -Fq /srv/lal-catalog/customer.db']}
+persistence: {reboot: true, hosts: [node2]}
+setup: actions/storage-backed-application-recovery.setup.yaml
+reference_solution: actions/storage-backed-application-recovery.solution.yaml
+alternate_solutions: [actions/storage-backed-application-recovery.alternate.yaml]

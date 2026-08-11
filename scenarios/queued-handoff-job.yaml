@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: queued-handoff-job
 version: 1
-status: draft
+status: verified
 title: The handoff must happen once, not every night
 summary: Queue a one-time unattended job under the correct service identity.
 estimated_minutes: 20

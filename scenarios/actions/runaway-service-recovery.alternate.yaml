@@ -13,4 +13,7 @@ actions:
       - "printf '%s\n' 'BATCH_SIZE=50' > /etc/sysconfig/lal-metrics"
   - action_id: recover-and-enable-metrics-worker
     target: node2
+    arguments: [sudo, --, systemctl, reset-failed, lal-metrics.service]
+  - action_id: enable-recovered-metrics-worker
+    target: node2
     arguments: [sudo, --, systemctl, enable, --now, lal-metrics.service]

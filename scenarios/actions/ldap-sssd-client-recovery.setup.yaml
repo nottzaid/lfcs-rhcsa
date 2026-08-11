@@ -1,0 +1,91 @@
+schema_version: 1
+actions:
+  - action_id: create-directory-server
+    target: node1
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        dsctl lal remove --do-it >/dev/null 2>&1 || true
+        cat > /tmp/lal-ds.inf <<'EOF'
+        [general]
+        config_version = 2
+
+        [slapd]
+        instance_name = lal
+        root_dn = cn=Directory Manager
+        root_password = Directory-Lab-2026
+        port = 389
+        secure_port = 636
+        self_sign_cert = True
+
+        [backend-userroot]
+        suffix = dc=lab,dc=internal
+        create_suffix_entry = True
+        sample_entries = no
+        EOF
+        dscreate from-file /tmp/lal-ds.inf
+        systemctl enable --now dirsrv@lal.service
+        cat > /tmp/lal-identities.ldif <<'EOF'
+        dn: ou=People,dc=lab,dc=internal
+        objectClass: organizationalUnit
+        ou: People
+
+        dn: ou=Groups,dc=lab,dc=internal
+        objectClass: organizationalUnit
+        ou: Groups
+
+        dn: uid=ldapdev,ou=People,dc=lab,dc=internal
+        objectClass: top
+        objectClass: account
+        objectClass: posixAccount
+        cn: LDAP Developer
+        uid: ldapdev
+        uidNumber: 2300
+        gidNumber: 2300
+        homeDirectory: /home/ldapdev
+        loginShell: /bin/bash
+
+        dn: cn=ldapops,ou=Groups,dc=lab,dc=internal
+        objectClass: top
+        objectClass: posixGroup
+        cn: ldapops
+        gidNumber: 2300
+        memberUid: ldapdev
+        EOF
+        ldapadd -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-identities.ldif
+        firewall-cmd --quiet --permanent --add-service=ldap
+        firewall-cmd --quiet --reload
+  - action_id: install-stale-directory-client
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        userdel -r ldapdev >/dev/null 2>&1 || true
+        groupdel ldapops >/dev/null 2>&1 || true
+        authselect select sssd with-mkhomedir --force
+        cat > /etc/sssd/sssd.conf <<'EOF'
+        [sssd]
+        services = nss, pam
+        domains = lab
+
+        [domain/lab]
+        id_provider = ldap
+        auth_provider = ldap
+        ldap_uri = ldap://192.0.2.99
+        ldap_search_base = dc=lab,dc=internal
+        ldap_id_use_start_tls = false
+        cache_credentials = true
+        enumerate = true
+        EOF
+        chmod 0600 /etc/sssd/sssd.conf
+        sss_cache -E || true
+        systemctl enable sssd.service
+        systemctl restart sssd.service || true

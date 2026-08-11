@@ -1,0 +1,30 @@
+schema_version: 1
+actions:
+  - action_id: login-to-designated-target
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        iscsiadm --mode discoverydb --type sendtargets --portal {{host.node1.address}}
+        --discover;
+        iscsiadm --mode node --targetname iqn.2026-08.internal.lab:storage
+        --portal {{host.node1.address}}:3260 --login;
+        iscsiadm --mode node --targetname iqn.2026-08.internal.lab:storage
+        --portal {{host.node1.address}}:3260 --op update --name node.startup --value automatic;
+        udevadm settle
+  - action_id: configure-labeled-network-mount
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        device=/dev/disk/by-path/ip-{{host.node1.address}}:3260-iscsi-iqn.2026-08.internal.lab:storage-lun-0;
+        mkfs -t xfs -f -L LAL_DATABASE "$device";
+        printf 'LABEL=LAL_DATABASE /srv/database xfs _netdev,nofail 0 0\n' >> /etc/fstab;
+        mount /srv/database

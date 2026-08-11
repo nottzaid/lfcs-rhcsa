@@ -1,0 +1,87 @@
+schema_version: 1
+scenario_id: ssh-client-server-policy
+version: 1
+status: draft
+title: The deployment account cannot reach the hardened SSH endpoint
+summary: Repair coordinated OpenSSH server and client policy for key-only access.
+estimated_minutes: 30
+task_type: fix
+difficulty: advanced
+task: >-
+  Configure OpenSSH on node2 to listen on TCP 2222, deny root and password authentication,
+  and allow members of opsssh. The existing deploy account must be in opsssh and accept the
+  public key stored at /home/deploy/.ssh/lal_deploy.pub on node1. Label and open the custom
+  SSH port without disabling SELinux or the firewall. On node1, configure the deploy user's
+  SSH client alias app-node for key-only access to node2:2222 using lal_deploy. A noninteractive
+  ssh app-node id -un as deploy must return deploy.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.openssh
+    title: Configure the OpenSSH server and client
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: OpenSSH manual pages
+    url: https://www.openssh.com/manual.html
+  - kind: man-page
+    title: sshd_config manual
+    man_page: sshd_config(5)
+  - kind: man-page
+    title: ssh_config manual
+    man_page: ssh_config(5)
+topology:
+  hosts:
+    - name: node1
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: ssh-server-policy
+    kind: command
+    target: node2
+    description: Effective sshd policy uses the custom port and key-only restrictions.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          effective=$(sshd -T) &&
+          grep -qx 'port 2222' <<<"$effective" &&
+          grep -qx 'permitrootlogin no' <<<"$effective" &&
+          grep -qx 'passwordauthentication no' <<<"$effective" &&
+          grep -Eq '^allowgroups .*\bopsssh\b' <<<"$effective"
+  - check_id: ssh-server-running
+    kind: service
+    target: node2
+    description: sshd remains running and enabled.
+    parameters: {name: sshd.service, active: true, enabled: true}
+  - check_id: ssh-custom-port-listening
+    kind: command
+    target: node2
+    description: sshd listens on TCP 2222.
+    parameters:
+      sudo: true
+      arguments: [bash, -c, "ss -H -ltnp 'sport = :2222' | grep -Fq sshd"]
+  - check_id: deploy-key-only-path
+    kind: command
+    target: node1
+    description: The configured client alias completes key-only deployment login.
+    parameters:
+      sudo: true
+      timeout_seconds: 20
+      arguments: [runuser, -u, deploy, --, ssh, -o, BatchMode=yes, -o, StrictHostKeyChecking=accept-new, app-node, id, -un]
+      stdout_equals: deploy
+persistence:
+  reboot: true
+  hosts: [node1, node2]
+setup: actions/ssh-client-server-policy.setup.yaml
+reference_solution: actions/ssh-client-server-policy.solution.yaml
+alternate_solutions: [actions/ssh-client-server-policy.alternate.yaml]

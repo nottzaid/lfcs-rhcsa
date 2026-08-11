@@ -1,0 +1,82 @@
+schema_version: 1
+scenario_id: offline-filesystem-recovery
+version: 1
+status: draft
+title: The records filesystem was left with errors
+summary: Repair an unmounted ext4 filesystem and restore its persistent mount.
+estimated_minutes: 35
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  The ext4 filesystem on /dev/disk/by-id/virtio-lal-records is unmounted after an unclean
+  failure and reports errors. Check and repair it while it is offline, preserving its data.
+  Mount it at /srv/records and configure a persistent UUID- or label-based mount. Do not
+  reformat the disk. Node2 may be rebooted after the repair if you wish.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.recovery
+    title: Recover from hardware, operating system, or filesystem failures
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.filesystems
+    title: Create, manage, and troubleshoot filesystems
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: e2fsck manual
+    man_page: e2fsck(8)
+  - kind: man-page
+    title: fstab manual
+    man_page: fstab(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - name: records
+          size_mib: 768
+          role: damaged records filesystem
+checks:
+  - check_id: filesystem-clean
+    kind: command
+    target: node2
+    description: ext4 records a clean filesystem state after repair.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - dumpe2fs -h /dev/disk/by-id/virtio-lal-records 2>/dev/null | grep -Eq '^Filesystem state:[[:space:]]+clean$'
+  - check_id: records-mounted
+    kind: command
+    target: node2
+    description: The repaired ext4 filesystem is mounted at /srv/records.
+    parameters: {arguments: [findmnt, --noheadings, --types, ext4, --mountpoint, /srv/records]}
+  - check_id: records-preserved
+    kind: file
+    target: node2
+    description: Existing records survived the repair.
+    parameters:
+      path: /srv/records/important.record
+      kind: file
+      contains: preserve after recovery
+  - check_id: recovery-mount-persistent
+    kind: command
+    target: node2
+    description: fstab uses a stable filesystem identity.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - awk '$2=="/srv/records" && $1 ~ /^(UUID=|LABEL=LAL_RECORDS$)/ {ok=1} END {exit !ok}' /etc/fstab
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/offline-filesystem-recovery.setup.yaml
+reference_solution: actions/offline-filesystem-recovery.solution.yaml
+alternate_solutions: [actions/offline-filesystem-recovery.alternate.yaml]

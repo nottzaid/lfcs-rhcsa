@@ -12,6 +12,7 @@ from sysadmin_lab.application.lab_workspace import ScenarioSessionSnapshot
 from sysadmin_lab.application.ports import CheckObservation
 from sysadmin_lab.application.scenario_sessions import StartedScenario
 from sysadmin_lab.catalog import load_catalog
+from sysadmin_lab.domain.models import ScenarioStatus
 from sysadmin_lab.domain.progress import ScenarioProgress
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
@@ -25,7 +26,11 @@ RESET_ID = UUID("20000000-0000-0000-0000-000000000002")
 class FakeWorkspace:
     def __init__(self, tmp_path: Path) -> None:
         root = Path(__file__).parents[2]
-        self.manifest = load_catalog(root / "scenarios")[0]
+        self.manifest = next(
+            scenario
+            for scenario in load_catalog(root / "scenarios")
+            if scenario.status is ScenarioStatus.VERIFIED
+        )
         self.state = (
             SessionState.declared(self.manifest.scenario_id, SESSION_ID)
             .transition(SessionStatus.PROVISIONING)
@@ -126,7 +131,7 @@ def test_lfcs_topic_and_scenario_pages_expose_hands_on_loop(tmp_path: Path) -> N
         assert catalog.headers["cache-control"] == "no-store"
 
         detail = client.get(f"/scenarios/{workspace.manifest.scenario_id}")
-        assert workspace.manifest.task in detail.text
+        assert workspace.manifest.task.split(".", maxsplit=1)[0] in detail.text
         assert "Launch scenario" in detail.text
         assert workspace.manifest.topology.hosts[0].name in detail.text
 

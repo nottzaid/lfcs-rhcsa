@@ -1,0 +1,16 @@
+schema_version: 1
+actions:
+  - action_id: remove-lab-link-topology
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        for connection in lal-bond-a lal-bond-b lal-bond lal-bridge-port lal-bridge; do
+          nmcli con delete "$connection" >/dev/null 2>&1 || true;
+        done;
+        for interface in bond-a bond-b bridge-port bond0 br0; do
+          ip link delete "$interface" >/dev/null 2>&1 || true;
+        done

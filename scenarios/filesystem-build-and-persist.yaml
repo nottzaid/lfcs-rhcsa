@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: filesystem-build-and-persist
 version: 1
-status: draft
+status: verified
 title: A new archive disk has no filesystem or mount policy
 summary: Build an XFS filesystem and mount it persistently by stable identity.
 estimated_minutes: 30

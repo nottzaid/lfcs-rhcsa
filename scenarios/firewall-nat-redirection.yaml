@@ -1,0 +1,82 @@
+schema_version: 1
+scenario_id: firewall-nat-redirection
+version: 1
+status: draft
+title: The lab router lost forwarding, NAT, and its public redirect
+summary: Restore stateful filtering, masquerading, and port redirection with nftables.
+estimated_minutes: 40
+task_type: fix
+difficulty: advanced
+task: >-
+  node2 is the router between lab-lan (10.60.0.0/24 on lan0) and lab-wan
+  (198.51.100.0/24 on wan0). Restore IPv4 forwarding and a persistent nftables policy that
+  permits established traffic, preserves SSH access to node2, forwards LAN traffic to WAN
+  with masquerading, and redirects TCP port 80 arriving on wan0 to node2's local service on
+  port 8080. Keep unsolicited forwarding denied. The namespace clients lal-lan and lal-wan
+  are already running for testing.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.packet-filtering
+    title: Configure packet filtering, port redirection, and NAT
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: nftables NAT documentation
+    url: https://wiki.nftables.org/wiki-nftables/index.php/Performing_Network_Address_Translation_(NAT)
+  - kind: man-page
+    title: nft manual
+    man_page: nft(8)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: router-forwarding-live
+    kind: command
+    target: node2
+    description: IPv4 forwarding is enabled.
+    parameters: {arguments: [sysctl, --values, net.ipv4.ip_forward], stdout_equals: "1"}
+  - check_id: lan-masquerade-path
+    kind: command
+    target: node2
+    description: The route and masquerade policy carries LAN traffic to the route-less WAN peer.
+    parameters:
+      sudo: true
+      arguments: [ip, netns, exec, lal-lan, ping, -c, "2", -W, "2", 198.51.100.2]
+  - check_id: public-port-redirect
+    kind: command
+    target: node2
+    description: WAN TCP port 80 reaches the local port-8080 service.
+    parameters:
+      sudo: true
+      arguments: [ip, netns, exec, lal-wan, curl, --fail, --silent, --max-time, "5", http://198.51.100.1/]
+      stdout_equals: router-service
+  - check_id: nftables-policy-present
+    kind: command
+    target: node2
+    description: The loaded policy contains filtering, masquerade, and redirect rules.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          rules=$(nft list ruleset) &&
+          grep -qw masquerade <<<"$rules" &&
+          grep -Eq 'tcp dport 80 redirect to :8080' <<<"$rules" &&
+          grep -Eq 'ct state (established,related|related,established) accept' <<<"$rules"
+  - check_id: nftables-policy-persistent
+    kind: service
+    target: node2
+    description: nftables is running and enabled to restore the saved rules.
+    parameters: {name: nftables.service, active: true, enabled: true}
+persistence:
+  reboot: false
+setup: actions/firewall-nat-redirection.setup.yaml
+reference_solution: actions/firewall-nat-redirection.solution.yaml
+alternate_solutions: [actions/firewall-nat-redirection.alternate.yaml]

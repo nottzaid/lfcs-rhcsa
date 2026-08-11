@@ -1,0 +1,40 @@
+schema_version: 1
+actions:
+  - action_id: write-alternate-router-ruleset
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /etc/nftables
+        cat > /etc/nftables/lal-router.nft <<'EOF'
+        table inet lal_filter {
+          chain input { type filter hook input priority 0; policy drop;
+            ct state related,established accept
+            iif lo accept
+            tcp dport 22 accept
+            iif lan0 accept
+            iif wan0 tcp dport 80 accept
+          }
+          chain forward { type filter hook forward priority 0; policy drop;
+            ct state related,established accept
+            iif lan0 oif wan0 accept
+          }
+        }
+        table ip lal_nat {
+          chain incoming { type nat hook prerouting priority -100;
+            iif wan0 tcp dport 80 redirect to :8080
+          }
+          chain outgoing { type nat hook postrouting priority 100;
+            iif lan0 oif wan0 masquerade
+          }
+        }
+        EOF
+        echo 'include "/etc/nftables/lal-router.nft"' >> /etc/sysconfig/nftables.conf
+        sysctl -w net.ipv4.ip_forward=1
+        printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-lal-router.conf
+        nft -f /etc/nftables/lal-router.nft
+        systemctl enable nftables.service
+        systemctl restart nftables.service

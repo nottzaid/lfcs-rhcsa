@@ -1,0 +1,78 @@
+schema_version: 1
+scenario_id: network-path-diagnosis
+version: 1
+status: draft
+title: The monitoring endpoint works locally but not from its client
+summary: Diagnose and repair both name resolution and service binding across two hosts.
+estimated_minutes: 30
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  The monitoring service is managed by lal-monitor.service on node1 and should be reachable
+  from node2 as http://monitor.internal:9090/. It currently works only on node1 and the
+  client has stale name resolution. Diagnose the path, make monitor.internal resolve to
+  node1's session address on node2, and make the service listen on node1's non-loopback
+  interfaces. Keep the service enabled; do not disable the firewall globally.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.troubleshoot
+    title: Monitor and troubleshoot networking
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: ss manual
+    man_page: ss(8)
+  - kind: man-page
+    title: getent manual
+    man_page: getent(1)
+  - kind: man-page
+    title: curl manual
+    man_page: curl(1)
+topology:
+  hosts:
+    - name: node1
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: monitor-service-running
+    kind: service
+    target: node1
+    description: The monitoring service remains running and enabled.
+    parameters: {name: lal-monitor.service, active: true, enabled: true}
+  - check_id: monitor-listens-remotely
+    kind: command
+    target: node1
+    description: The monitoring port is bound beyond loopback.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - ss -H -ltn 'sport = :9090' | awk '$4 ~ /^(0\.0\.0\.0|\*|\[::\]):9090$/ {ok=1} END {exit !ok}'
+  - check_id: monitor-name-correct
+    kind: command
+    target: node2
+    description: monitor.internal resolves to node1's session address.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - getent ahostsv4 monitor.internal | awk '$1=="{{host.node1.address}}" {ok=1} END {exit !ok}'
+  - check_id: end-to-end-monitoring-path
+    kind: command
+    target: node2
+    description: node2 receives the expected response through the repaired path.
+    parameters: {arguments: [curl, --fail, --silent, --max-time, "5", http://monitor.internal:9090/], stdout_equals: monitor-ready}
+persistence:
+  reboot: false
+setup: actions/network-path-diagnosis.setup.yaml
+reference_solution: actions/network-path-diagnosis.solution.yaml
+alternate_solutions: [actions/network-path-diagnosis.alternate.yaml]

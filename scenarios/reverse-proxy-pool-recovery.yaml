@@ -1,0 +1,84 @@
+schema_version: 1
+scenario_id: reverse-proxy-pool-recovery
+version: 1
+status: draft
+title: The reverse proxy sends traffic to a retired backend
+summary: Repair a persistent HTTP reverse proxy against a live backend service.
+estimated_minutes: 40
+task_type: fix
+difficulty: advanced
+task: >-
+  node1 serves the application on TCP port 8081. Configure either HAProxy or Nginx on node2
+  to listen on all addresses at TCP port 8080 and reverse-proxy HTTP requests to node1:8081.
+  Include an HTTP health check where the selected proxy supports it, validate the configuration,
+  and keep the proxy enabled and running. Remove the retired 192.0.2.99 backend.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.proxies-load-balancers
+    title: Implement reverse proxies and load balancers
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: HAProxy configuration manual
+    url: https://docs.haproxy.org/3.0/configuration.html
+  - kind: upstream
+    title: Nginx HTTP proxy module
+    url: https://nginx.org/en/docs/http/ngx_http_proxy_module.html
+topology:
+  hosts:
+    - name: node1
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: backend-operational
+    kind: service
+    target: node1
+    description: The designated backend remains available.
+    parameters:
+      name: lal-backend.service
+      active: true
+      enabled: true
+  - check_id: proxy-operational-persistently
+    kind: command
+    target: node2
+    description: One supported reverse proxy is running and enabled.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          { systemctl is-active --quiet haproxy && systemctl is-enabled --quiet haproxy; } ||
+          { systemctl is-active --quiet nginx && systemctl is-enabled --quiet nginx; }
+  - check_id: proxied-response
+    kind: command
+    target: node2
+    description: Requests through node2 return the live node1 application response.
+    parameters:
+      arguments: [curl, --fail, --silent, --max-time, "5", http://127.0.0.1:8080/]
+      stdout_equals: backend-one
+  - check_id: retired-backend-removed
+    kind: command
+    target: node2
+    description: Active proxy configuration contains node1 and not the retired address.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          files='/etc/haproxy/haproxy.cfg /etc/nginx/nginx.conf /etc/nginx/conf.d';
+          grep -Rqs '{{host.node1.address}}:8081' $files && ! grep -Rqs '192.0.2.99' $files
+persistence:
+  reboot: true
+  hosts: [node1, node2]
+setup: actions/reverse-proxy-pool-recovery.setup.yaml
+reference_solution: actions/reverse-proxy-pool-recovery.solution.yaml
+alternate_solutions: [actions/reverse-proxy-pool-recovery.alternate.yaml]

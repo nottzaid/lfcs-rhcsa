@@ -14,6 +14,9 @@ actions:
       - /etc/sysconfig/lal-metrics
   - action_id: restart-metrics-worker
     target: node2
+    arguments: [sudo, --, systemctl, reset-failed, lal-metrics.service]
+  - action_id: restart-metrics-worker-after-reset
+    target: node2
     arguments: [sudo, --, systemctl, restart, lal-metrics.service]
   - action_id: preserve-metrics-enablement
     target: node2

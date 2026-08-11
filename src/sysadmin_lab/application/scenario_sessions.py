@@ -156,6 +156,6 @@ class ScenarioSessionService:
         if manifest.topology.networks:
             raise ScenarioLaunchError("custom scenario networks are not supported yet")
         for host in manifest.topology.hosts:
-            if host.nics or host.nested_virtualization:
+            if host.nics:
                 raise ScenarioLaunchError("this scenario topology needs an unsupported VM feature")
         return manifest.topology.hosts

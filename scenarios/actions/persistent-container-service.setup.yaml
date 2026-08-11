@@ -1,0 +1,26 @@
+schema_version: 1
+actions:
+  - action_id: create-offline-worker-image
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl disable --now lal-worker.service >/dev/null 2>&1 || true
+        rm -f /etc/containers/systemd/lal-worker.container /etc/systemd/system/lal-worker.service
+        podman rm -f lal-worker >/dev/null 2>&1 || true
+        podman rmi localhost/lal-worker:1 >/dev/null 2>&1 || true
+        root=/tmp/lal-worker-rootfs
+        rm -rf "$root"
+        install -d "$root/bin" "$root/lib64" "$root/usr/lib64"
+        cp --parents /bin/bash "$root"
+        ldd /bin/bash | awk '/=> \// {print $3} /^\// {print $1}' |
+          while read -r library; do cp --parents "$library" "$root"; done
+        tar -C "$root" -cf - . | podman import - localhost/lal-worker:1
+        rm -rf "$root" /srv/worker-data
+        install -d -m 0770 /srv/worker-data /etc/containers/systemd
+        systemctl daemon-reload

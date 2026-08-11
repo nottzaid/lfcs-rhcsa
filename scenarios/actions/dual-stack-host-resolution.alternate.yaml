@@ -1,0 +1,26 @@
+schema_version: 1
+actions:
+  - action_id: define-management-profile-in-stages
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        nmcli con add type dummy ifname mgmt0 con-name lal-mgmt;
+        nmcli con modify lal-mgmt ipv4.method manual ipv4.addresses 192.0.2.10/24 ipv4.never-default yes;
+        nmcli con modify lal-mgmt ipv6.method manual ipv6.addresses 2001:db8:42::10/64 ipv6.never-default yes;
+        nmcli con modify lal-mgmt connection.autoconnect yes;
+        nmcli con up lal-mgmt
+  - action_id: install-host-identity
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        printf 'node2.lal.invalid\n' > /etc/hostname;
+        hostnamectl set-hostname node2.lal.invalid;
+        printf '192.0.2.10 app.internal\n2001:db8:42::10 app.internal\n' >> /etc/hosts

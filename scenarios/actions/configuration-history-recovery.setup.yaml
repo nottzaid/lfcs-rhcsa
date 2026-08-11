@@ -23,6 +23,8 @@ actions:
         git -C /etc/lal-app commit --quiet -m 'Document configuration ownership'
         git -C /etc/lal-app tag docs-update
         printf 'workers=2\n' > /etc/lal-app/app.conf
+        git -C /etc/lal-app add app.conf
+        git -C /etc/lal-app commit --quiet -m 'Apply rejected worker setting'
   - action_id: make-repository-administrable
     target: node2
     arguments: [sudo, --, chown, -R, labadmin:labadmin, /etc/lal-app]

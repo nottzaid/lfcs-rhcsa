@@ -1,0 +1,89 @@
+schema_version: 1
+scenario_id: dual-stack-host-resolution
+version: 1
+status: verified
+title: The management endpoint lost its dual-stack identity
+summary: Build a persistent NetworkManager profile and matching local name resolution.
+estimated_minutes: 30
+task_type: configure
+difficulty: intermediate
+task: >-
+  Configure a persistent NetworkManager dummy interface named mgmt0 on node2. It must use
+  192.0.2.10/24 and 2001:db8:42::10/64 with no IPv4 or IPv6 default route and autoconnect
+  at boot. Set the static hostname to node2.lal.invalid. Configure /etc/hosts so
+  app.internal resolves to both management addresses. Do not modify the interface used for
+  your lab connection.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.ip-hostname
+    title: Configure IPv4 and IPv6 networking and hostname resolution
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: NetworkManager nm-settings documentation
+    url: https://networkmanager.dev/docs/api/latest/nm-settings-nmcli.html
+  - kind: man-page
+    title: nmcli manual
+    man_page: nmcli(1)
+  - kind: man-page
+    title: hosts manual
+    man_page: hosts(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: ipv4-live
+    kind: command
+    target: node2
+    description: mgmt0 has the required IPv4 address.
+    parameters:
+      arguments: [ip, "-4", address, show, dev, mgmt0]
+      stdout_contains: 192.0.2.10/24
+  - check_id: ipv6-live
+    kind: command
+    target: node2
+    description: mgmt0 has the required IPv6 address.
+    parameters:
+      arguments: [ip, "-6", address, show, dev, mgmt0]
+      stdout_contains: 2001:db8:42::10/64
+  - check_id: network-profile-persistent
+    kind: command
+    target: node2
+    description: NetworkManager owns an autoconnecting dual-stack profile without default routes.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          connection=$(nmcli -g GENERAL.CONNECTION device show mgmt0) &&
+          test "$(nmcli -g connection.autoconnect connection show "$connection")" = yes &&
+          test "$(nmcli -g ipv4.never-default connection show "$connection")" = yes &&
+          test "$(nmcli -g ipv6.never-default connection show "$connection")" = yes
+  - check_id: static-hostname
+    kind: command
+    target: node2
+    description: The static hostname is correct.
+    parameters: {arguments: [hostnamectl, --static], stdout_equals: node2.lal.invalid}
+  - check_id: dual-stack-resolution
+    kind: command
+    target: node2
+    description: app.internal resolves locally to both management addresses.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          getent ahostsv4 app.internal | awk '$1=="192.0.2.10" {v4=1} END {exit !v4}' &&
+          getent ahostsv6 app.internal | awk '$1=="2001:db8:42::10" {v6=1} END {exit !v6}'
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/dual-stack-host-resolution.setup.yaml
+reference_solution: actions/dual-stack-host-resolution.solution.yaml
+alternate_solutions: [actions/dual-stack-host-resolution.alternate.yaml]

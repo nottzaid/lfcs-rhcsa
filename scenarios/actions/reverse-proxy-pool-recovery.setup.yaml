@@ -1,0 +1,56 @@
+schema_version: 1
+actions:
+  - action_id: start-http-backend
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        install -d /srv/lal-backend
+        printf 'backend-one\n' > /srv/lal-backend/index.html
+        cat > /etc/systemd/system/lal-backend.service <<'EOF'
+        [Unit]
+        Description=Linux Admin Lab HTTP backend
+
+        [Service]
+        WorkingDirectory=/srv/lal-backend
+        ExecStart=/usr/bin/python3 -m http.server 8081 --bind 0.0.0.0
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable --now lal-backend.service
+        firewall-cmd --quiet --permanent --add-port=8081/tcp
+        firewall-cmd --quiet --reload
+  - action_id: install-retired-proxy-configuration
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        systemctl disable --now nginx.service >/dev/null 2>&1 || true
+        cat > /etc/haproxy/haproxy.cfg <<'EOF'
+        global
+            daemon
+        defaults
+            mode http
+            timeout connect 3s
+            timeout client 10s
+            timeout server 10s
+        frontend application
+            bind *:8080
+            default_backend application_nodes
+        backend application_nodes
+            option httpchk GET /
+            server retired 192.0.2.99:8081 check
+        EOF
+        systemctl enable haproxy.service
+        systemctl restart haproxy.service
+        firewall-cmd --quiet --permanent --add-port=8080/tcp
+        firewall-cmd --quiet --reload

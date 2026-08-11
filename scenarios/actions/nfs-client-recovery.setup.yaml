@@ -1,0 +1,32 @@
+schema_version: 1
+actions:
+  - action_id: configure-nfs-server
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        id appshare >/dev/null 2>&1 || useradd --uid 2200 --create-home appshare
+        install -d -o appshare -g appshare -m 0770 /srv/teamshare
+        printf 'shared project record\n' > /srv/teamshare/project.txt
+        chown appshare:appshare /srv/teamshare/project.txt
+        printf '/srv/teamshare {{host.node2.address}}/32(rw,sync,no_subtree_check,root_squash)\n' > /etc/exports.d/lal-teamshare.exports
+        systemctl enable --now nfs-server.service
+        exportfs -ra
+        firewall-cmd --quiet --permanent --add-service=nfs
+        firewall-cmd --quiet --reload
+  - action_id: install-stale-nfs-client-policy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - >-
+        id appshare >/dev/null 2>&1 || useradd --uid 2200 --create-home appshare;
+        umount /mnt/teamshare >/dev/null 2>&1 || true;
+        install -d /mnt/teamshare;
+        sed -i '\#/mnt/teamshare#d' /etc/fstab;
+        printf '192.0.2.99:/srv/teamshare /mnt/teamshare nfs4 defaults,_netdev 0 0\n' >> /etc/fstab

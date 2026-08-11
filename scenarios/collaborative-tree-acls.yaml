@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: collaborative-tree-acls
 version: 1
-status: draft
+status: verified
 title: The project tree has contradictory access rules
 summary: Repair current and inherited ACLs for collaborators and a read-only auditor.
 estimated_minutes: 25

@@ -1,0 +1,42 @@
+schema_version: 1
+actions:
+  - action_id: install-incomplete-secure-deployment
+    target: node2
+    timeout_seconds: 90
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        setenforce 1
+        rm -rf /srv/lal-secure /etc/lal-pki
+        install -d /srv/lal-secure /etc/lal-pki
+        install -d -m 0700 /etc/lal-pki/private
+        printf 'secure-ready\n' > /srv/lal-secure/index.html
+        semanage fcontext -d '/srv/lal-secure(/.*)?' >/dev/null 2>&1 || true
+        semanage port -d -t http_port_t -p tcp 8443 >/dev/null 2>&1 || true
+        restorecon -RF /srv/lal-secure
+        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -sha256 -subj /CN=LAL-CA \
+          -keyout /etc/lal-pki/private/ca.key -out /etc/lal-pki/ca.crt >/dev/null 2>&1
+        openssl req -newkey rsa:2048 -nodes -sha256 -subj /CN=service.internal \
+          -addext 'subjectAltName=DNS:service.internal' \
+          -keyout /etc/lal-pki/private/service.key -out /tmp/lal-service.csr >/dev/null 2>&1
+        printf '%s\n' 'subjectAltName=DNS:service.internal' > /tmp/lal-service.ext
+        openssl x509 -req -in /tmp/lal-service.csr -CA /etc/lal-pki/ca.crt \
+          -CAkey /etc/lal-pki/private/ca.key -CAcreateserial -days 730 -sha256 \
+          -extfile /tmp/lal-service.ext -out /etc/lal-pki/service.crt >/dev/null 2>&1
+        chmod 0600 /etc/lal-pki/private/*.key
+        chmod 0644 /etc/lal-pki/*.crt
+        cat > /etc/nginx/conf.d/lal-secure.conf <<'EOF'
+        server {
+            listen 8088;
+            server_name service.internal;
+            root /srv/lal-secure;
+        }
+        EOF
+        firewall-cmd --quiet --permanent --remove-port=8443/tcp >/dev/null 2>&1 || true
+        firewall-cmd --quiet --reload
+        systemctl enable nginx.service
+        systemctl restart nginx.service || true

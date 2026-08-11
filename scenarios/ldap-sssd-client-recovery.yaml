@@ -1,0 +1,100 @@
+schema_version: 1
+scenario_id: ldap-sssd-client-recovery
+version: 1
+status: draft
+title: Directory users disappeared from the application node
+summary: Repair an SSSD LDAP identity-provider configuration against a live directory.
+estimated_minutes: 45
+task_type: fix
+difficulty: advanced
+task: >-
+  node1 hosts the session's LDAP directory with base dc=lab,dc=internal. SSSD on node2 has
+  a stale LDAP URI. Configure the lab domain to use node1 over LDAP, restore online identity
+  lookup, and keep SSSD enabled. `getent passwd ldapdev` must return UID 2300 with home
+  /home/ldapdev and shell /bin/bash; `getent group ldapops` must return GID 2300. Keep
+  /etc/sssd/sssd.conf private and do not create local passwd/group entries for these names.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.ldap-accounts
+    title: Configure the system to use LDAP user and group accounts
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: SSSD LDAP provider manual
+    url: https://sssd.io/docs/introduction.html
+  - kind: distribution
+    title: Red Hat configuring SSSD to use LDAP
+    url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_authentication_and_authorization_in_rhel/configuring-sssd-to-use-ldap-and-require-tls-authentication
+  - kind: man-page
+    title: sssd-ldap manual
+    man_page: sssd-ldap(5)
+topology:
+  hosts:
+    - name: node1
+      image: rocky-10.2-lab-v1
+      memory_mib: 1536
+      vcpus: 2
+    - name: node2
+      image: rocky-10.2-lab-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: directory-client-running
+    kind: service
+    target: node2
+    description: SSSD is running and enabled.
+    parameters: {name: sssd.service, active: true, enabled: true}
+  - check_id: directory-user-visible
+    kind: command
+    target: node2
+    description: NSS resolves ldapdev with the required directory attributes.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          entry=$(getent passwd ldapdev) &&
+          test "$(cut -d: -f3 <<<"$entry")" = 2300 &&
+          test "$(cut -d: -f6 <<<"$entry")" = /home/ldapdev &&
+          test "$(cut -d: -f7 <<<"$entry")" = /bin/bash
+  - check_id: directory-group-visible
+    kind: command
+    target: node2
+    description: NSS resolves the ldapops directory group.
+    parameters:
+      arguments:
+        - bash
+        - -c
+        - >-
+          entry=$(getent group ldapops) && test "$(cut -d: -f3 <<<"$entry")" = 2300
+  - check_id: directory-domain-online
+    kind: command
+    target: node2
+    description: SSSD reports the lab domain online against node1.
+    parameters:
+      sudo: true
+      arguments:
+        - bash
+        - -c
+        - >-
+          sssctl domain-status lab --online >/dev/null &&
+          grep -Eq '^ldap_uri[[:space:]]*=[[:space:]]*ldap://{{host.node1.address}}' /etc/sssd/sssd.conf
+  - check_id: sssd-policy-private
+    kind: file
+    target: node2
+    description: SSSD configuration remains root-owned and private.
+    parameters: {path: /etc/sssd/sssd.conf, kind: file, owner: root, group: root, mode: "0600"}
+  - check_id: no-shadow-local-identities
+    kind: command
+    target: node2
+    description: The directory identities were not duplicated locally.
+    parameters:
+      arguments: [bash, -c, '! grep -qE ''^(ldapdev|ldapops):'' /etc/passwd /etc/group']
+persistence:
+  reboot: false
+setup: actions/ldap-sssd-client-recovery.setup.yaml
+reference_solution: actions/ldap-sssd-client-recovery.solution.yaml
+alternate_solutions: [actions/ldap-sssd-client-recovery.alternate.yaml]

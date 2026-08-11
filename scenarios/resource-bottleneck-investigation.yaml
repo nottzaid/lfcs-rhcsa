@@ -1,7 +1,7 @@
 schema_version: 1
 scenario_id: resource-bottleneck-investigation
 version: 1
-status: draft
+status: verified
 title: An indexing worker is starving interactive services
 summary: Identify a managed CPU workload and constrain it without disabling the work.
 estimated_minutes: 30
