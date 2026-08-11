@@ -1,0 +1,84 @@
+schema_version: 1
+scenario_id: selinux-web-port
+version: 1
+status: draft
+title: The intranet moved, but nobody can reach it
+summary: A web service has been moved to a non-default port and is unreachable.
+task: >-
+  Restore HTTP access from the client to port 8088 on web1. Keep SELinux enforcing,
+  preserve the host firewall, and ensure the service works after web1 is rebooted.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.selinux
+    title: Create and enforce MAC using SELinux
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.packet-filtering
+    title: Configure packet filtering and port redirection
+  - track: rhcsa-10
+    version: ex200-rhel10-2026
+    objective_id: security.selinux-port-labels
+    title: Manage SELinux port labels
+  - track: professional
+    version: v1
+    objective_id: preserve-security-controls
+    title: Restore service without disabling security controls
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: scope
+    title: Red Hat EX200 objectives
+    url: https://www.redhat.com/en/services/training/ex200-red-hat-certified-system-administrator-rhcsa-exam
+  - kind: distribution
+    title: Red Hat Enterprise Linux 10 SELinux documentation
+    url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/using_selinux/index
+  - kind: man-page
+    title: semanage port manual
+    man_page: semanage-port(8)
+topology:
+  networks:
+    - name: service-net
+      isolated: true
+      cidr: 192.0.2.0/24
+  hosts:
+    - name: web1
+      image: rocky-10.2-base-v1
+      memory_mib: 1024
+      vcpus: 1
+      nics:
+        - network: service-net
+    - name: client1
+      image: rocky-10.2-base-v1
+      memory_mib: 768
+      vcpus: 1
+      nics:
+        - network: service-net
+checks:
+  - check_id: http-from-client
+    kind: network
+    target: client1
+    description: The client receives the expected HTTP response from web1 on port 8088.
+    parameters:
+      url: http://web1:8088/
+      expected_status: 200
+  - check_id: selinux-enforcing
+    kind: command
+    target: web1
+    description: SELinux remains in enforcing mode.
+    parameters:
+      arguments: [getenforce]
+      stdout_equals: Enforcing
+  - check_id: firewall-active
+    kind: service
+    target: web1
+    description: The system firewall remains active.
+    parameters:
+      name: firewalld
+      active: true
+persistence:
+  reboot: true
+  hosts: [web1]
+setup: actions/selinux-web-port.setup.yaml
+reference_solution: solutions/selinux-web-port.yaml

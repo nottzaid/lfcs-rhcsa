@@ -1,0 +1,92 @@
+schema_version: 1
+scenario_id: local-account-repair
+version: 1
+status: verified
+title: The deployment account was created from the wrong specification
+summary: Repair a local service account and its primary group without replacing the machine.
+task: >-
+  The deploysvc account on node1 was created with the wrong identifiers, home directory,
+  login shell, and directory permissions. Make releaseops a local group with GID 4200.
+  Make deploysvc a local user with UID 4201, primary group releaseops, home directory
+  /srv/deploysvc, and login shell /bin/bash. Preserve the existing handoff.txt file while
+  moving the home directory. The final home directory must be owned by deploysvc:releaseops
+  with mode 0750.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.local-accounts
+    title: Create and manage local user and group accounts
+  - track: professional
+    version: v1
+    objective_id: repair-account-without-data-loss
+    title: Repair account metadata while preserving application data
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: usermod manual
+    man_page: usermod(8)
+  - kind: man-page
+    title: groupmod manual
+    man_page: groupmod(8)
+  - kind: man-page
+    title: passwd database manual
+    man_page: passwd(5)
+topology:
+  hosts:
+    - name: node1
+      image: rocky-10.2-base-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: releaseops-gid
+    kind: command
+    target: node1
+    description: releaseops is a local group with GID 4200.
+    parameters:
+      arguments: [getent, group, releaseops]
+      stdout_contains: "releaseops:x:4200:"
+  - check_id: deploysvc-uid
+    kind: command
+    target: node1
+    description: deploysvc has UID 4201.
+    parameters:
+      arguments: [id, -u, deploysvc]
+      stdout_equals: "4201"
+  - check_id: deploysvc-primary-group
+    kind: command
+    target: node1
+    description: deploysvc has releaseops as its primary group.
+    parameters:
+      arguments: [id, -gn, deploysvc]
+      stdout_equals: releaseops
+  - check_id: deploysvc-passwd-entry
+    kind: command
+    target: node1
+    description: deploysvc has the required home directory and shell.
+    parameters:
+      arguments: [getent, passwd, deploysvc]
+      stdout_contains: ":/srv/deploysvc:/bin/bash"
+  - check_id: deploysvc-home
+    kind: file
+    target: node1
+    description: The home directory has the required ownership and mode.
+    parameters:
+      path: /srv/deploysvc
+      kind: directory
+      owner: deploysvc
+      group: releaseops
+      mode: "0750"
+  - check_id: handoff-preserved
+    kind: file
+    target: node1
+    description: The existing handoff file survived the move.
+    parameters:
+      path: /srv/deploysvc/handoff.txt
+      kind: file
+      contains: preserve-this-data
+persistence:
+  reboot: false
+setup: actions/local-account-repair.setup.yaml
+reference_solution: actions/local-account-repair.solution.yaml

@@ -1,0 +1,27 @@
+schema_version: 1
+actions:
+  - action_id: repair-group-id
+    target: node1
+    arguments: [sudo, --, groupmod, --gid, "4200", releaseops]
+  - action_id: repair-account
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - usermod
+      - --uid
+      - "4201"
+      - --gid
+      - releaseops
+      - --home
+      - /srv/deploysvc
+      - --move-home
+      - --shell
+      - /bin/bash
+      - deploysvc
+  - action_id: repair-home-ownership
+    target: node1
+    arguments: [sudo, --, chown, -R, deploysvc:releaseops, /srv/deploysvc]
+  - action_id: repair-home-mode
+    target: node1
+    arguments: [sudo, --, chmod, "0750", /srv/deploysvc]
