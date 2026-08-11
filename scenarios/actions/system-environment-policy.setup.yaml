@@ -1,0 +1,38 @@
+schema_version: 1
+actions:
+  - action_id: create-operations-users
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        set -eu;
+        id opsanalyst >/dev/null 2>&1 || useradd --create-home --shell /bin/bash opsanalyst;
+        id opsviewer >/dev/null 2>&1 || useradd --create-home --shell /bin/bash opsviewer
+  - action_id: install-drifting-shared-profile
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        install -d -m 0755 /opt/lal/bin &&
+        printf '%s\n' 'export EDITOR=/usr/bin/nano' 'export PATH=/opt/lal/bin:$PATH'
+        > /etc/profile.d/lal-operations.sh &&
+        chmod 0644 /etc/profile.d/lal-operations.sh &&
+        rm -f /etc/profile.d/zz-lal-operations.sh
+  - action_id: install-wrong-personal-profile
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' 'if [ -f ~/.bashrc ]; then' '    . ~/.bashrc' 'fi' ''
+        'export REPORT_FORMAT=verbose' > /home/opsanalyst/.bash_profile &&
+        chown opsanalyst:opsanalyst /home/opsanalyst/.bash_profile &&
+        chmod 0644 /home/opsanalyst/.bash_profile

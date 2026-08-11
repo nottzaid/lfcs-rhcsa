@@ -1,0 +1,86 @@
+schema_version: 1
+scenario_id: system-environment-policy
+version: 1
+status: verified
+title: Login shells inherit a drifting operations environment
+summary: Repair system-wide and personal Bash login profiles without duplicating PATH entries.
+estimated_minutes: 20
+task_type: fix
+difficulty: foundation
+task: >-
+  On node2, login environments for the operations team are inconsistent. Configure Bash login
+  shells system-wide so EDITOR is /usr/bin/vi and /opt/lal/bin occurs exactly once in PATH, even
+  if the system profile is sourced again. For opsanalyst only, set and export REPORT_FORMAT=compact
+  in the personal login environment. Preserve the normal per-user Bash startup behavior. Do not
+  reboot node1; it is not part of this scenario.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.environment-profiles
+    title: Manage personal and system-wide environment profiles
+  - track: professional
+    version: v1
+    objective_id: idempotent-login-environment-policy
+    title: Maintain idempotent shared and per-user login environments
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: GNU Bash startup files documentation
+    url: https://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html
+  - kind: man-page
+    title: Bash invocation and startup files
+    man_page: bash(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-base-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: shared-login-policy
+    kind: command
+    target: node2
+    description: Both operations users receive the required idempotent system environment.
+    parameters:
+      sudo: true
+      arguments:
+        - sh
+        - -c
+        - >-
+          for user in opsanalyst opsviewer; do
+          result=$(runuser --login "$user" --command
+          '. /etc/profile; count=$(printf "%s" "$PATH" | awk -v RS=: '\''$0 ==
+          "/opt/lal/bin" {n++} END {print n+0}'\''); printf "%s|%s" "$EDITOR" "$count"') ||
+          exit 1; test "$result" = '/usr/bin/vi|1' || exit 1; done
+  - check_id: analyst-personal-policy
+    kind: command
+    target: node2
+    description: opsanalyst receives the required exported personal setting.
+    parameters:
+      sudo: true
+      arguments:
+        - runuser
+        - --login
+        - opsanalyst
+        - --command
+        - test "$REPORT_FORMAT" = compact && export -p | grep -q 'REPORT_FORMAT="compact"'
+  - check_id: viewer-has-no-personal-override
+    kind: command
+    target: node2
+    description: The personal report setting did not leak to another account.
+    parameters:
+      sudo: true
+      arguments:
+        - runuser
+        - --login
+        - opsviewer
+        - --command
+        - test -z "${REPORT_FORMAT:-}"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/system-environment-policy.setup.yaml
+reference_solution: actions/system-environment-policy.solution.yaml
+alternate_solutions: [actions/system-environment-policy.alternate.yaml]

@@ -218,7 +218,7 @@ focused_scenarios:
     competencies: [essential-commands.tls-certificates]
     capabilities: [multi-node, isolated-network]
   - scenario_id: system-environment-policy
-    status: planned
+    status: verified
     wave: 1
     estimated_minutes: 20
     competencies: [users-groups.environment-profiles]

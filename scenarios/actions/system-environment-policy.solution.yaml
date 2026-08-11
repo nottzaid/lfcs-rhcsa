@@ -1,0 +1,25 @@
+schema_version: 1
+actions:
+  - action_id: repair-shared-profile
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' 'export EDITOR=/usr/bin/vi' 'case ":$PATH:" in'
+        '    *:/opt/lal/bin:*) ;;' '    *) PATH="$PATH:/opt/lal/bin" ;;' 'esac'
+        'export PATH' > /etc/profile.d/lal-operations.sh
+  - action_id: repair-analyst-profile
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' 'if [ -f ~/.bashrc ]; then' '    . ~/.bashrc' 'fi' ''
+        'export REPORT_FORMAT=compact' > /home/opsanalyst/.bash_profile &&
+        chown opsanalyst:opsanalyst /home/opsanalyst/.bash_profile &&
+        chmod 0644 /home/opsanalyst/.bash_profile

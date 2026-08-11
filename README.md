@@ -78,6 +78,10 @@ actual completed job, two solution styles, and persistence through real reboots.
 `PATH` diagnosis, least-privilege execution proof, named and numeric weekday alternatives, and
 reboot persistence.
 
+`system-environment-policy` adds real multi-user Bash login evaluation, idempotent system-wide
+`PATH` policy, an exported per-user override with leak prevention, alternate profile layouts, and
+reboot persistence.
+
 Maintainers can replay the permanent acceptance contract for any released scenario with
 `uv run labctl scenario verify <scenario-id>`. It provisions a disposable VM, proves the broken
 state, applies and checks the reference solution, reboots when persistence is required, proves a
