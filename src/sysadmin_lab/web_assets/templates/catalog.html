@@ -15,7 +15,10 @@
     <div class="section-heading">
       <div>
         <h2 id="scenario-list-title">Scenario collection</h2>
-        <p>Choose a task, work on its real VM, then ask the lab to check the resulting state.</p>
+        <p>
+          Choose a task, work on its real VM, then ask the lab to check the resulting state.
+          Times are estimates only; ordinary scenarios have no countdown or time limit.
+        </p>
       </div>
     </div>
     <div class="table-scroll">
@@ -39,7 +42,9 @@
                 <a class="scenario-name" href="/scenarios/{{ scenario.scenario_id }}">{{ scenario.title }}</a>
                 <span class="scenario-summary">{{ scenario.summary }}</span>
               </td>
-              <td class="nowrap">~{{ scenario.estimated_minutes }} min</td>
+              <td class="nowrap">
+                ~{{ scenario.estimated_minutes }} min<br><span class="scenario-summary">No limit</span>
+              </td>
               <td><span class="tag tag-type">{{ scenario.task_type.value }}</span></td>
               <td><span class="tag tag-level">{{ scenario.difficulty.value }}</span></td>
               <td>

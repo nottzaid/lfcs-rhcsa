@@ -119,6 +119,8 @@ def test_lfcs_topic_and_scenario_pages_expose_hands_on_loop(tmp_path: Path) -> N
         assert "LFCS" in catalog.text
         assert workspace.manifest.title in catalog.text
         assert "20 min" in catalog.text
+        assert "Times are estimates only" in catalog.text
+        assert "No limit" in catalog.text
         assert "Info" in catalog.text and "Run" in catalog.text
         assert "Active" in catalog.text
         assert catalog.headers["cache-control"] == "no-store"
