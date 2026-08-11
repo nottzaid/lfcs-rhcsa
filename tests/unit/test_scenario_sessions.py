@@ -121,30 +121,40 @@ class Actions:
         return ()
 
 
+@dataclass
+class Progress:
+    attempts: list = field(default_factory=list)
+
+    def record(self, attempt) -> None:
+        self.attempts.append(attempt)
+
+
 def service(
     tmp_path: Path,
     reports: list[CheckReport],
     *,
     address: str | None = "192.0.2.10",
     action_failure: Exception | None = None,
-) -> tuple[ScenarioSessionService, VmSessions, Actions]:
+) -> tuple[ScenarioSessionService, VmSessions, Actions, Progress]:
     state = ready_state()
     host = machine(tmp_path, address=address)
     vm = VmSessions(ProvisionedSession(state, host))
     actions = Actions(action_failure)
+    progress = Progress()
     result = ScenarioSessionService(
         sessions=Sessions(state),  # type: ignore[arg-type]
         machines=Machines(host),  # type: ignore[arg-type]
         vm_sessions=vm,  # type: ignore[arg-type]
         checks=Checks(reports),  # type: ignore[arg-type]
         actions=actions,  # type: ignore[arg-type]
+        progress=progress,  # type: ignore[arg-type]
     )
-    return result, vm, actions
+    return result, vm, actions, progress
 
 
 def test_start_applies_setup_and_requires_initial_failure(tmp_path: Path) -> None:
     spec = manifest()
-    scenario, vm, actions = service(tmp_path, [report(spec, passed=False)])
+    scenario, vm, actions, _progress = service(tmp_path, [report(spec, passed=False)])
     base = tmp_path / "base.qcow2"
     started = scenario.start(spec, setup(), {"rocky-base": base})
     assert started.provisioned.state.status is SessionStatus.READY
@@ -158,7 +168,7 @@ def test_start_cleans_scenario_that_is_invalid_at_initial_check(
     tmp_path: Path, checker_error: bool, already_passed: bool
 ) -> None:
     spec = manifest()
-    scenario, vm, _actions = service(
+    scenario, vm, _actions, _progress = service(
         tmp_path, [report(spec, passed=already_passed, error=checker_error)]
     )
     with pytest.raises(ScenarioLaunchError):
@@ -168,7 +178,7 @@ def test_start_cleans_scenario_that_is_invalid_at_initial_check(
 
 def test_start_cleans_setup_failure_and_missing_address(tmp_path: Path) -> None:
     spec = manifest()
-    scenario, vm, _actions = service(
+    scenario, vm, _actions, _progress = service(
         tmp_path,
         [report(spec, passed=False)],
         action_failure=ActionExecutionError("setup failed"),
@@ -177,7 +187,9 @@ def test_start_cleans_setup_failure_and_missing_address(tmp_path: Path) -> None:
         scenario.start(spec, setup(), {"rocky-base": tmp_path / "base.qcow2"})
     assert vm.destroyed == [SESSION_ID]
 
-    scenario, vm, _actions = service(tmp_path, [report(spec, passed=False)], address=None)
+    scenario, vm, _actions, _progress = service(
+        tmp_path, [report(spec, passed=False)], address=None
+    )
     with pytest.raises(ScenarioLaunchError, match="no reachable address"):
         scenario.start(spec, setup(), {"rocky-base": tmp_path / "base.qcow2"})
     assert vm.destroyed == [SESSION_ID]
@@ -185,7 +197,7 @@ def test_start_cleans_setup_failure_and_missing_address(tmp_path: Path) -> None:
 
 def test_start_rejects_draft_unsupported_topology_and_missing_image(tmp_path: Path) -> None:
     verified = manifest()
-    scenario, _vm, _actions = service(tmp_path, [report(verified, passed=False)])
+    scenario, _vm, _actions, _progress = service(tmp_path, [report(verified, passed=False)])
     with pytest.raises(ScenarioLaunchError, match="not verified"):
         scenario.start(manifest(status=ScenarioStatus.DRAFT), setup(), {})
     with pytest.raises(ScenarioLaunchError, match="no verified base image"):
@@ -208,8 +220,10 @@ def test_start_rejects_draft_unsupported_topology_and_missing_image(tmp_path: Pa
 def test_check_reset_and_destroy_delegate_with_scenario_identity(tmp_path: Path) -> None:
     spec = manifest()
     expected = report(spec, passed=False)
-    scenario, vm, _actions = service(tmp_path, [expected, expected])
+    scenario, vm, _actions, progress = service(tmp_path, [expected, expected])
     assert scenario.check(SESSION_ID, spec) == expected
+    assert len(progress.attempts) == 1
+    assert progress.attempts[0].session_id == SESSION_ID
     reset = scenario.reset(SESSION_ID, spec, setup(), {"rocky-base": tmp_path / "base.qcow2"})
     assert reset.initial_report == expected
     assert vm.destroyed == [SESSION_ID]

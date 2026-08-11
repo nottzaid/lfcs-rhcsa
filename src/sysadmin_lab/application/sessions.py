@@ -19,6 +19,8 @@ class SessionRepository(Protocol):
 
     def get(self, session_id: UUID) -> SessionState | None: ...
 
+    def list_all(self, *, limit: int = 100) -> tuple[SessionState, ...]: ...
+
     def save(self, previous_revision: int, state: SessionState) -> None: ...
 
 
@@ -38,6 +40,11 @@ class SessionCoordinator:
         if state is None:
             raise SessionNotFoundError(f"session does not exist: {session_id}")
         return state
+
+    def list_all(self, *, limit: int = 100) -> tuple[SessionState, ...]:
+        if limit < 1:
+            raise ValueError("session list limit must be positive")
+        return self._repository.list_all(limit=limit)
 
     def transition(
         self, session_id: UUID, target: SessionStatus, *, error: str | None = None

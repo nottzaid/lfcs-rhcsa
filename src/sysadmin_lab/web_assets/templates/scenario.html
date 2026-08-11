@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}{{ scenario.title }} · Linux Admin Lab{% endblock %}
+{% block content %}
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a href="/scenarios/topic/lfcs">LFCS</a><span>/</span><strong>{{ scenario.scenario_id }}</strong>
+  </nav>
+  <article class="scenario-detail">
+    <header class="detail-header">
+      <div>
+        <div class="tag-row">
+          <span class="tag tag-type">{{ scenario.task_type.value }}</span>
+          <span class="tag tag-level">{{ scenario.difficulty.value }}</span>
+          <span class="tag">~{{ scenario.estimated_minutes }} min · no limit</span>
+        </div>
+        <h1>{{ scenario.title }}</h1>
+        <p>{{ scenario.summary }}</p>
+      </div>
+      <button
+        class="button button-primary button-large"
+        type="button"
+        data-job-endpoint="/api/scenarios/{{ scenario.scenario_id }}/sessions"
+        data-job-label="Launching scenario"
+      >Launch scenario</button>
+    </header>
+
+    <div class="detail-grid">
+      <section class="task-card">
+        <p class="eyebrow">Your task</p>
+        <p class="task-copy">{{ scenario.task }}</p>
+      </section>
+      <aside class="machine-card">
+        <p class="eyebrow">Machines</p>
+        {% for host in scenario.topology.hosts %}
+          <div class="machine-spec">
+            <strong>{{ host.name }}</strong>
+            <span>{{ host.image }}</span>
+            <small>{{ host.vcpus }} vCPU · {{ host.memory_mib }} MiB</small>
+          </div>
+        {% endfor %}
+        <p class="aside-note">The VM appears in virt-manager after launch. SSH and console credentials are shown when it is ready.</p>
+      </aside>
+    </div>
+
+    <section class="objective-section">
+      <p class="eyebrow">Mapped competencies</p>
+      <ul class="objective-list">
+        {% for objective in scenario.objectives %}
+          <li><span>{{ objective.track.value }}</span><strong>{{ objective.title }}</strong></li>
+        {% endfor %}
+      </ul>
+    </section>
+  </article>
+{% endblock %}

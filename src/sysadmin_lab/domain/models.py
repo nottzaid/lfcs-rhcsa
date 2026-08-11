@@ -42,6 +42,20 @@ class ScenarioStatus(StrEnum):
     VERIFIED = "verified"
 
 
+class ScenarioTaskType(StrEnum):
+    FIX = "fix"
+    CONFIGURE = "configure"
+    TROUBLESHOOT = "troubleshoot"
+    BUILD = "build"
+
+
+class ScenarioDifficulty(StrEnum):
+    FOUNDATION = "foundation"
+    INTERMEDIATE = "intermediate"
+    ADVANCED = "advanced"
+    EXAM = "exam"
+
+
 class ObjectiveRef(StrictModel):
     track: Track
     version: str = Field(min_length=1)
@@ -130,6 +144,9 @@ class ScenarioManifest(StrictModel):
     status: ScenarioStatus = ScenarioStatus.DRAFT
     title: str = Field(min_length=1)
     summary: str = Field(min_length=1)
+    estimated_minutes: int = Field(ge=5, le=180)
+    task_type: ScenarioTaskType
+    difficulty: ScenarioDifficulty
     task: str = Field(min_length=1)
     objectives: tuple[ObjectiveRef, ...] = Field(min_length=1)
     sources: tuple[SourceRef, ...] = Field(min_length=1)

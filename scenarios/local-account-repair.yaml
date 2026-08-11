@@ -4,6 +4,9 @@ version: 1
 status: verified
 title: The deployment account was created from the wrong specification
 summary: Repair a local service account and its primary group without replacing the machine.
+estimated_minutes: 20
+task_type: fix
+difficulty: foundation
 task: >-
   The deploysvc account on node1 was created with the wrong identifiers, home directory,
   login shell, and directory permissions. Make releaseops a local group with GID 4200.

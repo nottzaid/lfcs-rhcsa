@@ -12,6 +12,9 @@ def minimal_manifest() -> dict[str, object]:
         "version": 1,
         "title": "A valid scenario",
         "summary": "A concise summary",
+        "estimated_minutes": 15,
+        "task_type": "troubleshoot",
+        "difficulty": "foundation",
         "task": "Reach the required state.",
         "objectives": [
             {

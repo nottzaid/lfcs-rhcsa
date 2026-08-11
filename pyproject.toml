@@ -9,10 +9,13 @@ description = "A local, reproducible, self-grading Linux administration lab"
 readme = "README.md"
 requires-python = ">=3.12"
 dependencies = [
+  "fastapi>=0.116,<1",
+  "jinja2>=3.1,<4",
   "libvirt-python>=12.6,<13",
   "pydantic>=2.11,<3",
   "PyYAML>=6.0.2,<7",
   "typer>=0.16,<1",
+  "uvicorn>=0.35,<1",
 ]
 
 [project.scripts]
@@ -21,6 +24,7 @@ labctl = "sysadmin_lab.cli:app"
 [dependency-groups]
 dev = [
   "hypothesis>=6.135,<7",
+  "httpx>=0.28,<1",
   "mypy>=1.16,<2",
   "pykickstart>=3.77,<4",
   "pytest>=8.4,<9",
@@ -31,6 +35,9 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/sysadmin_lab"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/sysadmin_lab/web_assets" = "sysadmin_lab/web_assets"
 
 [tool.pytest.ini_options]
 addopts = "-ra --strict-config --strict-markers"

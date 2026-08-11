@@ -8,11 +8,13 @@ from sysadmin_lab.application.actions import ActionRunner
 from sysadmin_lab.application.checking import CheckReport
 from sysadmin_lab.application.guest_execution import GuestEndpoint
 from sysadmin_lab.application.machines import SessionMachineRepository
+from sysadmin_lab.application.progress import ProgressService
 from sysadmin_lab.application.session_checks import SessionCheckService
 from sysadmin_lab.application.sessions import SessionCoordinator
 from sysadmin_lab.application.vm_sessions import ProvisionedSession, SingleHostVmSessionService
 from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.models import HostSpec, ScenarioManifest, ScenarioStatus
+from sysadmin_lab.domain.progress import CheckAttempt
 from sysadmin_lab.domain.sessions import SessionState
 
 
@@ -37,12 +39,14 @@ class ScenarioSessionService:
         vm_sessions: SingleHostVmSessionService,
         checks: SessionCheckService,
         actions: ActionRunner,
+        progress: ProgressService,
     ) -> None:
         self._sessions = sessions
         self._machines = machines
         self._vm_sessions = vm_sessions
         self._checks = checks
         self._actions = actions
+        self._progress = progress
 
     def start(
         self,
@@ -78,7 +82,19 @@ class ScenarioSessionService:
         return StartedScenario(provisioned, report)
 
     def check(self, session_id: UUID, manifest: ScenarioManifest) -> CheckReport:
-        return self._checks.run(session_id, manifest)
+        report = self._checks.run(session_id, manifest)
+        self._progress.record(
+            CheckAttempt.now(
+                session_id=session_id,
+                scenario_id=manifest.scenario_id,
+                scenario_version=manifest.version,
+                earned_weight=report.earned_weight,
+                available_weight=report.available_weight,
+                required_passed=report.required_passed,
+                has_errors=report.has_errors,
+            )
+        )
+        return report
 
     def reset(
         self,

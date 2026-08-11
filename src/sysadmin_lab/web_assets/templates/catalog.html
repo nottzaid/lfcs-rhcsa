@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block title %}LFCS scenarios · Linux Admin Lab{% endblock %}
+{% block content %}
+  <nav class="crumbs" aria-label="Breadcrumb"><span>Scenarios</span><span>/</span><strong>LFCS</strong></nav>
+  <section class="topic-heading">
+    <div>
+      <p class="eyebrow">Certification topic</p>
+      <h1>LFCS</h1>
+      <p>Hands-on administration scenarios mapped to the current published Linux Foundation competencies.</p>
+    </div>
+    <div class="topic-count"><strong>{{ scenarios|length }}</strong><span>scenario{% if scenarios|length != 1 %}s{% endif %}</span></div>
+  </section>
+
+  <section class="scenario-list" aria-labelledby="scenario-list-title">
+    <div class="section-heading">
+      <div>
+        <h2 id="scenario-list-title">Scenario collection</h2>
+        <p>Choose a task, work on its real VM, then ask the lab to check the resulting state.</p>
+      </div>
+    </div>
+    <div class="table-scroll">
+      <table>
+        <thead>
+          <tr>
+            <th scope="col">#</th>
+            <th scope="col">Name</th>
+            <th scope="col">Est. time</th>
+            <th scope="col">Type</th>
+            <th scope="col">Level</th>
+            <th scope="col">Progress</th>
+            <th scope="col"><span class="sr-only">Actions</span></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for scenario in scenarios %}
+            <tr>
+              <td class="row-number">{{ loop.index }}</td>
+              <td>
+                <a class="scenario-name" href="/scenarios/{{ scenario.scenario_id }}">{{ scenario.title }}</a>
+                <span class="scenario-summary">{{ scenario.summary }}</span>
+              </td>
+              <td class="nowrap">~{{ scenario.estimated_minutes }} min</td>
+              <td><span class="tag tag-type">{{ scenario.task_type.value }}</span></td>
+              <td><span class="tag tag-level">{{ scenario.difficulty.value }}</span></td>
+              <td>
+                {% set progress = progress_by_scenario.get(scenario.scenario_id) %}
+                {% if progress and progress.solved %}
+                  <span class="progress-solved" title="Passed after {{ progress.attempts }} check attempt{% if progress.attempts != 1 %}s{% endif %}">✓ Solved</span>
+                {% elif active_by_scenario.get(scenario.scenario_id) %}
+                  <a class="progress-active" href="/sessions/{{ active_by_scenario[scenario.scenario_id].state.session_id }}">Active</a>
+                {% elif progress %}
+                  <span class="progress-partial">Best {{ progress.best_earned_weight }}/{{ progress.best_available_weight }}</span>
+                {% else %}
+                  <span class="progress-empty">Not solved</span>
+                {% endif %}
+              </td>
+              <td class="row-actions">
+                <a class="button button-secondary" href="/scenarios/{{ scenario.scenario_id }}">Info</a>
+                <button
+                  class="button button-primary"
+                  type="button"
+                  data-job-endpoint="/api/scenarios/{{ scenario.scenario_id }}/sessions"
+                  data-job-label="Launching {{ scenario.title }}"
+                >Run</button>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+{% endblock %}

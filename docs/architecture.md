@@ -36,9 +36,11 @@ ready -> destroying -> destroyed
 failed -> resetting | destroying
 ```
 
-Transitions are serialized per session. A durable operation record makes interrupted
-operations observable and recoverable. Updates use revision-checked compare-and-swap writes,
-so two processes cannot silently overwrite one another's lifecycle transition.
+Web mutations are serialized by one background worker, with duplicate active operations on
+the same resource rejected. Session transitions and resource ownership are durable; the
+current web job envelope itself is process-local. Updates use revision-checked
+compare-and-swap writes, so two processes cannot silently overwrite one another's lifecycle
+transition. Durable job resumption remains required before multi-process deployment.
 
 ## Resource ownership and host safety
 
@@ -60,6 +62,7 @@ not loosen permissions on the libvirt socket. Access is inherited from the user'
 - Golden images are read-only and identified by a content digest plus build manifest.
 - Every session disk is a qcow2 overlay whose backing image is immutable.
 - Session metadata and generated console credentials are stored in a mode-0600 SQLite file.
+- Version-specific check attempts and solved progress remain after disposable VMs are removed.
 - Scenario-specific disks are sparse and disposable.
 - Setup runs before learner access and is itself verified.
 - Reset destroys only session overlays and recreates the same declared topology.
@@ -89,6 +92,17 @@ timeouts and output limits.
 5. **Scenario replay:** broken -> repair -> pass -> reboot -> pass -> reset -> broken.
 6. **Mutation:** representative incomplete or unsafe repairs must not receive a pass.
 7. **Web end-to-end:** the browser drives the same API after the engine is already proven.
+
+## Local web boundary
+
+`labctl up` binds only to loopback and serves the LFCS topic at
+`/scenarios/topic/lfcs`. Trusted-host filtering, a non-simple same-origin action header,
+content-security policy, and no-store responses protect local mutation and credential-bearing
+pages. VM start, check, reset, and destroy requests return background job identifiers; the
+browser polls terminal state without keeping an HTTP request open during guest boot.
+
+The ordinary scenario duration is descriptive metadata only. Nothing expires a learner
+session. A future timed mock-exam mode will be explicit and separate.
 
 Fast tests run on every change. Live verification can run locally and later on a dedicated
 KVM-capable CI runner. `labctl verify` will expose the same replay system outside pytest.

@@ -11,6 +11,7 @@ from sysadmin_lab.adapters.guest_checks import (
 )
 from sysadmin_lab.adapters.libvirt_gateway import LibvirtGateway
 from sysadmin_lab.adapters.sqlite_machines import SqliteSessionMachineRepository
+from sysadmin_lab.adapters.sqlite_progress import SqliteCheckAttemptRepository
 from sysadmin_lab.adapters.sqlite_registry import SqliteResourceRegistry
 from sysadmin_lab.adapters.sqlite_sessions import SqliteSessionRepository
 from sysadmin_lab.adapters.ssh_guest import BoundedSubprocessRunner, SshGuestExecutor
@@ -18,6 +19,7 @@ from sysadmin_lab.application.actions import ActionRunner
 from sysadmin_lab.application.checking import CheckEngine
 from sysadmin_lab.application.guest_execution import GuestReadiness
 from sysadmin_lab.application.machines import DomainLeaseReadiness
+from sysadmin_lab.application.progress import ProgressService
 from sysadmin_lab.application.resources import ResourceManager
 from sysadmin_lab.application.scenario_sessions import ScenarioSessionService
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder, SubprocessRunner
@@ -34,6 +36,7 @@ class VmRuntime:
     vm_sessions: SingleHostVmSessionService
     checks: SessionCheckService
     scenarios: ScenarioSessionService
+    progress: ProgressService
 
     def __init__(self, runtime_root: Path) -> None:
         self._runtime_root = runtime_root.resolve()
@@ -46,6 +49,8 @@ class VmRuntime:
         resources = self._stack.enter_context(SqliteResourceRegistry(state_path))
         session_repository = self._stack.enter_context(SqliteSessionRepository(state_path))
         self.machines = self._stack.enter_context(SqliteSessionMachineRepository(state_path))
+        attempts = self._stack.enter_context(SqliteCheckAttemptRepository(state_path))
+        self.progress = ProgressService(attempts)
         self.sessions = SessionCoordinator(session_repository)
         executor = SshGuestExecutor(BoundedSubprocessRunner())
         self.vm_sessions = SingleHostVmSessionService(
@@ -74,6 +79,7 @@ class VmRuntime:
             vm_sessions=self.vm_sessions,
             checks=self.checks,
             actions=ActionRunner(executor),
+            progress=self.progress,
         )
         return self
 

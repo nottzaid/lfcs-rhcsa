@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import webbrowser
 from pathlib import Path
+from socket import AF_INET, AF_INET6, SOCK_STREAM, socket
+from threading import Timer
 from typing import Annotated
 from uuid import UUID
 
@@ -30,6 +33,57 @@ session_app = typer.Typer(help="Operate low-level lab VM sessions.")
 app.add_typer(session_app, name="session")
 scenario_app = typer.Typer(help="Start, check, reset, and destroy learner scenarios.")
 app.add_typer(scenario_app, name="scenario")
+
+
+def _loopback_port_available(host: str, port: int) -> bool:
+    family = AF_INET6 if host == "::1" else AF_INET
+    bind_host = "::1" if family == AF_INET6 else "127.0.0.1"
+    with socket(family, SOCK_STREAM) as probe:
+        try:
+            probe.bind((bind_host, port))
+        except OSError:
+            return False
+    return True
+
+
+@app.command("up")
+def up(
+    host: Annotated[
+        str, typer.Option(help="Loopback address for the local website.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8787,
+    open_browser: Annotated[
+        bool, typer.Option("--open-browser/--no-browser", help="Open the local site automatically.")
+    ] = True,
+    project_root: Annotated[Path, typer.Option(file_okay=False)] = Path("."),
+) -> None:
+    """Start the local scenario website and background lab controller."""
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        typer.echo("labctl up only binds to a loopback address", err=True)
+        raise typer.Exit(code=2)
+    root = project_root.resolve()
+    required = (root / "scenarios", root / "images" / "rocky-10.2" / "manifest.yaml")
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        typer.echo(f"project root is missing required paths: {', '.join(missing)}", err=True)
+        raise typer.Exit(code=2)
+    if not _loopback_port_available(host, port):
+        typer.echo(f"loopback port {port} is already in use; choose another with --port", err=True)
+        raise typer.Exit(code=2)
+
+    import uvicorn
+
+    from sysadmin_lab.web import create_app
+
+    display_host = "[::1]" if host == "::1" else host
+    url = f"http://{display_host}:{port}/scenarios/topic/lfcs"
+    typer.echo(f"Linux Admin Lab: {url}")
+    typer.echo("Press Ctrl+C to stop the website. Running scenario VMs remain under your control.")
+    if open_browser:
+        opener = Timer(0.8, webbrowser.open, args=(url,))
+        opener.daemon = True
+        opener.start()
+    uvicorn.run(create_app(root), host=host, port=port, log_level="info")
 
 
 @catalog_app.command("validate")

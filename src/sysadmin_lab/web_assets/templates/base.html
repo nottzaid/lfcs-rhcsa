@@ -1,0 +1,33 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% block title %}Linux Admin Lab{% endblock %}</title>
+    <link rel="icon" href="{{ url_for('static', path='/favicon.svg') }}" type="image/svg+xml">
+    <link rel="stylesheet" href="{{ url_for('static', path='/app.css') }}">
+    <script src="{{ url_for('static', path='/app.js') }}" defer></script>
+  </head>
+  <body>
+    <header class="site-header">
+      <a class="brand" href="/scenarios/topic/lfcs" aria-label="Linux Admin Lab home">
+        <span class="brand-mark" aria-hidden="true">$</span>
+        <span>
+          <strong>Linux Admin Lab</strong>
+          <small>local · state-graded · KVM</small>
+        </span>
+      </a>
+      <div class="host-state"><span></span> local lab</div>
+    </header>
+    <main class="page-shell">
+      {% block content %}{% endblock %}
+    </main>
+    <div id="operation-panel" class="operation-panel" hidden aria-live="polite">
+      <div class="operation-spinner" aria-hidden="true"></div>
+      <div>
+        <strong id="operation-title">Working…</strong>
+        <p id="operation-message">The local lab is preparing your machine.</p>
+      </div>
+    </div>
+  </body>
+</html>

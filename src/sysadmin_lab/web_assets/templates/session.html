@@ -1,0 +1,78 @@
+{% extends "base.html" %}
+{% block title %}{{ scenario.title }} · Active lab{% endblock %}
+{% block content %}
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a href="/scenarios/topic/lfcs">LFCS</a><span>/</span><a href="/scenarios/{{ scenario.scenario_id }}">{{ scenario.scenario_id }}</a><span>/</span><strong>active lab</strong>
+  </nav>
+  <section class="session-heading">
+    <div>
+      <p class="eyebrow">Active scenario</p>
+      <h1>{{ scenario.title }}</h1>
+    </div>
+    <div class="session-status status-{{ session.state.status.value }}"><span></span>{{ session.state.status.value }}</div>
+  </section>
+
+  <div class="session-layout">
+    <div>
+      <section class="task-card">
+        <p class="eyebrow">Required end state</p>
+        <p class="task-copy">{{ scenario.task }}</p>
+      </section>
+
+      <section class="check-card">
+        <div class="section-heading">
+          <div>
+            <h2>Verify your work</h2>
+            <p>The checker evaluates the resulting system state, not the commands you used.</p>
+          </div>
+          <button
+            class="button button-success button-large"
+            type="button"
+            data-job-endpoint="/api/sessions/{{ session.state.session_id }}/check"
+            data-job-label="Checking machine state"
+            data-job-render="checks"
+          >Check solution</button>
+        </div>
+        <div id="check-results" class="check-results" hidden></div>
+      </section>
+    </div>
+
+    <aside>
+      <section class="connection-card">
+        <p class="eyebrow">Connect</p>
+        {% for machine in session.machines %}
+          <div class="connection-machine">
+            <div class="connection-title"><strong>{{ machine.host_name }}</strong><span>{{ machine.identity.name }}</span></div>
+            <dl>
+              <div><dt>Address</dt><dd>{{ machine.address or "Waiting for DHCP" }}</dd></div>
+              <div><dt>Username</dt><dd>{{ machine.username }}</dd></div>
+              <div><dt>Password</dt><dd><code>{{ machine.password }}</code></dd></div>
+            </dl>
+            {% if machine.address %}
+              <label for="ssh-{{ loop.index }}">SSH</label>
+              <code id="ssh-{{ loop.index }}" class="command-block">ssh -i {{ machine.private_key }} {{ machine.username }}@{{ machine.address }}</code>
+            {% endif %}
+          </div>
+        {% endfor %}
+        <p class="aside-note">Open <strong>{{ session.machines[0].identity.name if session.machines else "the project VM" }}</strong> in virt-manager for its graphical or serial console.</p>
+      </section>
+
+      <section class="session-controls">
+        <button
+          class="button button-secondary"
+          type="button"
+          data-job-endpoint="/api/sessions/{{ session.state.session_id }}/reset"
+          data-job-label="Resetting scenario"
+        >Reset cleanly</button>
+        <button
+          class="button button-danger"
+          type="button"
+          data-job-endpoint="/api/sessions/{{ session.state.session_id }}/destroy"
+          data-job-label="Destroying scenario"
+          data-job-confirm="Destroy this disposable scenario VM?"
+        >Destroy</button>
+      </section>
+      <p class="session-id">Session {{ session.state.session_id }}</p>
+    </aside>
+  </div>
+{% endblock %}

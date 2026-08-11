@@ -11,17 +11,21 @@ outcome, and checks the resulting behavior after the learner has administered th
 
 ## Quick start
 
-The stable release will provide a one-command bootstrap. After installation, the complete
-day-to-day startup interface is:
+From a development checkout on the current supported host:
 
 ```bash
-labctl up
+uv sync
+uv run labctl up
 ```
 
-It will verify host capabilities, prepare or verify the local base image, start the website
-and required scenario machines, and display the local URL. Until the first release is ready,
-this section will not advertise an installation command that has not itself been tested on a
-clean supported host.
+This opens the LFCS scenario collection at `http://127.0.0.1:8787/scenarios/topic/lfcs`.
+Choose **Info** to inspect a task or **Run** to acquire/verify its image and launch the
+disposable VM in the background. Active machines are visible in virt-manager. Scenario time
+values are estimates only: ordinary labs never expire or destroy a VM on a timer.
+
+The stable release target remains the shorter installed command, `labctl up`, plus a
+one-command bootstrap tested on a clean supported host. This README will not advertise an
+installation URL until that release path is real and replay-verified.
 
 ## Non-negotiable properties
 
@@ -50,11 +54,16 @@ harness. No scenario logic may exist only in the browser.
 
 ## Current status
 
-The repository is establishing its production architecture and executable scenario contract.
-Scenario content has begun: `local-account-repair` is the first scenario to pass the complete
-live broken → repair → pass → reset → broken contract. It is not yet exposed through the
-learner website. The SELinux manifest under `examples/` remains a draft contract fixture and
-is not released scenario content.
+The production browser loop is operational. Its `/scenarios/topic/lfcs` page lists the local
+LFCS collection; scenario and session pages expose the task, affected machines, virt-manager
+domain, SSH/console access, and **Check**, **Reset**, and **Destroy** controls. Slow VM work is
+serialized through background jobs, and check attempts, best score, and version-specific
+Solved state survive VM destruction and website restarts.
+
+Scenario content has begun: `local-account-repair` is the first scenario to pass both the
+complete live broken → repair → pass → reset → broken verification contract and the real
+browser Run → fail → repair → pass → destroy lifecycle. The SELinux manifest under
+`examples/` remains a draft contract fixture and is not released scenario content.
 
 The infrastructure can acquire and verify the pinned Rocky Linux 10.2 cloud image, create a
 disposable QCOW2 overlay and cloud-init seed, boot an ownership-guarded system-libvirt domain,
@@ -63,9 +72,9 @@ resources. Session state, machine access details, and resource ownership survive
 processes in a private SQLite database. See [docs/architecture.md](docs/architecture.md) and
 the architecture decisions in [docs/adr](docs/adr).
 
-The learner lifecycle is now available from the CLI while the website is being built. From a
-development checkout, one command acquires or verifies the pinned image, creates the broken
-machine, and prints its virt-manager domain, SSH command, console credentials, and task:
+The same learner lifecycle remains available without a browser. One command acquires or
+verifies the pinned image, creates the broken machine, and prints its virt-manager domain,
+SSH command, console credentials, and task:
 
 ```bash
 uv run labctl scenario start local-account-repair
@@ -80,8 +89,7 @@ uv run labctl scenario reset SESSION_UUID
 uv run labctl scenario destroy SESSION_UUID
 ```
 
-These commands use the permanent application service that the website will call. The stable
-learner release still targets the shorter installed form and full-site startup: `labctl up`.
+These commands and the website use the same application services and durable state.
 
 ## Development
 

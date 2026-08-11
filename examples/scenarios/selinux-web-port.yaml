@@ -4,6 +4,9 @@ version: 1
 status: draft
 title: The intranet moved, but nobody can reach it
 summary: A web service has been moved to a non-default port and is unreachable.
+estimated_minutes: 30
+task_type: troubleshoot
+difficulty: advanced
 task: >-
   Restore HTTP access from the client to port 8088 on web1. Keep SELinux enforcing,
   preserve the host firewall, and ensure the service works after web1 is rebooted.

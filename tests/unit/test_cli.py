@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from socket import AF_INET, SOCK_STREAM, socket
 from types import SimpleNamespace
 from uuid import UUID
 
@@ -191,3 +192,17 @@ def test_public_scenario_commands_use_learner_service(
     destroyed = runner.invoke(app, ["scenario", "destroy", str(SESSION_ID)])
     assert destroyed.exit_code == 0
     assert "destroyed" in destroyed.stdout
+
+
+def test_up_rejects_non_loopback_and_busy_port() -> None:
+    non_loopback = runner.invoke(app, ["up", "--host", "0.0.0.0", "--no-browser"])
+    assert non_loopback.exit_code == 2
+    assert "only binds to a loopback" in non_loopback.stderr
+
+    with socket(AF_INET, SOCK_STREAM) as listener:
+        listener.bind(("127.0.0.1", 0))
+        port = listener.getsockname()[1]
+        listener.listen()
+        busy = runner.invoke(app, ["up", "--port", str(port), "--no-browser"])
+    assert busy.exit_code == 2
+    assert f"port {port} is already in use" in busy.stderr
