@@ -63,14 +63,25 @@ resources. Session state, machine access details, and resource ownership survive
 processes in a private SQLite database. See [docs/architecture.md](docs/architecture.md) and
 the architecture decisions in [docs/adr](docs/adr).
 
-The low-level engineering interface can currently start, inspect, and destroy a single-host
-session. It is not yet the learner quick start:
+The learner lifecycle is now available from the CLI while the website is being built. From a
+development checkout, one command acquires or verifies the pinned image, creates the broken
+machine, and prints its virt-manager domain, SSH command, console credentials, and task:
 
 ```bash
-labctl session start /absolute/path/to/verified-base.qcow2
-labctl session status SESSION_UUID
-labctl session destroy SESSION_UUID
+uv run labctl scenario start local-account-repair
 ```
+
+The returned session UUID drives the remaining operations:
+
+```bash
+uv run labctl scenario check SESSION_UUID
+uv run labctl scenario status SESSION_UUID
+uv run labctl scenario reset SESSION_UUID
+uv run labctl scenario destroy SESSION_UUID
+```
+
+These commands use the permanent application service that the website will call. The stable
+learner release still targets the shorter installed form and full-site startup: `labctl up`.
 
 ## Development
 

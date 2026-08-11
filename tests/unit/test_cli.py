@@ -10,8 +10,10 @@ from typer.testing import CliRunner
 
 from sysadmin_lab.application.checking import CheckReport, CheckResult
 from sysadmin_lab.application.ports import CheckObservation
+from sysadmin_lab.application.scenario_sessions import StartedScenario
 from sysadmin_lab.catalog import load_catalog
 from sysadmin_lab.cli import app
+from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
@@ -94,6 +96,20 @@ class FakeRuntime:
                 )
             )
         )
+        self.report = self.checks.run(SESSION_ID, manifest)
+        self.started = StartedScenario(
+            SimpleNamespace(state=self.ready, machine=self.machine),  # type: ignore[arg-type]
+            self.report,
+        )
+        destroyed_state = self.ready.transition(SessionStatus.DESTROYING).transition(
+            SessionStatus.DESTROYED
+        )
+        self.scenarios = SimpleNamespace(
+            start=lambda _manifest, _setup, _images: self.started,
+            check=lambda _session_id, _manifest: self.report,
+            reset=lambda _session_id, _manifest, _setup, _images: self.started,
+            destroy=lambda _session_id: destroyed_state,
+        )
 
     def __enter__(self) -> FakeRuntime:
         return self
@@ -137,3 +153,41 @@ def test_session_commands_use_shared_runtime_service(
     )
     assert checked.exit_code == 0
     assert f"PASS {fake.check_id}: matched" in checked.stdout
+
+
+def test_public_scenario_commands_use_learner_service(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeRuntime(tmp_path)
+    root = Path(__file__).parents[2]
+    scenario = load_catalog(root / "scenarios")[0]
+    setup = ActionManifest.model_validate(
+        {"actions": [{"action_id": "setup", "target": "node1", "arguments": ["true"]}]}
+    )
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: fake)
+    monkeypatch.setattr("sysadmin_lab.cli.find_scenario", lambda _path, _id: scenario)
+    monkeypatch.setattr(
+        "sysadmin_lab.cli._scenario_launch_inputs",
+        lambda *_args: (scenario, setup, {"rocky-10.2-base-v1": tmp_path / "base.qcow2"}),
+    )
+
+    started = runner.invoke(app, ["scenario", "start", scenario.scenario_id])
+    assert started.exit_code == 0
+    assert f"session: {SESSION_ID}" in started.stdout
+    assert f"task: {scenario.task}" in started.stdout
+
+    checked = runner.invoke(app, ["scenario", "check", str(SESSION_ID)])
+    assert checked.exit_code == 0
+    assert "score: 1/1" in checked.stdout
+
+    status = runner.invoke(app, ["scenario", "status", str(SESSION_ID)])
+    assert status.exit_code == 0
+    assert "status: ready" in status.stdout
+
+    reset = runner.invoke(app, ["scenario", "reset", str(SESSION_ID)])
+    assert reset.exit_code == 0
+    assert f"replaced session: {SESSION_ID}" in reset.stdout
+
+    destroyed = runner.invoke(app, ["scenario", "destroy", str(SESSION_ID)])
+    assert destroyed.exit_code == 0
+    assert "destroyed" in destroyed.stdout

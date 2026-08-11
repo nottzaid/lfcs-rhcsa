@@ -35,6 +35,14 @@ def load_catalog(path: Path) -> tuple[ScenarioManifest, ...]:
     return manifests
 
 
+def find_scenario(path: Path, scenario_id: str) -> ScenarioManifest:
+    manifests = load_catalog(path)
+    try:
+        return next(manifest for manifest in manifests if manifest.scenario_id == scenario_id)
+    except StopIteration as exc:
+        raise CatalogError(f"scenario does not exist: {scenario_id}") from exc
+
+
 def load_image_manifest(path: Path) -> ImageManifest:
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8"))

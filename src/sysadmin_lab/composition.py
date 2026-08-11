@@ -14,10 +14,12 @@ from sysadmin_lab.adapters.sqlite_machines import SqliteSessionMachineRepository
 from sysadmin_lab.adapters.sqlite_registry import SqliteResourceRegistry
 from sysadmin_lab.adapters.sqlite_sessions import SqliteSessionRepository
 from sysadmin_lab.adapters.ssh_guest import BoundedSubprocessRunner, SshGuestExecutor
+from sysadmin_lab.application.actions import ActionRunner
 from sysadmin_lab.application.checking import CheckEngine
 from sysadmin_lab.application.guest_execution import GuestReadiness
 from sysadmin_lab.application.machines import DomainLeaseReadiness
 from sysadmin_lab.application.resources import ResourceManager
+from sysadmin_lab.application.scenario_sessions import ScenarioSessionService
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder, SubprocessRunner
 from sysadmin_lab.application.session_checks import SessionCheckService
 from sysadmin_lab.application.sessions import SessionCoordinator
@@ -31,6 +33,7 @@ class VmRuntime:
     machines: SqliteSessionMachineRepository
     vm_sessions: SingleHostVmSessionService
     checks: SessionCheckService
+    scenarios: ScenarioSessionService
 
     def __init__(self, runtime_root: Path) -> None:
         self._runtime_root = runtime_root.resolve()
@@ -64,6 +67,13 @@ class VmRuntime:
                     ServiceCheckProvider(executor),
                 )
             ),
+        )
+        self.scenarios = ScenarioSessionService(
+            sessions=self.sessions,
+            machines=self.machines,
+            vm_sessions=self.vm_sessions,
+            checks=self.checks,
+            actions=ActionRunner(executor),
         )
         return self
 
