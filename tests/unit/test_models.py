@@ -36,6 +36,7 @@ def minimal_manifest() -> dict[str, object]:
         ],
         "setup": "actions/valid.setup.yaml",
         "reference_solution": "solutions/valid.yaml",
+        "alternate_solutions": ["solutions/alternate.yaml"],
     }
 
 

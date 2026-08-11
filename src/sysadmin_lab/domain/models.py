@@ -155,6 +155,7 @@ class ScenarioManifest(StrictModel):
     persistence: PersistenceSpec = PersistenceSpec()
     setup: str = Field(min_length=1)
     reference_solution: str = Field(min_length=1)
+    alternate_solutions: tuple[str, ...] = ()
 
     @model_validator(mode="after")
     def validate_references(self) -> Self:

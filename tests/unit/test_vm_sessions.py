@@ -136,9 +136,13 @@ class FakeLeases:
 @dataclass
 class FakeReadiness:
     endpoints: list[GuestEndpoint] = field(default_factory=list)
+    restarted: list[GuestEndpoint] = field(default_factory=list)
 
     def wait(self, endpoint: GuestEndpoint) -> None:
         self.endpoints.append(endpoint)
+
+    def wait_for_restart(self, endpoint: GuestEndpoint) -> None:
+        self.restarted.append(endpoint)
 
 
 @dataclass
@@ -196,6 +200,40 @@ def test_service_provisions_persists_and_exactly_destroys_machine(tmp_path: Path
     assert resources.removed == [provisioned.machine.identity.name]
     assert artifacts.destroyed == [(provisioned.state.session_id, "node1")]
     assert sessions.states[provisioned.state.session_id] == destroyed
+
+
+def test_service_reboots_only_an_owned_ready_machine(tmp_path: Path) -> None:
+    service, sessions, _machines, _artifacts, _resources, readiness, executor = dependencies(
+        tmp_path
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(
+        scenario_id="persistent-kernel-tuning", host_name="node2", base_image=base
+    )
+
+    service.reboot(provisioned.state.session_id, ("node2",))
+
+    assert executor.calls[-1][1] == ("sudo", "--", "systemctl", "reboot")
+    assert readiness.restarted == [
+        GuestEndpoint("192.0.2.10", "labadmin", (tmp_path / "artifacts" / "key").resolve())
+    ]
+    assert sessions.states[provisioned.state.session_id].status is SessionStatus.READY
+    assert sessions.states[provisioned.state.session_id].revision == 4
+
+
+def test_service_reboot_rejects_unknown_or_empty_targets(tmp_path: Path) -> None:
+    service, _sessions, _machines, _artifacts, _resources, _readiness, _executor = dependencies(
+        tmp_path
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(scenario_id="base-smoke", host_name="node2", base_image=base)
+
+    with pytest.raises(VmProvisioningError, match="at least one"):
+        service.reboot(provisioned.state.session_id, ())
+    with pytest.raises(VmProvisioningError, match="unknown reboot hosts"):
+        service.reboot(provisioned.state.session_id, ("node3",))
 
 
 def test_service_cleans_resources_and_records_failed_cloud_init(tmp_path: Path) -> None:

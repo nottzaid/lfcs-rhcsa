@@ -19,5 +19,7 @@ def test_released_scenarios_resolve_curriculum_and_action_manifests() -> None:
     for scenario in scenarios:
         load_action_manifest(root / "scenarios" / scenario.setup)
         load_action_manifest(root / "scenarios" / scenario.reference_solution)
+        for alternate in scenario.alternate_solutions:
+            load_action_manifest(root / "scenarios" / alternate)
         for check in scenario.checks:
             validate_guest_check_parameters(check)

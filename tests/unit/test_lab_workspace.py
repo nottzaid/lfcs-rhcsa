@@ -71,9 +71,9 @@ def test_workspace_paths_and_catalog_access(tmp_path: Path) -> None:
 
     root = Path(__file__).parents[2]
     workspace = LabWorkspace(WorkspacePaths.under(root))
-    expected = load_catalog(root / "scenarios")[0]
-    assert workspace.scenarios() == (expected,)
-    assert workspace.scenario(expected.scenario_id) == expected
+    expected = load_catalog(root / "scenarios")
+    assert workspace.scenarios() == expected
+    assert workspace.scenario(expected[0].scenario_id) == expected[0]
 
 
 def test_workspace_delegates_complete_learner_lifecycle(

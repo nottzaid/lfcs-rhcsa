@@ -2,7 +2,9 @@
 
 - Authority: Linux Foundation Education
 - Retrieved: 2026-08-11
+- Certification page last modified by publisher: 2026-08-06
 - Machine-readable record: [`curricula/lfcs-2026-08.yaml`](../../curricula/lfcs-2026-08.yaml)
+- Machine-checked portfolio: [`curricula/lfcs-2026-08-portfolio.yaml`](../../curricula/lfcs-2026-08-portfolio.yaml)
 
 ## Published domains
 
@@ -28,6 +30,11 @@ remote nodes over SSH; root access is available with `sudo -i`; `node-1` must no
 while other nodes may be rebooted. Allowed in-terminal resources include man pages,
 distribution-installed documentation, and distribution packages.
 
+The instructions also say candidates should return to `node-1` instead of nesting SSH
+connections, must not manipulate the firewall on `node-1`, and must not block TCP ports 8080,
+4505, or 4506. Lab scenarios therefore use designated secondary nodes for reboot and firewall
+work, and reserve the controller role for access and grading.
+
 The official
 [scoring guidance](https://docs.linuxfoundation.org/tc-docs/certification/lf-handbook2/exam-scoring-and-notification)
 says performance tasks may have more than one valid method and are judged by the correct
@@ -44,3 +51,16 @@ why scenario validation must not require one command history.
 - RHCSA and professional-operation references can enrich a scenario but remain separate tracks.
 - The snapshot date is part of the curriculum ID. A future objective change creates a new
   snapshot and an explicit scenario-reference migration rather than silently changing scope.
+
+## Corroboration and confidence
+
+Exa and LinkUp independently rediscovered the same Linux Foundation certification and instruction
+pages. Targeted searches for a later 2025–2026 objective revision found no contradictory official
+scope, and the certification page itself was modified five days before retrieval. Confidence that
+this snapshot represents the published scope on 2026-08-11 is high. This says nothing about secret
+exam tasks: the project intentionally derives original exercises only from public competencies and
+real administration behavior.
+
+See the [existing-material audit](existing-material-audit.md) for evaluated project and book
+references, and the [default-distribution decision](default-distribution.md) for the Rocky 10.2
+choice.

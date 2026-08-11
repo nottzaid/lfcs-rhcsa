@@ -125,6 +125,46 @@ class SingleHostVmSessionService:
             self._sessions.transition(session_id, SessionStatus.FAILED, error=str(exc))
             raise
 
+    def reboot(self, session_id: UUID, host_names: tuple[str, ...]) -> None:
+        state = self._sessions.get(session_id)
+        if state.status is not SessionStatus.READY:
+            raise VmProvisioningError("only a ready scenario can be rebooted")
+        requested = set(host_names)
+        if not requested:
+            raise VmProvisioningError("at least one reboot host is required")
+        machines = self._machines.list(session_id)
+        available = {machine.host_name for machine in machines}
+        unknown = sorted(requested - available)
+        if unknown:
+            raise VmProvisioningError(f"unknown reboot hosts: {', '.join(unknown)}")
+        self._sessions.transition(session_id, SessionStatus.REBOOTING)
+        try:
+            for machine in machines:
+                if machine.host_name not in requested:
+                    continue
+                if machine.address is None:
+                    raise VmProvisioningError(f"machine has no address: {machine.host_name}")
+                endpoint = GuestEndpoint(
+                    machine.address,
+                    machine.username,
+                    machine.private_key,
+                )
+                result = self._guest_executor.run(
+                    endpoint,
+                    ("sudo", "--", "systemctl", "reboot"),
+                    timeout_seconds=10,
+                )
+                if result.exit_code not in {0, 255}:
+                    detail = result.stderr.strip() or result.stdout.strip()
+                    raise VmProvisioningError(
+                        f"reboot command failed for {machine.host_name}: {detail}"
+                    )
+                self._guest_readiness.wait_for_restart(endpoint)
+        except Exception as exc:
+            self._sessions.transition(session_id, SessionStatus.FAILED, error=str(exc))
+            raise
+        self._sessions.transition(session_id, SessionStatus.READY)
+
     def _cleanup_failed_provision(
         self,
         state: SessionState,

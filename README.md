@@ -60,10 +60,15 @@ domain, SSH/console access, and **Check**, **Reset**, and **Destroy** controls. 
 serialized through background jobs, and check attempts, best score, and version-specific
 Solved state survive VM destruction and website restarts.
 
-Scenario content has begun: `local-account-repair` is the first scenario to pass both the
-complete live broken → repair → pass → reset → broken verification contract and the real
-browser Run → fail → repair → pass → destroy lifecycle. The SELinux manifest under
-`examples/` remains a draft contract fixture and is not released scenario content.
+Scenario content has begun. `local-account-repair` passes both the complete live broken →
+repair → pass → reset → broken contract and the real browser lifecycle. The second released
+scenario, `persistent-kernel-tuning`, proves live and persistent sysctl state through two
+different valid solution paths, two real guest reboots, and a clean reprovision. The SELinux
+manifest under `examples/` remains a draft contract fixture and is not released content.
+
+The current-scope research, audited projects and books, default-distribution decision, and
+machine-checked 36-focused-scenario/7-capstone/3-mock portfolio are under
+[`docs/research`](docs/research) and [`curricula`](curricula).
 
 The infrastructure can acquire and verify the pinned Rocky Linux 10.2 cloud image, create a
 disposable QCOW2 overlay and cloud-init seed, boot an ownership-guarded system-libvirt domain,

@@ -1,0 +1,26 @@
+schema_version: 1
+actions:
+  - action_id: edit-forwarding-value
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sed
+      - --in-place
+      - s/net.ipv4.ip_forward = 0/net.ipv4.ip_forward = 1/
+      - /etc/sysctl.d/90-lal-gateway.conf
+  - action_id: edit-watch-limit
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sed
+      - --in-place
+      - s/fs.inotify.max_user_watches = 8192/fs.inotify.max_user_watches = 524288/
+      - /etc/sysctl.d/90-lal-gateway.conf
+  - action_id: set-live-forwarding
+    target: node2
+    arguments: [sudo, --, sysctl, --write, net.ipv4.ip_forward=1]
+  - action_id: set-live-watch-limit
+    target: node2
+    arguments: [sudo, --, sysctl, --write, fs.inotify.max_user_watches=524288]

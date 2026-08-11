@@ -1,0 +1,85 @@
+schema_version: 1
+scenario_id: persistent-kernel-tuning
+version: 1
+status: verified
+title: The gateway tuning disappears after maintenance
+summary: Apply required kernel settings immediately and make them survive a reboot.
+estimated_minutes: 20
+task_type: configure
+difficulty: foundation
+task: >-
+  The application gateway on node2 must forward IPv4 traffic and support a larger number of
+  inotify watches. Set net.ipv4.ip_forward to 1 and fs.inotify.max_user_watches to 524288 in
+  the running kernel. Make both settings persistent in /etc/sysctl.d/90-lal-gateway.conf so
+  they are restored after node2 reboots. Do not reboot node1; it is not part of this scenario.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.kernel-parameters
+    title: Configure kernel parameters, persistent and non-persistent
+  - track: professional
+    version: v1
+    objective_id: apply-runtime-and-persistent-kernel-tuning
+    title: Distinguish live kernel state from boot-time configuration
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: Linux kernel IP sysctl documentation
+    url: https://docs.kernel.org/networking/ip-sysctl.html
+  - kind: upstream
+    title: Linux kernel filesystem sysctl documentation
+    url: https://docs.kernel.org/admin-guide/sysctl/fs.html
+  - kind: man-page
+    title: sysctl manual
+    man_page: sysctl(8)
+  - kind: man-page
+    title: sysctl.d manual
+    man_page: sysctl.d(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-base-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: forwarding-live
+    kind: command
+    target: node2
+    description: IPv4 forwarding is enabled in the running kernel.
+    parameters:
+      arguments: [sysctl, --values, net.ipv4.ip_forward]
+      stdout_equals: "1"
+  - check_id: watches-live
+    kind: command
+    target: node2
+    description: The running kernel has the required inotify watch limit.
+    parameters:
+      arguments: [sysctl, --values, fs.inotify.max_user_watches]
+      stdout_equals: "524288"
+  - check_id: forwarding-persistent
+    kind: file
+    target: node2
+    description: The persistent sysctl file enables IPv4 forwarding.
+    parameters:
+      path: /etc/sysctl.d/90-lal-gateway.conf
+      kind: file
+      owner: root
+      group: root
+      mode: "0644"
+      contains: net.ipv4.ip_forward = 1
+  - check_id: watches-persistent
+    kind: file
+    target: node2
+    description: The persistent sysctl file records the required inotify limit.
+    parameters:
+      path: /etc/sysctl.d/90-lal-gateway.conf
+      kind: file
+      contains: fs.inotify.max_user_watches = 524288
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/persistent-kernel-tuning.setup.yaml
+reference_solution: actions/persistent-kernel-tuning.solution.yaml
+alternate_solutions: [actions/persistent-kernel-tuning.alternate.yaml]

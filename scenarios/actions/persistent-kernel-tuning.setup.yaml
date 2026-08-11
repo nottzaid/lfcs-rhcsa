@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: install-stale-kernel-tuning
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' 'net.ipv4.ip_forward = 0'
+        'fs.inotify.max_user_watches = 8192' > /etc/sysctl.d/90-lal-gateway.conf
+  - action_id: apply-stale-kernel-tuning
+    target: node2
+    arguments: [sudo, --, sysctl, --load, /etc/sysctl.d/90-lal-gateway.conf]
