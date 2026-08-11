@@ -4,8 +4,8 @@
   <nav class="crumbs" aria-label="Breadcrumb"><span>Scenarios</span><span>/</span><strong>LFCS</strong></nav>
   <section class="topic-heading">
     <div>
-      <p class="eyebrow">Certification topic</p>
-      <h1>LFCS</h1>
+      <p class="eyebrow">Scenario topic</p>
+      <h1>LFCS scenarios</h1>
       <p>Hands-on administration scenarios mapped to the current published Linux Foundation competencies.</p>
     </div>
     <div class="topic-count"><strong>{{ scenarios|length }}</strong><span>scenario{% if scenarios|length != 1 %}s{% endif %}</span></div>
@@ -15,10 +15,7 @@
     <div class="section-heading">
       <div>
         <h2 id="scenario-list-title">Scenario collection</h2>
-        <p>
-          Choose a task, work on its real VM, then ask the lab to check the resulting state.
-          Times are estimates only; ordinary scenarios have no countdown or time limit.
-        </p>
+        <p>Work on a real local VM, then check the resulting system state. Times are estimates only—there is no limit.</p>
       </div>
     </div>
     <div class="table-scroll">
@@ -27,10 +24,10 @@
           <tr>
             <th scope="col">#</th>
             <th scope="col">Name</th>
-            <th scope="col">Est. time</th>
+            <th scope="col">Time</th>
             <th scope="col">Type</th>
             <th scope="col">Level</th>
-            <th scope="col">Progress</th>
+            <th scope="col">Solved</th>
             <th scope="col"><span class="sr-only">Actions</span></th>
           </tr>
         </thead>
@@ -45,12 +42,12 @@
               <td class="nowrap">
                 ~{{ scenario.estimated_minutes }} min<br><span class="scenario-summary">No limit</span>
               </td>
-              <td><span class="tag tag-type">{{ scenario.task_type.value }}</span></td>
+              <td>{{ scenario.task_type.value|capitalize }}</td>
               <td><span class="tag tag-level">{{ scenario.difficulty.value }}</span></td>
               <td>
                 {% set progress = progress_by_scenario.get(scenario.scenario_id) %}
                 {% if progress and progress.solved %}
-                  <span class="progress-solved" title="Passed after {{ progress.attempts }} check attempt{% if progress.attempts != 1 %}s{% endif %}">✓ Solved</span>
+                  <span class="progress-solved" title="Passed after {{ progress.attempts }} check attempt{% if progress.attempts != 1 %}s{% endif %}">Solved</span>
                 {% elif active_by_scenario.get(scenario.scenario_id) %}
                   <a class="progress-active" href="/sessions/{{ active_by_scenario[scenario.scenario_id].state.session_id }}">Active</a>
                 {% elif progress %}

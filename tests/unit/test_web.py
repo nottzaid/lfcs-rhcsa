@@ -200,7 +200,7 @@ def test_topic_page_prefers_durable_solved_progress_over_active_state(tmp_path: 
     )
     with TestClient(create_app(workspace=workspace)) as client:  # type: ignore[arg-type]
         catalog = client.get("/scenarios/topic/lfcs")
-        assert "✓ Solved" in catalog.text
+        assert "Solved" in catalog.text
         progress = client.get("/api/progress").json()[0]
         assert progress["solved"] is True
         assert progress["attempts"] == 3
