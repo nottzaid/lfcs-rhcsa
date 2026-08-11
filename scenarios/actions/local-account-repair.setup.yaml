@@ -1,0 +1,33 @@
+schema_version: 1
+actions:
+  - action_id: create-wrong-group
+    target: node1
+    arguments: [sudo, --, groupadd, --gid, "4300", releaseops]
+  - action_id: create-wrong-user
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - useradd
+      - --uid
+      - "4301"
+      - --gid
+      - releaseops
+      - --home-dir
+      - /home/deploysvc
+      - --create-home
+      - --shell
+      - /sbin/nologin
+      - deploysvc
+  - action_id: create-handoff-file
+    target: node1
+    arguments: [sudo, --, touch, /home/deploysvc/handoff.txt]
+  - action_id: write-handoff-data
+    target: node1
+    arguments: [sudo, --, sh, -c, "printf '%s\\n' preserve-this-data > /home/deploysvc/handoff.txt"]
+  - action_id: own-wrong-home
+    target: node1
+    arguments: [sudo, --, chown, -R, deploysvc:releaseops, /home/deploysvc]
+  - action_id: expose-wrong-mode
+    target: node1
+    arguments: [sudo, --, chmod, "0755", /home/deploysvc]

@@ -1,0 +1,19 @@
+schema_version: 1
+image_id: rocky-10.2-base-v1
+distribution: Rocky Linux
+release: "10.2"
+architecture: x86_64
+source:
+  kind: qcow2
+  filename: Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2
+  url: https://download.rockylinux.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2
+  checksum_url: https://download.rockylinux.org/pub/rocky/10.2/images/x86_64/Rocky-10-GenericCloud-Base-10.2-20260525.0.x86_64.qcow2.CHECKSUM
+  size_bytes: 544997376
+  sha256: 9fc9e9ff16888bb68ac39b0392e25c9c92684d50c85f1cce6ab549363bbc4b48
+build:
+  method: cloud-image
+  disk_mib: 12288
+  memory_mib: 2048
+  vcpus: 2
+  firmware: uefi
+

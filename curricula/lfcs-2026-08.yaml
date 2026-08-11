@@ -1,0 +1,123 @@
+schema_version: 1
+curriculum_id: lfcs-2026-08
+track: lfcs
+title: Linux Foundation Certified System Administrator
+effective_as_of: 2026-08-11
+sources:
+  - source_id: lfcs-product
+    title: Linux Foundation Certified System Administrator (LFCS)
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+    retrieved_on: 2026-08-11
+  - source_id: lfcs-instructions
+    title: "Important Instructions: LFCS"
+    url: https://docs.linuxfoundation.org/tc-docs/certification/instructions-lfcs-and-lfce
+    retrieved_on: 2026-08-11
+  - source_id: lf-exam-scoring
+    title: Exam Scoring and Notification
+    url: https://docs.linuxfoundation.org/tc-docs/certification/lf-handbook2/exam-scoring-and-notification
+    retrieved_on: 2026-08-11
+domains:
+  - domain_id: operations
+    title: Operations Deployment
+    weight_percent: 25
+    competencies:
+      - competency_id: kernel-parameters
+        title: Configure kernel parameters, persistent and non-persistent
+      - competency_id: processes-services
+        title: Diagnose, identify, manage, and troubleshoot processes and services
+      - competency_id: scheduled-jobs
+        title: Manage or schedule jobs for executing commands
+      - competency_id: packages-repositories
+        title: Search for, install, validate, and maintain software packages or repositories
+      - competency_id: recovery
+        title: Recover from hardware, operating system, or filesystem failures
+      - competency_id: libvirt
+        title: Manage Virtual Machines (libvirt)
+      - competency_id: containers
+        title: Configure container engines, create and manage containers
+      - competency_id: selinux
+        title: Create and enforce MAC using SELinux
+  - domain_id: networking
+    title: Networking
+    weight_percent: 25
+    competencies:
+      - competency_id: ip-hostname
+        title: Configure IPv4 and IPv6 networking and hostname resolution
+      - competency_id: time
+        title: Set and synchronize system time using time servers
+      - competency_id: troubleshoot
+        title: Monitor and troubleshoot networking
+      - competency_id: openssh
+        title: Configure the OpenSSH server and client
+      - competency_id: packet-filtering
+        title: Configure packet filtering, port redirection, and NAT
+      - competency_id: static-routing
+        title: Configure static routing
+      - competency_id: bridges-bonds
+        title: Configure bridge and bonding devices
+      - competency_id: proxies-load-balancers
+        title: Implement reverse proxies and load balancers
+  - domain_id: storage
+    title: Storage
+    weight_percent: 20
+    competencies:
+      - competency_id: lvm
+        title: Configure and manage LVM storage
+      - competency_id: virtual-filesystem
+        title: Manage and configure the virtual file system
+      - competency_id: filesystems
+        title: Create, manage, and troubleshoot filesystems
+      - competency_id: remote-storage
+        title: Use remote filesystems and network block devices
+      - competency_id: swap
+        title: Configure and manage swap space
+      - competency_id: automounters
+        title: Configure filesystem automounters
+      - competency_id: performance
+        title: Monitor storage performance
+  - domain_id: essential-commands
+    title: Essential Commands
+    weight_percent: 20
+    competencies:
+      - competency_id: git
+        title: Basic Git Operations
+      - competency_id: services
+        title: Create, configure, and troubleshoot services
+      - competency_id: performance
+        title: Monitor and troubleshoot system performance and services
+      - competency_id: constraints
+        title: Determine application and service specific constraints
+      - competency_id: diskspace
+        title: Troubleshoot diskspace issues
+      - competency_id: tls-certificates
+        title: Work with SSL certificates
+  - domain_id: users-groups
+    title: Users and Groups
+    weight_percent: 10
+    competencies:
+      - competency_id: local-accounts
+        title: Create and manage local user and group accounts
+      - competency_id: environment-profiles
+        title: Manage personal and system-wide environment profiles
+      - competency_id: resource-limits
+        title: Configure user resource limits
+      - competency_id: acls
+        title: Configure and manage ACLs
+      - competency_id: ldap-accounts
+        title: Configure the system to use LDAP user and group accounts
+exam:
+  performance_based: true
+  command_line: true
+  duration_minutes: 120
+  task_count_min: 17
+  task_count_max: 20
+  passing_score_percent: 67
+  distribution_specific: false
+  operational_notes:
+    - Each task identifies the designated host on which it must be completed.
+    - The environment may require SSH access to containers or remote nodes from node-1.
+    - Root privileges are available through sudo -i.
+    - The base node node-1 must not be rebooted; other nodes may be rebooted.
+    - Man pages, distribution-installed documentation, and distribution packages are allowed.
+    - Multiple solution paths are accepted unless specified, provided the correct result is produced.
+  source_ids: [lfcs-product, lfcs-instructions, lf-exam-scoring]

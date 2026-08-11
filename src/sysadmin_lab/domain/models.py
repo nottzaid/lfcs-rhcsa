@@ -1,0 +1,163 @@
+from __future__ import annotations
+
+import re
+from enum import StrEnum
+from typing import Any, Self
+
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+
+IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+
+
+class StrictModel(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+
+class Track(StrEnum):
+    LINUX_CORE = "linux-core"
+    LFCS = "lfcs"
+    RHCSA_10 = "rhcsa-10"
+    PROFESSIONAL = "professional"
+
+
+class SourceKind(StrEnum):
+    SCOPE = "scope"
+    UPSTREAM = "upstream"
+    DISTRIBUTION = "distribution"
+    MAN_PAGE = "man-page"
+    INSPIRATION = "inspiration"
+
+
+class CheckKind(StrEnum):
+    COMMAND = "command"
+    FILE = "file"
+    SERVICE = "service"
+    NETWORK = "network"
+    LIBVIRT = "libvirt"
+    CUSTOM = "custom"
+
+
+class ScenarioStatus(StrEnum):
+    DRAFT = "draft"
+    VERIFIED = "verified"
+
+
+class ObjectiveRef(StrictModel):
+    track: Track
+    version: str = Field(min_length=1)
+    objective_id: str = Field(min_length=1)
+    title: str = Field(min_length=1)
+
+
+class SourceRef(StrictModel):
+    kind: SourceKind
+    title: str = Field(min_length=1)
+    url: HttpUrl | None = None
+    man_page: str | None = None
+
+    @model_validator(mode="after")
+    def require_locator(self) -> Self:
+        if self.url is None and self.man_page is None:
+            raise ValueError("a source requires either url or man_page")
+        return self
+
+
+class DiskSpec(StrictModel):
+    name: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+    size_mib: int = Field(ge=64)
+    role: str = Field(min_length=1)
+
+
+class NicSpec(StrictModel):
+    network: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+
+
+class HostSpec(StrictModel):
+    name: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+    image: str = Field(min_length=1)
+    memory_mib: int = Field(default=1024, ge=256)
+    vcpus: int = Field(default=1, ge=1)
+    nested_virtualization: bool = False
+    nics: tuple[NicSpec, ...] = ()
+    disks: tuple[DiskSpec, ...] = ()
+
+
+class NetworkSpec(StrictModel):
+    name: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+    isolated: bool = True
+    cidr: str | None = None
+
+
+class TopologySpec(StrictModel):
+    hosts: tuple[HostSpec, ...] = Field(min_length=1)
+    networks: tuple[NetworkSpec, ...] = ()
+
+    @model_validator(mode="after")
+    def references_declared_networks(self) -> Self:
+        names = [host.name for host in self.hosts]
+        if len(names) != len(set(names)):
+            raise ValueError("topology host names must be unique")
+        network_names = [network.name for network in self.networks]
+        if len(network_names) != len(set(network_names)):
+            raise ValueError("topology network names must be unique")
+        declared = set(network_names)
+        referenced = {nic.network for host in self.hosts for nic in host.nics}
+        missing = sorted(referenced - declared)
+        if missing:
+            raise ValueError(f"undeclared topology networks: {', '.join(missing)}")
+        return self
+
+
+class CheckSpec(StrictModel):
+    check_id: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+    kind: CheckKind
+    target: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+    description: str = Field(min_length=1)
+    required: bool = True
+    weight: int = Field(default=1, ge=1)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class PersistenceSpec(StrictModel):
+    reboot: bool = False
+    hosts: tuple[str, ...] = ()
+
+
+class ScenarioManifest(StrictModel):
+    schema_version: int = Field(default=1, ge=1)
+    scenario_id: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+    version: int = Field(ge=1)
+    status: ScenarioStatus = ScenarioStatus.DRAFT
+    title: str = Field(min_length=1)
+    summary: str = Field(min_length=1)
+    task: str = Field(min_length=1)
+    objectives: tuple[ObjectiveRef, ...] = Field(min_length=1)
+    sources: tuple[SourceRef, ...] = Field(min_length=1)
+    topology: TopologySpec
+    checks: tuple[CheckSpec, ...] = Field(min_length=1)
+    persistence: PersistenceSpec = PersistenceSpec()
+    setup: str = Field(min_length=1)
+    reference_solution: str = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def validate_references(self) -> Self:
+        host_names = {host.name for host in self.topology.hosts}
+        unknown_targets = sorted({check.target for check in self.checks} - host_names)
+        if unknown_targets:
+            raise ValueError(f"check targets are not topology hosts: {', '.join(unknown_targets)}")
+
+        check_ids = [check.check_id for check in self.checks]
+        if len(check_ids) != len(set(check_ids)):
+            raise ValueError("check identifiers must be unique")
+
+        if self.persistence.reboot:
+            reboot_hosts = set(self.persistence.hosts) or host_names
+            unknown_reboot_hosts = sorted(reboot_hosts - host_names)
+            if unknown_reboot_hosts:
+                raise ValueError(
+                    f"persistence hosts are not topology hosts: {', '.join(unknown_reboot_hosts)}"
+                )
+        elif self.persistence.hosts:
+            raise ValueError("persistence hosts require reboot=true")
+
+        return self

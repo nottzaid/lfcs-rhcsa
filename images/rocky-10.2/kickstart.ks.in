@@ -1,0 +1,54 @@
+# Linux Admin Lab Rocky Linux 10.2 base image
+# @@SSH_PUBLIC_KEY@@ is replaced by the local image builder.
+
+text
+cdrom
+lang en_US.UTF-8
+keyboard us
+timezone Etc/UTC --utc
+
+network --bootproto=dhcp --device=link --activate --hostname=lal-base.invalid
+
+rootpw --lock
+user --name=labadmin --groups=wheel --lock
+sshkey --username=labadmin "@@SSH_PUBLIC_KEY@@"
+
+selinux --enforcing
+firewall --enabled --service=ssh
+services --enabled=sshd,qemu-guest-agent,NetworkManager,firewalld,chronyd
+
+zerombr
+clearpart --all --initlabel
+autopart --type=lvm
+bootloader --append="console=tty0 console=ttyS0,115200n8"
+
+reboot --eject
+
+%packages
+@^minimal-environment
+chrony
+openssh-server
+policycoreutils-python-utils
+python3
+qemu-guest-agent
+sudo
+%end
+
+%post --erroronfail
+cat > /etc/sudoers.d/90-linux-admin-lab <<'EOF'
+labadmin ALL=(ALL) NOPASSWD: ALL
+EOF
+chmod 0440 /etc/sudoers.d/90-linux-admin-lab
+
+mkdir -p /etc/ssh/sshd_config.d
+cat > /etc/ssh/sshd_config.d/10-linux-admin-lab.conf <<'EOF'
+PasswordAuthentication no
+PermitRootLogin no
+EOF
+
+dnf clean all
+rm -f /var/lib/dbus/machine-id
+truncate -s 0 /etc/machine-id
+rm -f /etc/ssh/ssh_host_*
+%end
+
