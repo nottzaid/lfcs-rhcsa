@@ -66,6 +66,10 @@ scenario, `persistent-kernel-tuning`, proves live and persistent sysctl state th
 different valid solution paths, two real guest reboots, and a clean reprovision. The SELinux
 manifest under `examples/` remains a draft contract fixture and is not released content.
 
+`runaway-service-recovery` adds process discovery, failed-unit diagnosis, environment repair,
+enablement, service-owned PID validation, process priority, reboot persistence, and alternate
+repair replay. All released scenarios appear in the same local browser collection.
+
 The current-scope research, audited projects and books, default-distribution decision, and
 machine-checked 36-focused-scenario/7-capstone/3-mock portfolio are under
 [`docs/research`](docs/research) and [`curricula`](curricula).

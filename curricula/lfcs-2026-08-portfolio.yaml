@@ -26,7 +26,7 @@ focused_scenarios:
     competencies: [operations.kernel-parameters]
     capabilities: [single-node, reboot-secondary]
   - scenario_id: runaway-service-recovery
-    status: planned
+    status: verified
     wave: 1
     estimated_minutes: 25
     competencies: [operations.processes-services]

@@ -1,0 +1,103 @@
+schema_version: 1
+scenario_id: runaway-service-recovery
+version: 1
+status: verified
+title: A retired collector is stealing cycles from its replacement
+summary: Remove an unwanted workload and recover its failed systemd-managed replacement.
+estimated_minutes: 25
+task_type: troubleshoot
+difficulty: intermediate
+task: >-
+  On node2, the retired lal-legacy-spin workload is still running and must be stopped. Its
+  replacement, lal-metrics.service, is enabled but failing because its environment is wrong.
+  Configure BATCH_SIZE=50 in /etc/sysconfig/lal-metrics, make lal-metrics.service active and
+  enabled, and ensure its running main process has nice value 10. The retired workload must
+  remain absent after node2 reboots. Do not reboot node1; it is not part of this scenario.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.processes-services
+    title: Diagnose, identify, manage, and troubleshoot processes and services
+  - track: professional
+    version: v1
+    objective_id: retire-runaway-workload-and-recover-managed-service
+    title: Replace an unmanaged workload with a constrained, persistent service
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: systemd service unit documentation
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html
+  - kind: upstream
+    title: systemd execution environment documentation
+    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html
+  - kind: man-page
+    title: systemctl manual
+    man_page: systemctl(1)
+  - kind: man-page
+    title: ps manual
+    man_page: ps(1)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-base-v1
+      memory_mib: 1024
+      vcpus: 1
+checks:
+  - check_id: legacy-workload-absent
+    kind: command
+    target: node2
+    description: The retired lal-legacy-spin process is absent.
+    parameters:
+      arguments: [pgrep, --full, --exact, lal-legacy-spin]
+      expected_exit_code: 1
+  - check_id: metrics-environment
+    kind: file
+    target: node2
+    description: The managed worker has the required batch size.
+    parameters:
+      path: /etc/sysconfig/lal-metrics
+      kind: file
+      owner: root
+      group: root
+      mode: "0644"
+      contains: BATCH_SIZE=50
+  - check_id: metrics-service
+    kind: service
+    target: node2
+    description: The replacement metrics worker is active and enabled.
+    parameters:
+      name: lal-metrics.service
+      active: true
+      enabled: true
+  - check_id: metrics-process
+    kind: command
+    target: node2
+    description: The service owns a running lal-metrics-worker process.
+    parameters:
+      arguments:
+        - sh
+        - -c
+        - >-
+          pid=$(systemctl show --property MainPID --value lal-metrics.service) &&
+          test "$pid" -gt 1 && tr '\0' '\n' < "/proc/$pid/cmdline" | head -n 1
+      stdout_equals: lal-metrics-worker
+  - check_id: metrics-priority
+    kind: command
+    target: node2
+    description: The running service process has nice value 10.
+    parameters:
+      arguments:
+        - sh
+        - -c
+        - >-
+          pid=$(systemctl show --property MainPID --value lal-metrics.service) &&
+          ps -o ni= -p "$pid" | tr -d ' '
+      stdout_equals: "10"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/runaway-service-recovery.setup.yaml
+reference_solution: actions/runaway-service-recovery.solution.yaml
+alternate_solutions: [actions/runaway-service-recovery.alternate.yaml]

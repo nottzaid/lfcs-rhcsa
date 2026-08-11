@@ -1,0 +1,60 @@
+schema_version: 1
+actions:
+  - action_id: install-metrics-worker
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' '#!/bin/bash' 'if [[ ${BATCH_SIZE:-0} != 50 ]]; then'
+        '  echo "invalid BATCH_SIZE" >&2' '  exit 64' 'fi'
+        'exec -a lal-metrics-worker sleep infinity' > /usr/local/sbin/lal-metrics-worker
+  - action_id: make-metrics-worker-executable
+    target: node2
+    arguments: [sudo, --, chmod, "0755", /usr/local/sbin/lal-metrics-worker]
+  - action_id: install-broken-environment
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - "printf '%s\n' 'BATCH_SIZE=5' > /etc/sysconfig/lal-metrics"
+  - action_id: install-metrics-unit
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        printf '%s\n' '[Unit]' 'Description=LAL metrics rollup worker'
+        'After=network.target' '' '[Service]' 'Type=simple'
+        'EnvironmentFile=/etc/sysconfig/lal-metrics'
+        'ExecStart=/usr/local/sbin/lal-metrics-worker' 'Restart=on-failure'
+        'RestartSec=1' 'Nice=10' '' '[Install]' 'WantedBy=multi-user.target'
+        > /etc/systemd/system/lal-metrics.service
+  - action_id: load-metrics-unit
+    target: node2
+    arguments: [sudo, --, systemctl, daemon-reload]
+  - action_id: enable-metrics-unit
+    target: node2
+    arguments: [sudo, --, systemctl, enable, lal-metrics.service]
+  - action_id: expose-failing-metrics-unit
+    target: node2
+    arguments: [sudo, --, systemctl, start, lal-metrics.service]
+    expected_exit_codes: [0, 1]
+  - action_id: launch-retired-workload
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - systemd-run
+      - --unit=lal-legacy-spin.service
+      - --property=Nice=19
+      - --
+      - /bin/bash
+      - -c
+      - exec -a lal-legacy-spin yes >/dev/null
