@@ -12,6 +12,11 @@ from typer.testing import CliRunner
 from sysadmin_lab.application.checking import CheckReport, CheckResult
 from sysadmin_lab.application.ports import CheckObservation
 from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.application.verification import (
+    PhaseResult,
+    VerificationPhase,
+    VerificationReport,
+)
 from sysadmin_lab.catalog import load_catalog
 from sysadmin_lab.cli import app
 from sysadmin_lab.domain.actions import ActionManifest
@@ -111,6 +116,7 @@ class FakeRuntime:
             reset=lambda _session_id, _manifest, _setup, _images: self.started,
             destroy=lambda _session_id: destroyed_state,
         )
+        self.actions = SimpleNamespace()
 
     def __enter__(self) -> FakeRuntime:
         return self
@@ -192,6 +198,47 @@ def test_public_scenario_commands_use_learner_service(
     destroyed = runner.invoke(app, ["scenario", "destroy", str(SESSION_ID)])
     assert destroyed.exit_code == 0
     assert "destroyed" in destroyed.stdout
+
+
+def test_scenario_verify_reports_acceptance_semantics(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeRuntime(tmp_path)
+    root = Path(__file__).parents[2]
+    scenario = load_catalog(root / "scenarios")[0]
+    setup = ActionManifest.model_validate(
+        {"actions": [{"action_id": "setup", "target": "node1", "arguments": ["true"]}]}
+    )
+    report = VerificationReport(
+        scenario.scenario_id,
+        (
+            PhaseResult(VerificationPhase.INITIAL, (), False),
+            PhaseResult(
+                VerificationPhase.SOLVED,
+                (),
+                True,
+                solution=scenario.reference_solution,
+            ),
+            PhaseResult(VerificationPhase.RESET, (), False),
+        ),
+    )
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: fake)
+    monkeypatch.setattr(
+        "sysadmin_lab.cli._scenario_launch_inputs",
+        lambda *_args: (scenario, setup, {"rocky-10.2-base-v1": tmp_path / "base.qcow2"}),
+    )
+    monkeypatch.setattr("sysadmin_lab.cli.VmScenarioDriver", lambda **_kwargs: object())
+    monkeypatch.setattr(
+        "sysadmin_lab.cli.ScenarioVerifier",
+        lambda _driver: SimpleNamespace(verify=lambda _manifest: report),
+    )
+
+    result = runner.invoke(app, ["scenario", "verify", scenario.scenario_id])
+
+    assert result.exit_code == 0
+    assert "PASS initial: checks fail as designed" in result.stdout
+    assert "PASS solved" in result.stdout
+    assert f"verified acceptance contract: {scenario.scenario_id}" in result.stdout
 
 
 def test_up_rejects_non_loopback_and_busy_port() -> None:

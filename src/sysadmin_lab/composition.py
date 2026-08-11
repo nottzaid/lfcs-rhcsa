@@ -37,6 +37,7 @@ class VmRuntime:
     checks: SessionCheckService
     scenarios: ScenarioSessionService
     progress: ProgressService
+    actions: ActionRunner
 
     def __init__(self, runtime_root: Path) -> None:
         self._runtime_root = runtime_root.resolve()
@@ -53,6 +54,7 @@ class VmRuntime:
         self.progress = ProgressService(attempts)
         self.sessions = SessionCoordinator(session_repository)
         executor = SshGuestExecutor(BoundedSubprocessRunner())
+        self.actions = ActionRunner(executor)
         self.vm_sessions = SingleHostVmSessionService(
             sessions=self.sessions,
             machines=self.machines,
@@ -78,7 +80,7 @@ class VmRuntime:
             machines=self.machines,
             vm_sessions=self.vm_sessions,
             checks=self.checks,
-            actions=ActionRunner(executor),
+            actions=self.actions,
             progress=self.progress,
         )
         return self

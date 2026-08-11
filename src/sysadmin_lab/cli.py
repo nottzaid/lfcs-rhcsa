@@ -12,6 +12,8 @@ import typer
 from sysadmin_lab.application.checking import CheckReport
 from sysadmin_lab.application.image_acquisition import HttpsDownloader, ImageAcquirer
 from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.application.verification import ScenarioVerifier
+from sysadmin_lab.application.vm_verification import VmScenarioDriver
 from sysadmin_lab.catalog import (
     CatalogError,
     find_scenario,
@@ -345,6 +347,50 @@ def destroy_scenario(
         typer.echo(f"scenario destroy failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"scenario session {state.session_id}: {state.status.value}")
+
+
+@scenario_app.command("verify")
+def verify_scenario(
+    scenario_id: str,
+    scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
+    image_manifest_path: Annotated[Path, typer.Option(dir_okay=False)] = Path(
+        "images/rocky-10.2/manifest.yaml"
+    ),
+    image_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path(
+        "runtime/acceptance"
+    ),
+) -> None:
+    """Destructively replay a scenario's complete disposable-VM acceptance contract."""
+    try:
+        manifest, _setup, images = _scenario_launch_inputs(
+            scenario_id, scenario_directory, image_manifest_path, image_cache
+        )
+        with open_vm_runtime(runtime_root) as runtime:
+            driver = VmScenarioDriver(
+                scenario_directory=scenario_directory,
+                base_images=images,
+                sessions=runtime.sessions,
+                machines=runtime.machines,
+                vm_sessions=runtime.vm_sessions,
+                checks=runtime.checks,
+                scenarios=runtime.scenarios,
+                actions=runtime.actions,
+            )
+            report = ScenarioVerifier(driver).verify(manifest)
+    except Exception as exc:
+        typer.echo(f"scenario verification failed: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    for phase in report.phases:
+        expects_broken = phase.phase.value in {"initial", "reset"}
+        accepted = phase.passed is not expects_broken
+        status = "PASS" if accepted else "FAIL"
+        outcome = "checks fail as designed" if expects_broken else "checks pass"
+        solution = f" ({phase.solution})" if phase.solution else ""
+        typer.echo(f"{status} {phase.phase.value}{solution}: {outcome}")
+    if not report.passed:
+        raise typer.Exit(code=1)
+    typer.echo(f"verified acceptance contract: {report.scenario_id}")
 
 
 if __name__ == "__main__":  # pragma: no cover - console-script entry point

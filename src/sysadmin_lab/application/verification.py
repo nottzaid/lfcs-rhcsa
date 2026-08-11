@@ -12,6 +12,8 @@ class VerificationPhase(StrEnum):
     SOLVED = "solved"
     REBOOTED = "rebooted"
     RESET = "reset"
+    ALTERNATE_SOLVED = "alternate-solved"
+    ALTERNATE_REBOOTED = "alternate-rebooted"
 
 
 @dataclass(frozen=True, slots=True)
@@ -19,6 +21,7 @@ class PhaseResult:
     phase: VerificationPhase
     observations: tuple[CheckObservation, ...]
     passed: bool
+    solution: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -28,17 +31,22 @@ class VerificationReport:
 
     @property
     def passed(self) -> bool:
+        present = {phase.phase for phase in self.phases}
+        if not {
+            VerificationPhase.INITIAL,
+            VerificationPhase.SOLVED,
+            VerificationPhase.RESET,
+        }.issubset(present):
+            return False
         expected = {
             VerificationPhase.INITIAL: False,
             VerificationPhase.SOLVED: True,
             VerificationPhase.RESET: False,
+            VerificationPhase.REBOOTED: True,
+            VerificationPhase.ALTERNATE_SOLVED: True,
+            VerificationPhase.ALTERNATE_REBOOTED: True,
         }
-        for phase in self.phases:
-            if phase.phase in expected and phase.passed is not expected[phase.phase]:
-                return False
-            if phase.phase is VerificationPhase.REBOOTED and not phase.passed:
-                return False
-        return True
+        return all(phase.passed is expected[phase.phase] for phase in self.phases)
 
 
 class ScenarioVerifier:
@@ -53,18 +61,56 @@ class ScenarioVerifier:
         try:
             phases.append(self._evaluate(VerificationPhase.INITIAL, session, manifest))
 
-            self._driver.apply_reference_solution(session, manifest)
-            phases.append(self._evaluate(VerificationPhase.SOLVED, session, manifest))
+            self._driver.apply_solution(session, manifest, manifest.reference_solution)
+            phases.append(
+                self._evaluate(
+                    VerificationPhase.SOLVED,
+                    session,
+                    manifest,
+                    solution=manifest.reference_solution,
+                )
+            )
 
             if manifest.persistence.reboot:
                 reboot_hosts = manifest.persistence.hosts or tuple(
                     host.name for host in manifest.topology.hosts
                 )
                 self._driver.reboot(session, reboot_hosts)
-                phases.append(self._evaluate(VerificationPhase.REBOOTED, session, manifest))
+                phases.append(
+                    self._evaluate(
+                        VerificationPhase.REBOOTED,
+                        session,
+                        manifest,
+                        solution=manifest.reference_solution,
+                    )
+                )
 
             session = self._driver.reset(session, manifest)
             phases.append(self._evaluate(VerificationPhase.RESET, session, manifest))
+
+            for index, solution in enumerate(manifest.alternate_solutions):
+                self._driver.apply_solution(session, manifest, solution)
+                phases.append(
+                    self._evaluate(
+                        VerificationPhase.ALTERNATE_SOLVED,
+                        session,
+                        manifest,
+                        solution=solution,
+                    )
+                )
+                if manifest.persistence.reboot:
+                    self._driver.reboot(session, reboot_hosts)
+                    phases.append(
+                        self._evaluate(
+                            VerificationPhase.ALTERNATE_REBOOTED,
+                            session,
+                            manifest,
+                            solution=solution,
+                        )
+                    )
+                if index < len(manifest.alternate_solutions) - 1:
+                    session = self._driver.reset(session, manifest)
+                    phases.append(self._evaluate(VerificationPhase.RESET, session, manifest))
         finally:
             self._driver.destroy(session)
 
@@ -75,12 +121,22 @@ class ScenarioVerifier:
         phase: VerificationPhase,
         session: LabSession,
         manifest: ScenarioManifest,
+        *,
+        solution: str | None = None,
     ) -> PhaseResult:
-        observations = tuple(self._driver.run_check(session, check) for check in manifest.checks)
+        observations = self._driver.run_checks(session, manifest)
         required_ids = {check.check_id for check in manifest.checks if check.required}
-        passed = all(
+        passed = not any(observation.error for observation in observations) and all(
             observation.passed
             for observation in observations
             if observation.check_id in required_ids
         )
-        return PhaseResult(phase=phase, observations=observations, passed=passed)
+        observed_ids = {observation.check_id for observation in observations}
+        if observed_ids != {check.check_id for check in manifest.checks}:
+            passed = False
+        return PhaseResult(
+            phase=phase,
+            observations=observations,
+            passed=passed,
+            solution=solution,
+        )

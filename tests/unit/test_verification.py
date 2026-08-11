@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 
 from sysadmin_lab.application.ports import CheckObservation, LabSession
 from sysadmin_lab.application.verification import ScenarioVerifier, VerificationPhase
-from sysadmin_lab.domain.models import CheckSpec, ScenarioManifest
+from sysadmin_lab.domain.models import ScenarioManifest
 from tests.unit.test_models import minimal_manifest
 
 
@@ -19,16 +19,26 @@ class FakeDriver:
         self.phase = "broken"
         return LabSession(session_id="session-1", scenario_id=manifest.scenario_id)
 
-    def run_check(self, session: LabSession, check: CheckSpec) -> CheckObservation:
-        self.calls.append(f"check:{self.phase}:{check.check_id}")
-        return CheckObservation(
-            check_id=check.check_id,
-            passed=self.phase in {"solved", "rebooted"},
-            message=self.phase,
+    def run_checks(
+        self, session: LabSession, manifest: ScenarioManifest
+    ) -> tuple[CheckObservation, ...]:
+        observations = tuple(
+            CheckObservation(
+                check_id=check.check_id,
+                passed=self.phase in {"solved", "rebooted"},
+                message=self.phase,
+            )
+            for check in manifest.checks
         )
+        self.calls.extend(
+            f"check:{self.phase}:{observation.check_id}" for observation in observations
+        )
+        return observations
 
-    def apply_reference_solution(self, session: LabSession, manifest: ScenarioManifest) -> None:
-        self.calls.append("solve")
+    def apply_solution(
+        self, session: LabSession, manifest: ScenarioManifest, solution: str
+    ) -> None:
+        self.calls.append(f"solve:{solution}")
         self.phase = "solved"
 
     def reboot(self, session: LabSession, hosts: tuple[str, ...]) -> None:
@@ -58,16 +68,22 @@ def test_verifier_replays_complete_persistent_lifecycle() -> None:
         VerificationPhase.SOLVED,
         VerificationPhase.REBOOTED,
         VerificationPhase.RESET,
+        VerificationPhase.ALTERNATE_SOLVED,
+        VerificationPhase.ALTERNATE_REBOOTED,
     ]
     assert driver.calls == [
         "provision",
         "check:broken:service-active",
-        "solve",
+        "solve:solutions/valid.yaml",
         "check:solved:service-active",
         "reboot:node1",
         "check:rebooted:service-active",
         "reset",
         "check:broken:service-active",
+        "solve:solutions/alternate.yaml",
+        "check:solved:service-active",
+        "reboot:node1",
+        "check:rebooted:service-active",
         "destroy:session-2",
     ]
 
@@ -86,7 +102,9 @@ def test_report_rejects_scenario_that_is_already_solved() -> None:
 
 def test_driver_is_destroyed_when_solution_application_fails() -> None:
     class FailingDriver(FakeDriver):
-        def apply_reference_solution(self, session: LabSession, manifest: ScenarioManifest) -> None:
+        def apply_solution(
+            self, session: LabSession, manifest: ScenarioManifest, solution: str
+        ) -> None:
             raise RuntimeError("solution failed")
 
     manifest = ScenarioManifest.model_validate(minimal_manifest())
@@ -100,7 +118,9 @@ def test_driver_is_destroyed_when_solution_application_fails() -> None:
 
 def test_report_rejects_a_reference_solution_that_does_not_work() -> None:
     class IneffectiveSolutionDriver(FakeDriver):
-        def apply_reference_solution(self, session: LabSession, manifest: ScenarioManifest) -> None:
+        def apply_solution(
+            self, session: LabSession, manifest: ScenarioManifest, solution: str
+        ) -> None:
             self.calls.append("ineffective-solution")
 
     manifest = ScenarioManifest.model_validate(minimal_manifest())
