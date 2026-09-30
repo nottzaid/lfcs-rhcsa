@@ -220,7 +220,12 @@ class ServiceCheckProvider:
         active_state = state.get("ActiveState", "unknown")
         if (active_state == "active") != parameters.active:
             expected = "active" if parameters.active else "stopped"
-            mismatches.append(f"{name} is {active_state}; expected {expected}")
+            mismatch = f"{name} is {active_state}; expected {expected}"
+            if active_state == "failed":
+                reason = self._last_own_message(endpoint, name, parameters.timeout_seconds)
+                if reason:
+                    mismatch += f" (its last message: {_clip(reason)})"
+            mismatches.append(mismatch)
         if parameters.enabled is not None:
             enabled = self._executor.run(
                 endpoint,
@@ -236,6 +241,30 @@ class ServiceCheckProvider:
             not mismatches,
             "requirement met" if not mismatches else "; ".join(mismatches),
         )
+
+    def _last_own_message(self, endpoint: GuestEndpoint, name: str, timeout: float) -> str:
+        """Return the failed unit's last log line that systemd itself did not write."""
+        journal = self._executor.run(
+            endpoint,
+            ("journalctl", "--boot", f"--unit={name}", "--lines=20", "--output=cat", "--no-pager"),
+            timeout_seconds=timeout,
+        )
+        if not journal.succeeded:
+            return ""
+        systemd_says = (
+            f"{name}:",
+            "Starting ",
+            "Started ",
+            "Stopping ",
+            "Stopped ",
+            "Failed to start ",
+        )
+        own = [
+            line.strip()
+            for line in journal.stdout.splitlines()
+            if line.strip() and not line.startswith(systemd_says)
+        ]
+        return own[-1] if own else ""
 
 
 def validate_guest_check_parameters(check: CheckSpec) -> None:

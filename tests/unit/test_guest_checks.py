@@ -148,16 +148,35 @@ def test_service_provider_reports_actual_unit_state(tmp_path: Path) -> None:
     assert observation.passed
     assert executor.calls[1] == ("systemctl", "is-enabled", "--", "sshd.service")
 
+    journal = (
+        "Starting app.service - App...\n"
+        "app: /etc/app.conf: permission denied\n"
+        "app.service: Main process exited, code=exited, status=1/FAILURE\n"
+        "app.service: Failed with result 'exit-code'.\n"
+        "Failed to start app.service - App.\n"
+    )
     failing = ServiceCheckProvider(
-        Executor([result(0, "LoadState=loaded\nActiveState=failed\n"), result(1, "disabled\n")])
+        Executor(
+            [
+                result(0, "LoadState=loaded\nActiveState=failed\n"),
+                result(0, journal),
+                result(1, "disabled\n"),
+            ]
+        )
     ).evaluate(
         spec(CheckKind.SERVICE, {"name": "app.service", "active": True, "enabled": True}),
         endpoint(tmp_path),
     )
     assert not failing.passed
     assert failing.message == (
-        "app.service is failed; expected active; app.service is disabled; expected enabled at boot"
+        "app.service is failed; expected active (its last message: app: /etc/app.conf: "
+        "permission denied); app.service is disabled; expected enabled at boot"
     )
+
+    unexplained = ServiceCheckProvider(
+        Executor([result(0, "LoadState=loaded\nActiveState=failed\n"), result(1, "", "denied")])
+    ).evaluate(spec(CheckKind.SERVICE, {"name": "app.service"}), endpoint(tmp_path))
+    assert unexplained.message == "app.service is failed; expected active"
 
     missing = ServiceCheckProvider(Executor([result(0, "LoadState=not-found\n")])).evaluate(
         spec(CheckKind.SERVICE, {"name": "missing.service"}), endpoint(tmp_path)
