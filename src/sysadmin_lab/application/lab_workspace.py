@@ -11,10 +11,12 @@ from sysadmin_lab.catalog import (
     find_scenario,
     load_action_manifest,
     load_catalog,
+    load_curriculum_manifest,
     load_image_manifest,
     load_mock_catalog,
 )
 from sysadmin_lab.composition import open_vm_runtime
+from sysadmin_lab.domain.curricula import CurriculumManifest
 from sysadmin_lab.domain.mock_exams import MockExamManifest
 from sysadmin_lab.domain.models import ScenarioManifest
 from sysadmin_lab.domain.progress import ScenarioProgress
@@ -30,6 +32,7 @@ class WorkspacePaths:
     image_cache: Path
     runtime_root: Path
     mock_exam_directory: Path
+    curriculum: Path
 
     @classmethod
     def under(cls, project_root: Path) -> WorkspacePaths:
@@ -41,6 +44,7 @@ class WorkspacePaths:
             image_cache=root / "runtime" / "cache" / "images",
             runtime_root=root / "runtime",
             mock_exam_directory=root / "mock-exams",
+            curriculum=root / "curricula" / "lfcs-2026-08.yaml",
         )
 
 
@@ -61,6 +65,9 @@ class LabWorkspace:
 
     def scenario(self, scenario_id: str) -> ScenarioManifest:
         return find_scenario(self.paths.scenario_directory, scenario_id)
+
+    def curriculum(self) -> CurriculumManifest:
+        return load_curriculum_manifest(self.paths.curriculum)
 
     def mock_exams(self) -> tuple[MockExamManifest, ...]:
         return load_mock_catalog(self.paths.mock_exam_directory)

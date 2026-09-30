@@ -139,3 +139,53 @@ async function runJob(button) {
 for (const button of document.querySelectorAll("[data-job-endpoint]")) {
   button.addEventListener("click", () => runJob(button));
 }
+
+function rememberedHints(key) {
+  try {
+    return Number.parseInt(window.localStorage.getItem(key) || "0", 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function rememberHints(key, count) {
+  try {
+    window.localStorage.setItem(key, String(count));
+  } catch {
+    // Revealed hints are a convenience; the page works without storage.
+  }
+}
+
+for (const card of document.querySelectorAll("[data-hints]")) {
+  const hints = [...card.querySelectorAll(".hint-list > li")];
+  const button = card.querySelector("[data-next-hint]");
+  const key = `lab-hints:${card.dataset.hints}`;
+  const show = (count) => {
+    hints.forEach((hint, index) => { hint.hidden = index >= count; });
+    if (count >= hints.length) {
+      button.hidden = true;
+    } else {
+      button.textContent = `Show hint ${count + 1} of ${hints.length}`;
+    }
+  };
+  let revealed = Math.min(rememberedHints(key), hints.length);
+  show(revealed);
+  button.addEventListener("click", () => {
+    revealed += 1;
+    rememberHints(key, revealed);
+    show(revealed);
+  });
+}
+
+function revealDebrief({scroll}) {
+  const debrief = document.querySelector("#debrief");
+  if (!debrief) return;
+  debrief.hidden = false;
+  for (const offer of document.querySelectorAll("[data-debrief-offer]")) offer.hidden = true;
+  if (scroll) debrief.scrollIntoView({behavior: "smooth", block: "start"});
+}
+
+for (const button of document.querySelectorAll("[data-reveal-debrief]")) {
+  button.addEventListener("click", () => revealDebrief({scroll: true}));
+}
+document.addEventListener("lab:solved", () => revealDebrief({scroll: false}));

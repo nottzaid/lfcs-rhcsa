@@ -52,6 +52,10 @@ class ScenarioDifficulty(StrEnum):
     ADVANCED = "advanced"
     EXAM = "exam"
 
+    @property
+    def rank(self) -> int:
+        return list(ScenarioDifficulty).index(self)
+
 
 class ObjectiveRef(StrictModel):
     track: Track
@@ -64,7 +68,7 @@ class SourceRef(StrictModel):
     kind: SourceKind
     title: str = Field(min_length=1)
     url: HttpUrl | None = None
-    man_page: str | None = None
+    man_page: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.+:-]+\([0-9a-z]+\)$")
 
     @model_validator(mode="after")
     def require_locator(self) -> Self:
@@ -145,6 +149,9 @@ class ScenarioManifest(StrictModel):
     task_type: ScenarioTaskType
     difficulty: ScenarioDifficulty
     task: str = Field(min_length=1)
+    requirements: tuple[str, ...] = ()
+    hints: tuple[str, ...] = ()
+    debrief: str | None = Field(default=None, min_length=1)
     objectives: tuple[ObjectiveRef, ...] = Field(min_length=1)
     sources: tuple[SourceRef, ...] = Field(min_length=1)
     topology: TopologySpec
@@ -153,6 +160,18 @@ class ScenarioManifest(StrictModel):
     setup: str = Field(min_length=1)
     reference_solution: str = Field(min_length=1)
     alternate_solutions: tuple[str, ...] = ()
+
+    @property
+    def integrated(self) -> bool:
+        """Exam-difficulty scenarios are multi-competency incidents rather than focused drills."""
+        return self.difficulty is ScenarioDifficulty.EXAM
+
+    @property
+    def primary_objective(self) -> ObjectiveRef:
+        return next(
+            (objective for objective in self.objectives if objective.track is Track.LFCS),
+            self.objectives[0],
+        )
 
     @property
     def reboot_hosts(self) -> tuple[str, ...]:

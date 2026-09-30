@@ -89,6 +89,7 @@ def test_workspace_delegates_complete_learner_lifecycle(
         image_cache=tmp_path / "cache",
         runtime_root=tmp_path / "runtime",
         mock_exam_directory=root / "mock-exams",
+        curriculum=root / "curricula" / "lfcs-2026-08.yaml",
     )
     runtime = FakeRuntime(tmp_path, manifest.scenario_id)
     image = tmp_path / "base.qcow2"
@@ -105,6 +106,7 @@ def test_workspace_delegates_complete_learner_lifecycle(
     assert snapshots[0].state == runtime.state
     assert snapshots[0].machines == (runtime.machine,)
     assert workspace.session(SESSION_ID) == snapshots[0]
+    assert workspace.curriculum().curriculum_id == "lfcs-2026-08"
     assert workspace.progress() == ("progress",)  # type: ignore[comparison-overlap]
 
     assert workspace.start(manifest.scenario_id) == "started"  # type: ignore[comparison-overlap]

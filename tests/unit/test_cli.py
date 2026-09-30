@@ -106,7 +106,7 @@ class FakeRuntime:
         )
         self.report = self.checks.run(SESSION_ID, manifest)
         self.started = StartedScenario(
-            SimpleNamespace(state=self.ready, machine=self.machine),  # type: ignore[arg-type]
+            SimpleNamespace(state=self.ready, machines=(self.machine,)),  # type: ignore[arg-type]
             self.report,
         )
         destroyed_state = self.ready.transition(SessionStatus.DESTROYING).transition(
@@ -183,7 +183,8 @@ def test_public_scenario_commands_use_learner_service(
     started = runner.invoke(app, ["scenario", "start", scenario.scenario_id])
     assert started.exit_code == 0
     assert f"session: {SESSION_ID}" in started.stdout
-    assert f"task: {scenario.task}" in started.stdout
+    assert "node1:\n  domain: lal-" in started.stdout
+    assert scenario.task.strip() in started.stdout
 
     checked = runner.invoke(app, ["scenario", "check", str(SESSION_ID)])
     assert checked.exit_code == 0

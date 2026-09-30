@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_scenario.html" as parts %}
 {% block title %}{{ scenario.title }} · Active lab{% endblock %}
 {% block content %}
   <nav class="crumbs" aria-label="Breadcrumb">
@@ -13,20 +14,31 @@
   </section>
 
   <div class="session-layout">
-    <div>
-      <section class="task-card">
-        <p class="eyebrow">Required end state</p>
-        <p class="task-copy">{{ scenario.task }}</p>
-      </section>
+    <div class="session-main">
+      {{ parts.brief(scenario) }}
+
+      {% if scenario.hints %}
+        <section class="hint-card" data-hints="{{ session.state.session_id }}">
+          <div class="section-heading">
+            <div>
+              <h2>Hints</h2>
+              <p>Each hint narrows things a little further. Try the machine first.</p>
+            </div>
+            <button class="button button-secondary" type="button" data-next-hint>Show hint 1 of {{ scenario.hints|length }}</button>
+          </div>
+          <ol class="hint-list">
+            {% for hint in scenario.hints %}
+              <li class="prose" hidden>{{ hint|markdown }}</li>
+            {% endfor %}
+          </ol>
+        </section>
+      {% endif %}
 
       <section class="check-card">
         <div class="section-heading">
           <div>
-            <h2>Verify your work</h2>
-            <p>The checker evaluates the resulting system state, not the commands you used.</p>
-            {% if scenario.reboot_hosts %}
-              <p class="reboot-note">Persistence is part of this task. Once the live state passes, the check reboots <strong>{{ scenario.reboot_hosts|join(", ") }}</strong> and grades it again, so save your work there first.</p>
-            {% endif %}
+            <h2>Check your work</h2>
+            <p>The checker inspects the resulting system state, not the commands you used.</p>
           </div>
           <button
             class="button button-success button-large"
@@ -38,6 +50,19 @@
         </div>
         <div id="check-results" class="check-results" hidden></div>
       </section>
+
+      {% if scenario.debrief %}
+        {% if not solved %}
+          <div class="debrief-offer" data-debrief-offer>
+            <p>Stuck after the hints? The debrief explains the fault and walks through a complete solution. It opens by itself once you solve the scenario.</p>
+            <button class="button button-secondary" type="button" data-reveal-debrief>Show the debrief</button>
+          </div>
+        {% endif %}
+        <section class="debrief-card" id="debrief" {% if not solved %}hidden{% endif %}>
+          <p class="eyebrow">Debrief</p>
+          <div class="prose">{{ scenario.debrief|markdown }}</div>
+        </section>
+      {% endif %}
     </div>
 
     <aside>
@@ -57,8 +82,10 @@
             {% endif %}
           </div>
         {% endfor %}
-        <p class="aside-note">Open <strong>{{ session.machines[0].identity.name if session.machines else "the project VM" }}</strong> in virt-manager for its graphical or serial console.</p>
+        <p class="aside-note">Every machine's graphical and serial console is in virt-manager under the domain name shown above. <code>sudo -i</code> gives you root.</p>
       </section>
+
+      {{ parts.references(scenario) }}
 
       <section class="session-controls">
         <button
@@ -66,13 +93,14 @@
           type="button"
           data-job-endpoint="/api/sessions/{{ session.state.session_id }}/reset"
           data-job-label="Resetting scenario"
+          data-job-confirm="Reset rebuilds every machine in its original broken state. Your changes will be lost."
         >Reset cleanly</button>
         <button
           class="button button-danger"
           type="button"
           data-job-endpoint="/api/sessions/{{ session.state.session_id }}/destroy"
           data-job-label="Destroying scenario"
-          data-job-confirm="Destroy this disposable scenario VM?"
+          data-job-confirm="Destroy this scenario's disposable machines? Your progress record is kept."
         >Destroy</button>
       </section>
       <p class="session-id">Session {{ session.state.session_id }}</p>

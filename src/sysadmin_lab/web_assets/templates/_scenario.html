@@ -1,0 +1,54 @@
+{% macro brief(scenario, heading="The situation") %}
+  <section class="task-card">
+    <p class="eyebrow">{{ heading }}</p>
+    <div class="prose task-copy">{{ scenario.task|markdown }}</div>
+    {% if scenario.requirements %}
+      <h2 class="requirements-heading">Done means</h2>
+      <ul class="requirement-list">
+        {% for requirement in scenario.requirements %}
+          <li>{{ requirement|markdown }}</li>
+        {% endfor %}
+      </ul>
+    {% endif %}
+    {% if scenario.reboot_hosts %}
+      <p class="reboot-note">Persistence is graded: once the live state passes, the check reboots <strong>{{ scenario.reboot_hosts|join(", ") }}</strong> and grades again.</p>
+    {% endif %}
+  </section>
+{% endmacro %}
+
+{% macro references(scenario) %}
+  {% set manuals = scenario.sources|selectattr("man_page")|list %}
+  {% set documents = scenario.sources|rejectattr("man_page")|rejectattr("kind", "equalto", "scope")|list %}
+  {% if manuals or documents %}
+    <section class="reference-card">
+      <p class="eyebrow">Reference</p>
+      {% if manuals %}
+        <p class="reference-lead">Installed on the machines. The exam allows them too:</p>
+        <ul class="manual-list">
+          {% for source in manuals %}
+            {% set name, section = source.man_page.rstrip(")").split("(") %}
+            <li><code>man {{ section }} {{ name }}</code><span>{{ source.title }}</span></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+      {% if documents %}
+        <ul class="document-list">
+          {% for source in documents %}
+            <li><a href="{{ source.url }}" rel="noreferrer" target="_blank">{{ source.title }}</a></li>
+          {% endfor %}
+        </ul>
+      {% endif %}
+    </section>
+  {% endif %}
+{% endmacro %}
+
+{% macro competencies(scenario) %}
+  <section class="objective-section">
+    <p class="eyebrow">Competencies practiced</p>
+    <ul class="objective-list">
+      {% for objective in scenario.objectives %}
+        <li><span>{{ objective.track.value }}</span><strong>{{ objective.title }}</strong></li>
+      {% endfor %}
+    </ul>
+  </section>
+{% endmacro %}

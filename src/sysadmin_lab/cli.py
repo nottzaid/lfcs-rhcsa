@@ -292,13 +292,27 @@ def _scenario_launch_inputs(
 
 
 def _show_started(started: StartedScenario) -> None:
-    machine = started.provisioned.machine
     typer.echo(f"session: {started.provisioned.state.session_id}")
-    typer.echo(f"domain: {machine.identity.name}")
-    typer.echo(f"address: {machine.address}")
-    typer.echo(f"console username: {machine.username}")
-    typer.echo(f"console password: {machine.password}")
-    typer.echo(f"ssh: ssh -i {machine.private_key} {machine.username}@{machine.address}")
+    for machine in started.provisioned.machines:
+        typer.echo(f"{machine.host_name}:")
+        typer.echo(f"  domain: {machine.identity.name}")
+        typer.echo(f"  address: {machine.address}")
+        typer.echo(f"  console username: {machine.username}")
+        typer.echo(f"  console password: {machine.password}")
+        typer.echo(f"  ssh: ssh -i {machine.private_key} {machine.username}@{machine.address}")
+
+
+def _show_brief(manifest: ScenarioManifest) -> None:
+    typer.echo("")
+    typer.echo(manifest.task.strip())
+    if manifest.requirements:
+        typer.echo("")
+        typer.echo("Done means:")
+        for requirement in manifest.requirements:
+            typer.echo(f"  - {requirement}")
+    if manifest.reboot_hosts:
+        hosts = ", ".join(manifest.reboot_hosts)
+        typer.echo(f"Once the live state passes, the check reboots {hosts} to prove persistence.")
 
 
 def _show_report(report: CheckReport) -> None:
@@ -351,7 +365,7 @@ def start_scenario(
         typer.echo(f"scenario start failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     _show_started(started)
-    typer.echo(f"task: {manifest.task}")
+    _show_brief(manifest)
 
 
 @scenario_app.command("check")
