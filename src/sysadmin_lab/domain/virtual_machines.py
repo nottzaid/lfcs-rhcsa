@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import re
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -12,6 +14,21 @@ from sysadmin_lab.domain.resources import (
     build_resource_name,
 )
 
+MAC_PATTERN = re.compile(r"^52:54:00(?::[0-9a-f]{2}){3}$")
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioInterface:
+    """A guest NIC attached to one of the session's isolated scenario networks."""
+
+    name: str
+    network: str
+    mac: str
+
+    def __post_init__(self) -> None:
+        if not MAC_PATTERN.fullmatch(self.mac):
+            raise ValueError(f"invalid scenario interface MAC: {self.mac}")
+
 
 @dataclass(frozen=True, slots=True)
 class DomainSpec:
@@ -22,6 +39,7 @@ class DomainSpec:
     vcpus: int = 2
     network: str = "default"
     data_disks: tuple[tuple[str, Path], ...] = ()
+    interfaces: tuple[ScenarioInterface, ...] = ()
 
     def __post_init__(self) -> None:
         if self.identity.kind is not ResourceKind.DOMAIN:
@@ -39,6 +57,35 @@ class DomainSpec:
                 raise ValueError(f"invalid data disk name: {name}")
             if not path.is_absolute():
                 raise ValueError("domain data disk paths must be absolute")
+
+
+def network_identity(scenario_id: str, session_id: UUID, network: str) -> ResourceIdentity:
+    role = f"net-{network}"
+    return ResourceIdentity(
+        kind=ResourceKind.NETWORK,
+        name=build_resource_name(scenario_id, session_id, role),
+        session_id=session_id,
+        resource_id=uuid5(session_id, f"network:{network}"),
+        scenario_id=scenario_id,
+        role=role,
+    )
+
+
+def interface_mac(session_id: UUID, host_name: str, interface: str) -> str:
+    """Derive a stable locally administered QEMU MAC for one scenario NIC."""
+    digest = hashlib.sha256(f"{session_id}:{host_name}:{interface}".encode()).digest()
+    return "52:54:00:" + ":".join(f"{byte:02x}" for byte in digest[:3])
+
+
+def render_network_xml(identity: ResourceIdentity) -> str:
+    """Render an isolated bridge: libvirt gives it no address, DHCP, or forwarding."""
+    if identity.kind is not ResourceKind.NETWORK:
+        raise ValueError("network XML requires a network identity")
+    root = ET.Element("network")
+    ET.SubElement(root, "name").text = identity.name
+    ET.SubElement(root, "uuid").text = str(identity.resource_id)
+    ET.SubElement(root, "bridge", {"stp": "off", "delay": "0"})
+    return ET.tostring(root, encoding="unicode")
 
 
 def domain_identity(scenario_id: str, session_id: UUID, role: str = "node1") -> ResourceIdentity:
@@ -116,6 +163,11 @@ def render_domain_xml(spec: DomainSpec) -> str:
     interface = ET.SubElement(devices, "interface", {"type": "network"})
     ET.SubElement(interface, "source", {"network": spec.network})
     ET.SubElement(interface, "model", {"type": "virtio"})
+    for scenario_interface in spec.interfaces:
+        extra = ET.SubElement(devices, "interface", {"type": "network"})
+        ET.SubElement(extra, "mac", {"address": scenario_interface.mac})
+        ET.SubElement(extra, "source", {"network": scenario_interface.network})
+        ET.SubElement(extra, "model", {"type": "virtio"})
 
     serial = ET.SubElement(devices, "serial", {"type": "pty"})
     serial_target = ET.SubElement(serial, "target", {"type": "isa-serial", "port": "0"})

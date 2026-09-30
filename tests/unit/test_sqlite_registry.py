@@ -69,3 +69,20 @@ def test_corrupt_registry_row_is_rejected(tmp_path: Path) -> None:
         connection.close()
         with pytest.raises(ResourceSafetyError, match="invalid durable"):
             registry.get(expected.identity.kind, expected.identity.name)
+
+
+def test_registry_lists_one_sessions_records_of_one_kind(tmp_path: Path) -> None:
+    network = record()
+    other_session = replace(
+        network.identity,
+        name=build_resource_name("registry-test", uuid4(), "network"),
+        session_id=uuid4(),
+        resource_id=uuid4(),
+    )
+    with SqliteResourceRegistry(tmp_path / "state.db") as registry:
+        registry.add(network)
+        registry.add(ResourceRecord(other_session, uuid4()))
+        assert registry.list_session(network.identity.session_id, ResourceKind.NETWORK) == (
+            network,
+        )
+        assert registry.list_session(network.identity.session_id, ResourceKind.DOMAIN) == ()

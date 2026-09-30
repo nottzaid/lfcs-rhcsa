@@ -83,8 +83,20 @@ class DiskSpec(StrictModel):
     role: str = Field(min_length=1)
 
 
+INTERFACE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,14}$")
+
+
 class NicSpec(StrictModel):
+    """An extra NIC on a scenario network, named predictably inside the guest."""
+
     network: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+    name: str = Field(pattern=INTERFACE_NAME_PATTERN.pattern)
+
+    @model_validator(mode="after")
+    def avoid_kernel_names(self) -> Self:
+        if self.name.startswith(("eth", "en", "wl", "lo")):
+            raise ValueError(f"interface name {self.name} collides with kernel naming schemes")
+        return self
 
 
 class HostSpec(StrictModel):
@@ -96,10 +108,21 @@ class HostSpec(StrictModel):
     nics: tuple[NicSpec, ...] = ()
     disks: tuple[DiskSpec, ...] = ()
 
+    @model_validator(mode="after")
+    def unique_devices(self) -> Self:
+        nic_names = [nic.name for nic in self.nics]
+        if len(nic_names) != len(set(nic_names)):
+            raise ValueError(f"interface names on {self.name} must be unique")
+        disk_names = [disk.name for disk in self.disks]
+        if len(disk_names) != len(set(disk_names)):
+            raise ValueError(f"disk names on {self.name} must be unique")
+        return self
+
 
 class NetworkSpec(StrictModel):
+    """An isolated layer-2 segment: no host address, no DHCP, no route off the segment."""
+
     name: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
-    isolated: bool = True
     cidr: str | None = None
 
 
@@ -160,6 +183,7 @@ class ScenarioManifest(StrictModel):
     setup: str = Field(min_length=1)
     reference_solution: str = Field(min_length=1)
     alternate_solutions: tuple[str, ...] = ()
+    rejected_solutions: tuple[str, ...] = ()
 
     @property
     def integrated(self) -> bool:

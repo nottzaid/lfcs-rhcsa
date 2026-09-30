@@ -25,6 +25,8 @@ class ResourceRecord:
 class ResourceRegistry(Protocol):
     def get(self, kind: ResourceKind, name: str) -> ResourceRecord | None: ...
 
+    def list_session(self, session_id: UUID, kind: ResourceKind) -> tuple[ResourceRecord, ...]: ...
+
     def add(self, record: ResourceRecord) -> None: ...
 
     def remove(self, record: ResourceRecord) -> None: ...
@@ -100,6 +102,10 @@ class ResourceManager:
             resource.stop()
         resource.undefine()
         self._registry.remove(record)
+
+    def owned(self, session_id: UUID, kind: ResourceKind) -> tuple[ResourceIdentity, ...]:
+        """Identities the registry records for one session, for exact per-session cleanup."""
+        return tuple(record.identity for record in self._registry.list_session(session_id, kind))
 
     def is_registered(self, identity: ResourceIdentity) -> bool:
         record = self._registry.get(identity.kind, identity.name)

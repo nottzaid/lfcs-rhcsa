@@ -216,14 +216,15 @@ def test_scenario_verify_reports_acceptance_semantics(
     report = VerificationReport(
         scenario.scenario_id,
         (
-            PhaseResult(VerificationPhase.INITIAL, (), False),
+            PhaseResult(VerificationPhase.INITIAL, (), False, expected=False),
             PhaseResult(
                 VerificationPhase.SOLVED,
                 (),
                 True,
                 solution=scenario.reference_solution,
+                expected=True,
             ),
-            PhaseResult(VerificationPhase.RESET, (), False),
+            PhaseResult(VerificationPhase.RESET, (), False, expected=False),
         ),
     )
     monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: fake)

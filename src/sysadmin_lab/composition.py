@@ -25,7 +25,7 @@ from sysadmin_lab.application.scenario_sessions import ScenarioSessionService
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder, SubprocessRunner
 from sysadmin_lab.application.session_checks import SessionCheckService
 from sysadmin_lab.application.sessions import SessionCoordinator
-from sysadmin_lab.application.vm_sessions import SingleHostVmSessionService
+from sysadmin_lab.application.vm_sessions import VmSessionService
 
 
 class VmRuntime:
@@ -33,7 +33,7 @@ class VmRuntime:
 
     sessions: SessionCoordinator
     machines: SqliteSessionMachineRepository
-    vm_sessions: SingleHostVmSessionService
+    vm_sessions: VmSessionService
     checks: SessionCheckService
     scenarios: ScenarioSessionService
     progress: ProgressService
@@ -55,7 +55,7 @@ class VmRuntime:
         self.sessions = SessionCoordinator(session_repository)
         executor = SshGuestExecutor(BoundedSubprocessRunner())
         self.actions = ActionRunner(executor)
-        self.vm_sessions = SingleHostVmSessionService(
+        self.vm_sessions = VmSessionService(
             sessions=self.sessions,
             machines=self.machines,
             resources=ResourceManager(gateway, resources),

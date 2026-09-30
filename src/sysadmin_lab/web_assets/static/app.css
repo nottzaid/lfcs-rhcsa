@@ -165,6 +165,8 @@ tbody tr:hover { background: #e8f4fc; }
 .machine-spec strong, .machine-spec span, .machine-spec small { display: block; }
 .machine-spec span, .machine-spec small, .aside-note { color: var(--muted); }
 .machine-spec small { margin-top: 4px; }
+.nic { display: block; color: var(--muted); font-size: 12px; margin-top: 4px; }
+.nic code { font-size: 12px; color: var(--ink); }
 .aside-note { font-size: 13px; margin: 15px 0 0; }
 .aside-note code { white-space: nowrap; }
 .objective-section { margin-top: 20px; }

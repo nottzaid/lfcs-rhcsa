@@ -14,8 +14,8 @@ from sysadmin_lab.application.sessions import SessionCoordinator
 from sysadmin_lab.application.vm_sessions import (
     MachineUnreachableError,
     ProvisionedSession,
-    SingleHostVmSessionService,
     VmHostRequest,
+    VmSessionService,
 )
 from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.models import HostSpec, ScenarioManifest, ScenarioStatus
@@ -74,7 +74,7 @@ class ScenarioSessionService:
         *,
         sessions: SessionCoordinator,
         machines: SessionMachineRepository,
-        vm_sessions: SingleHostVmSessionService,
+        vm_sessions: VmSessionService,
         checks: SessionCheckService,
         actions: ActionRunner,
         progress: ProgressService,
@@ -110,11 +110,13 @@ class ScenarioSessionService:
                     memory_mib=host.memory_mib,
                     vcpus=host.vcpus,
                     data_disks=host.disks,
+                    interfaces=host.nics,
                 )
             )
         provisioned = self._vm_sessions.provision_many(
             scenario_id=manifest.scenario_id,
             requests=tuple(requests),
+            networks=tuple(network.name for network in manifest.topology.networks),
         )
         try:
             endpoints = self._endpoints(provisioned.state.session_id)
@@ -203,9 +205,4 @@ class ScenarioSessionService:
     ) -> tuple[HostSpec, ...]:
         if require_verified and manifest.status is not ScenarioStatus.VERIFIED:
             raise ScenarioLaunchError(f"scenario is not verified: {manifest.scenario_id}")
-        if manifest.topology.networks:
-            raise ScenarioLaunchError("custom scenario networks are not supported yet")
-        for host in manifest.topology.hosts:
-            if host.nics:
-                raise ScenarioLaunchError("this scenario topology needs an unsupported VM feature")
         return manifest.topology.hosts

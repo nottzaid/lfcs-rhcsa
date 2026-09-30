@@ -38,9 +38,10 @@
               <strong>{{ host.name }}</strong>
               <span>{{ host.image }}</span>
               <small>{{ host.vcpus }} vCPU · {{ host.memory_mib }} MiB{% for disk in host.disks %} · extra {{ disk.size_mib }} MiB disk{% endfor %}</small>
+              {{ parts.interfaces(scenario, host.name) }}
             </div>
           {% endfor %}
-          <p class="aside-note">The machines appear in virt-manager after launch. SSH and console credentials are shown when they are ready.</p>
+          <p class="aside-note">The machines appear in virt-manager after launch. SSH and console credentials are shown when they are ready.{% if scenario.topology.networks %} Every machine also has a management NIC for your SSH connection and the checker; leave it alone.{% endif %}</p>
         </section>
         {{ parts.references(scenario) }}
       </aside>

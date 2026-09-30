@@ -10,7 +10,7 @@ from sysadmin_lab.application.ports import CheckObservation, LabSession
 from sysadmin_lab.application.scenario_sessions import ScenarioSessionService
 from sysadmin_lab.application.session_checks import SessionCheckService
 from sysadmin_lab.application.sessions import SessionCoordinator
-from sysadmin_lab.application.vm_sessions import SingleHostVmSessionService
+from sysadmin_lab.application.vm_sessions import VmSessionService
 from sysadmin_lab.catalog import load_action_manifest
 from sysadmin_lab.domain.models import ScenarioManifest
 from sysadmin_lab.domain.sessions import SessionStatus
@@ -26,7 +26,7 @@ class VmScenarioDriver:
         base_images: dict[str, Path],
         sessions: SessionCoordinator,
         machines: SessionMachineRepository,
-        vm_sessions: SingleHostVmSessionService,
+        vm_sessions: VmSessionService,
         checks: SessionCheckService,
         scenarios: ScenarioSessionService,
         actions: ActionRunner,

@@ -52,3 +52,11 @@
     </ul>
   </section>
 {% endmacro %}
+
+{% macro interfaces(scenario, host_name) %}
+  {% set host = scenario.topology.hosts|selectattr("name", "equalto", host_name)|first %}
+  {% for nic in host.nics %}
+    {% set network = scenario.topology.networks|selectattr("name", "equalto", nic.network)|first %}
+    <small class="nic"><code>{{ nic.name }}</code> on the isolated <strong>{{ nic.network }}</strong> network{% if network.cidr %} ({{ network.cidr }}){% endif %}</small>
+  {% endfor %}
+{% endmacro %}

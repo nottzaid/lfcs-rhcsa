@@ -18,7 +18,7 @@ from sysadmin_lab.application.image_building import (
     resolve_built_image,
 )
 from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
-from sysadmin_lab.application.verification import ScenarioVerifier
+from sysadmin_lab.application.verification import PhaseResult, ScenarioVerifier
 from sysadmin_lab.application.vm_verification import VmScenarioDriver
 from sysadmin_lab.catalog import (
     CatalogError,
@@ -449,6 +449,16 @@ def destroy_scenario(
     typer.echo(f"scenario session {state.session_id}: {state.status.value}")
 
 
+def _phase_outcome(phase: PhaseResult) -> str:
+    if phase.errored:
+        return "a check errored"
+    if phase.expected is None:
+        return "live state passes; the reboot must expose it"
+    if phase.expected:
+        return "checks pass" if phase.passed else "checks should pass but fail"
+    return "checks fail as designed" if not phase.passed else "checks should fail but pass"
+
+
 @scenario_app.command("verify")
 def verify_scenario(
     scenario_id: str,
@@ -480,15 +490,12 @@ def verify_scenario(
         typer.echo(f"scenario verification failed: {exc}", err=True)
         raise typer.Exit(code=2) from exc
     for phase in report.phases:
-        expects_broken = phase.phase.value in {"initial", "reset"}
-        accepted = phase.passed is not expects_broken
-        status = "PASS" if accepted else "FAIL"
-        outcome = "checks fail as designed" if expects_broken else "checks pass"
+        status = "PASS" if phase.accepted else "FAIL"
         solution = f" ({phase.solution})" if phase.solution else ""
-        typer.echo(f"{status} {phase.phase.value}{solution}: {outcome}")
-        if not accepted:
+        typer.echo(f"{status} {phase.phase.value}{solution}: {_phase_outcome(phase)}")
+        if not phase.accepted:
             for observation in phase.observations:
-                if not observation.passed or observation.error:
+                if observation.error or (phase.expected and not observation.passed):
                     marker = "ERROR" if observation.error else "CHECK"
                     typer.echo(f"  {marker} {observation.check_id}: {observation.message}")
     if not report.passed:

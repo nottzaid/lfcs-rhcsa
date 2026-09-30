@@ -71,6 +71,7 @@
         {% for machine in session.machines %}
           <div class="connection-machine">
             <div class="connection-title"><strong>{{ machine.host_name }}</strong><span>{{ machine.identity.name }}</span></div>
+            {{ parts.interfaces(scenario, machine.host_name) }}
             <dl>
               <div><dt>Address</dt><dd>{{ machine.address or "Waiting for DHCP" }}</dd></div>
               <div><dt>Username</dt><dd>{{ machine.username }}</dd></div>

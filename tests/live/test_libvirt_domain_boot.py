@@ -21,7 +21,7 @@ from sysadmin_lab.application.machines import DomainLeaseReadiness
 from sysadmin_lab.application.resources import ResourceManager
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder, SubprocessRunner
 from sysadmin_lab.application.sessions import SessionCoordinator
-from sysadmin_lab.application.vm_sessions import SingleHostVmSessionService
+from sysadmin_lab.application.vm_sessions import VmSessionService
 from sysadmin_lab.domain.models import CheckKind, CheckSpec
 from sysadmin_lab.domain.sessions import SessionStatus
 
@@ -47,7 +47,7 @@ def test_guarded_rocky_session_service_lifecycle() -> None:
         SqliteSessionMachineRepository(state_path) as machine_repository,
     ):
         executor = SshGuestExecutor(BoundedSubprocessRunner())
-        service = SingleHostVmSessionService(
+        service = VmSessionService(
             sessions=SessionCoordinator(session_repository),
             machines=machine_repository,
             resources=ResourceManager(gateway, resource_registry),

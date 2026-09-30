@@ -17,10 +17,19 @@ from sysadmin_lab.application.machines import (
 from sysadmin_lab.application.resources import ResourceManager
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder
 from sysadmin_lab.application.sessions import SessionCoordinator
-from sysadmin_lab.domain.models import DiskSpec
+from sysadmin_lab.domain.models import DiskSpec, NicSpec
+from sysadmin_lab.domain.resources import ResourceIdentity, ResourceKind
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
-from sysadmin_lab.domain.virtual_machines import DomainSpec, domain_identity, render_domain_xml
+from sysadmin_lab.domain.virtual_machines import (
+    DomainSpec,
+    ScenarioInterface,
+    domain_identity,
+    interface_mac,
+    network_identity,
+    render_domain_xml,
+    render_network_xml,
+)
 
 
 class VmProvisioningError(RuntimeError):
@@ -38,8 +47,11 @@ class MachineUnreachableError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class ProvisionedSession:
     state: SessionState
-    machine: SessionMachine
-    machines: tuple[SessionMachine, ...] = ()
+    machines: tuple[SessionMachine, ...]
+
+    @property
+    def machine(self) -> SessionMachine:
+        return self.machines[0]
 
 
 @dataclass(frozen=True, slots=True)
@@ -49,10 +61,15 @@ class VmHostRequest:
     memory_mib: int = 2048
     vcpus: int = 2
     data_disks: tuple[DiskSpec, ...] = ()
+    interfaces: tuple[NicSpec, ...] = ()
 
 
-class SingleHostVmSessionService:
-    """Production lifecycle for one or more default-network KVM guests."""
+class VmSessionService:
+    """Production lifecycle for a session's KVM guests and isolated scenario networks.
+
+    Every guest keeps its management NIC on libvirt's default network, which carries SSH
+    for the learner and the checker. Scenario networks are separate isolated segments.
+    """
 
     def __init__(
         self,
@@ -87,26 +104,51 @@ class SingleHostVmSessionService:
         return self.provision_many(scenario_id=scenario_id, requests=(request,))
 
     def provision_many(
-        self, *, scenario_id: str, requests: tuple[VmHostRequest, ...]
+        self,
+        *,
+        scenario_id: str,
+        requests: tuple[VmHostRequest, ...],
+        networks: tuple[str, ...] = (),
     ) -> ProvisionedSession:
         if not requests:
             raise VmProvisioningError("at least one VM host is required")
         if len({request.host_name for request in requests}) != len(requests):
             raise VmProvisioningError("VM host names must be unique")
+        if len(set(networks)) != len(networks):
+            raise VmProvisioningError("scenario network names must be unique")
+        unknown = sorted(
+            {nic.network for request in requests for nic in request.interfaces} - set(networks)
+        )
+        if unknown:
+            raise VmProvisioningError(f"undeclared scenario networks: {', '.join(unknown)}")
         state = self._sessions.declare(scenario_id)
         state = self._sessions.transition(state.session_id, SessionStatus.PROVISIONING)
         created: list[SessionMachine] = []
         attempted_roles: list[str] = []
         try:
+            for network in networks:
+                network_resource = network_identity(scenario_id, state.session_id, network)
+                self._resources.define(
+                    render_network_xml(network_resource), network_resource, start=True
+                )
             for request in requests:
                 attempted_roles.append(request.host_name)
                 identity = domain_identity(scenario_id, state.session_id, request.host_name)
+                interfaces = tuple(
+                    ScenarioInterface(
+                        name=nic.name,
+                        network=network_identity(scenario_id, state.session_id, nic.network).name,
+                        mac=interface_mac(state.session_id, request.host_name, nic.name),
+                    )
+                    for nic in request.interfaces
+                )
                 paths, access = self._artifacts.create(
                     session_id=state.session_id,
                     role=request.host_name,
-                    hostname=identity.name,
+                    hostname=request.host_name,
                     base_image=request.base_image,
                     data_disks=request.data_disks,
+                    interfaces=interfaces,
                 )
                 machine = SessionMachine(
                     session_id=state.session_id,
@@ -126,6 +168,7 @@ class SingleHostVmSessionService:
                         memory_mib=request.memory_mib,
                         vcpus=request.vcpus,
                         data_disks=paths.data_disks,
+                        interfaces=interfaces,
                     )
                 )
                 self._resources.define(xml, identity, start=True)
@@ -146,7 +189,7 @@ class SingleHostVmSessionService:
                     raise VmProvisioningError(f"cloud-init failed: {detail}")
                 ready.append(machine)
             state = self._sessions.transition(state.session_id, SessionStatus.READY)
-            return ProvisionedSession(state, ready[0], tuple(ready))
+            return ProvisionedSession(state, tuple(ready))
         except Exception as exc:
             self._cleanup_failed_provision(state, tuple(attempted_roles))
             self._sessions.transition(state.session_id, SessionStatus.FAILED, error=str(exc))
@@ -160,6 +203,7 @@ class SingleHostVmSessionService:
                     self._resources.remove(machine.identity)
                 self._artifacts.destroy(session_id, machine.host_name)
                 self._machines.remove(machine)
+            self._remove_networks(session_id)
             return self._sessions.transition(session_id, SessionStatus.DESTROYED)
         except Exception as exc:
             self._sessions.transition(session_id, SessionStatus.FAILED, error=str(exc))
@@ -226,3 +270,12 @@ class SingleHostVmSessionService:
         for role in attempted_roles:
             if role not in cleaned:
                 self._artifacts.destroy(state.session_id, role)
+        self._remove_networks(state.session_id)
+
+    def owned_networks(self, session_id: UUID) -> tuple[ResourceIdentity, ...]:
+        return self._resources.owned(session_id, ResourceKind.NETWORK)
+
+    def _remove_networks(self, session_id: UUID) -> None:
+        # Domains are gone by now, so no guest still holds a port on these bridges.
+        for identity in self.owned_networks(session_id):
+            self._resources.remove(identity)

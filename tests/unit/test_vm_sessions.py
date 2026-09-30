@@ -15,14 +15,15 @@ from sysadmin_lab.application.session_artifacts import GuestAccess, SessionPaths
 from sysadmin_lab.application.sessions import SessionConflictError, SessionCoordinator
 from sysadmin_lab.application.vm_sessions import (
     MachineUnreachableError,
-    SingleHostVmSessionService,
     VmHostRequest,
     VmProvisioningError,
+    VmSessionService,
 )
-from sysadmin_lab.domain.models import DiskSpec
-from sysadmin_lab.domain.resources import ResourceIdentity
+from sysadmin_lab.domain.models import DiskSpec, NicSpec
+from sysadmin_lab.domain.resources import ResourceIdentity, ResourceKind
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
+from sysadmin_lab.domain.virtual_machines import ScenarioInterface
 
 
 @dataclass
@@ -82,6 +83,8 @@ class FakeArtifacts:
     root: Path
     fail: bool = False
     destroyed: list[tuple[UUID, str]] = field(default_factory=list)
+    hostnames: list[str] = field(default_factory=list)
+    interfaces: dict[str, tuple[ScenarioInterface, ...]] = field(default_factory=dict)
 
     def create(
         self,
@@ -92,7 +95,10 @@ class FakeArtifacts:
         base_image: Path,
         disk_gib: int = 12,
         data_disks: tuple[DiskSpec, ...] = (),
+        interfaces: tuple[ScenarioInterface, ...] = (),
     ) -> tuple[SessionPaths, GuestAccess]:
+        self.hostnames.append(hostname)
+        self.interfaces[role] = interfaces
         if self.fail:
             raise RuntimeError("artifact failure")
         directory = self.root / str(session_id) / role
@@ -118,12 +124,24 @@ class FakeResources:
     registered: dict[str, ResourceIdentity] = field(default_factory=dict)
     removed: list[str] = field(default_factory=list)
     xml: str = ""
+    defined: list[str] = field(default_factory=list)
+    fail_on: str | None = None
 
     def define(self, xml: str, identity: ResourceIdentity, *, start: bool = False) -> object:
         assert start
+        if self.fail_on and self.fail_on in identity.name:
+            raise RuntimeError(f"libvirt refused {identity.name}")
         self.xml = xml
+        self.defined.append(xml)
         self.registered[identity.name] = identity
         return object()
+
+    def owned(self, session_id: UUID, kind: ResourceKind) -> tuple[ResourceIdentity, ...]:
+        return tuple(
+            identity
+            for identity in self.registered.values()
+            if identity.session_id == session_id and identity.kind is kind
+        )
 
     def is_registered(self, identity: ResourceIdentity) -> bool:
         return self.registered.get(identity.name) == identity
@@ -179,7 +197,7 @@ def dependencies(tmp_path: Path, *, cloud_exit: int = 0, artifact_failure: bool 
     resources = FakeResources()
     readiness = FakeReadiness()
     executor = FakeExecutor(GuestCommandResult(cloud_exit, "", "cloud error"))
-    service = SingleHostVmSessionService(
+    service = VmSessionService(
         sessions=SessionCoordinator(session_repository),
         machines=machines,  # type: ignore[arg-type]
         resources=resources,  # type: ignore[arg-type]
@@ -324,3 +342,68 @@ def test_service_records_early_artifact_failure(tmp_path: Path) -> None:
     assert machines.list(state.session_id) == ()
     assert resources.registered == {}
     assert artifacts.destroyed == [(state.session_id, "node1")]
+
+
+def test_service_builds_isolated_networks_and_named_interfaces(tmp_path: Path) -> None:
+    service, _sessions, _machines, artifacts, resources, _readiness, _executor = dependencies(
+        tmp_path
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+
+    provisioned = service.provision_many(
+        scenario_id="branch-routing",
+        requests=(
+            VmHostRequest("router", base, interfaces=(NicSpec(network="lan", name="lan0"),)),
+            VmHostRequest("client", base, interfaces=(NicSpec(network="lan", name="lan0"),)),
+        ),
+        networks=("lan",),
+    )
+
+    session_id = provisioned.state.session_id
+    assert resources.defined[0].startswith("<network>")
+    networks = resources.owned(session_id, ResourceKind.NETWORK)
+    assert [identity.role for identity in networks] == ["net-lan"]
+    router_nic, client_nic = artifacts.interfaces["router"][0], artifacts.interfaces["client"][0]
+    assert router_nic.name == client_nic.name == "lan0"
+    assert router_nic.network == client_nic.network == networks[0].name
+    assert router_nic.mac != client_nic.mac
+    assert f"address='{router_nic.mac}'" in resources.defined[1].replace('"', "'")
+    assert artifacts.hostnames == ["router", "client"]
+
+    service.destroy(session_id)
+    assert resources.owned(session_id, ResourceKind.NETWORK) == ()
+    assert resources.removed[-1] == networks[0].name
+
+
+def test_failed_provisioning_removes_the_session_networks(tmp_path: Path) -> None:
+    service, sessions, _machines, _artifacts, resources, _readiness, _executor = dependencies(
+        tmp_path
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    resources.fail_on = "-client"
+
+    with pytest.raises(RuntimeError, match="libvirt refused"):
+        service.provision_many(
+            scenario_id="branch-routing",
+            requests=(
+                VmHostRequest("router", base, interfaces=(NicSpec(network="lan", name="lan0"),)),
+                VmHostRequest("client", base, interfaces=(NicSpec(network="lan", name="lan0"),)),
+            ),
+            networks=("lan",),
+        )
+
+    assert resources.registered == {}
+    assert next(iter(sessions.states.values())).status is SessionStatus.FAILED
+
+
+def test_service_rejects_nics_on_undeclared_networks(tmp_path: Path) -> None:
+    service, sessions, *_rest = dependencies(tmp_path)
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    request = VmHostRequest("router", base, interfaces=(NicSpec(network="wan", name="wan0"),))
+
+    with pytest.raises(VmProvisioningError, match="undeclared scenario networks: wan"):
+        service.provision_many(scenario_id="branch-routing", requests=(request,), networks=())
+    assert sessions.states == {}

@@ -213,3 +213,12 @@ def test_registry_refuses_duplicate_or_mismatched_record() -> None:
         registry.add(record)
     with pytest.raises(ResourceSafetyError, match="mismatched record"):
         registry.remove(replace(record, hypervisor_uuid=uuid4()))
+
+
+def test_manager_lists_resources_owned_by_one_session() -> None:
+    expected = identity()
+    manager = ResourceManager(FakeGateway(), MemoryResourceRegistry())
+    manager.define(base_xml(expected), expected)
+
+    assert manager.owned(expected.session_id, expected.kind) == (expected,)
+    assert manager.owned(uuid4(), expected.kind) == ()
