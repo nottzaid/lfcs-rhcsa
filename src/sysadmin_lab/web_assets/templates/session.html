@@ -24,6 +24,9 @@
           <div>
             <h2>Verify your work</h2>
             <p>The checker evaluates the resulting system state, not the commands you used.</p>
+            {% if scenario.reboot_hosts %}
+              <p class="reboot-note">Persistence is part of this task. Once the live state passes, the check reboots <strong>{{ scenario.reboot_hosts|join(", ") }}</strong> and grades it again, so save your work there first.</p>
+            {% endif %}
           </div>
           <button
             class="button button-success button-large"

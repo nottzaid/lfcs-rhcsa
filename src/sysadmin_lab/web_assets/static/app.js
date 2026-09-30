@@ -14,37 +14,73 @@ function clearOperation() {
   panel.classList.remove("operation-failed");
 }
 
-function renderChecks(report) {
-  const target = document.querySelector("#check-results");
-  if (!target) return;
-  target.hidden = false;
-  const summaryClass = report.required_passed && !report.has_errors ? "check-pass" : "check-fail";
-  const summary = report.required_passed && !report.has_errors
-    ? "Required state achieved"
-    : "The machine is not finished yet";
-  target.replaceChildren();
-
-  const heading = document.createElement("div");
-  heading.className = `check-summary ${summaryClass}`;
-  const strong = document.createElement("strong");
-  strong.textContent = summary;
-  const score = document.createElement("span");
-  score.textContent = `${report.earned_weight}/${report.available_weight} checks`;
-  heading.append(strong, score);
-  target.append(heading);
-
+function reportList(report) {
   const list = document.createElement("ul");
   for (const result of report.results) {
     const item = document.createElement("li");
     item.className = `result-${result.status}`;
     const label = document.createElement("strong");
     label.textContent = result.description;
-    const message = document.createElement("span");
-    message.textContent = result.message;
-    item.append(label, message);
+    item.append(label);
+    if (result.status !== "passed") {
+      const message = document.createElement("span");
+      message.textContent = result.message;
+      item.append(message);
+    }
     list.append(item);
   }
-  target.append(list);
+  return list;
+}
+
+function reportSection(title, report) {
+  const section = document.createElement("section");
+  section.className = "check-phase";
+  const heading = document.createElement("h3");
+  heading.textContent = title;
+  const score = document.createElement("span");
+  score.textContent = `${report.earned_weight}/${report.available_weight}`;
+  heading.append(score);
+  section.append(heading, reportList(report));
+  return section;
+}
+
+function checkSummary(result) {
+  const hosts = result.reboot_hosts.join(", ");
+  if (result.solved) {
+    return hosts
+      ? `Solved. Every requirement holds, and it survived rebooting ${hosts}.`
+      : "Solved. Every requirement holds.";
+  }
+  if (result.unreachable_host) {
+    return `${result.unreachable_host} did not come back after rebooting. Open its console in virt-manager to see why it cannot finish booting, fix it, and check again.`;
+  }
+  if (result.after_reboot) {
+    return `The live state passed, but not everything survived rebooting ${hosts}.`;
+  }
+  return "Not finished yet.";
+}
+
+function renderChecks(result) {
+  const target = document.querySelector("#check-results");
+  if (!target) return;
+  target.hidden = false;
+  target.replaceChildren();
+
+  const heading = document.createElement("div");
+  heading.className = `check-summary ${result.solved ? "check-pass" : "check-fail"}`;
+  const strong = document.createElement("strong");
+  strong.textContent = checkSummary(result);
+  heading.append(strong);
+  target.append(heading);
+
+  const persistent = result.reboot_hosts.length > 0;
+  target.append(reportSection(persistent ? "Live state" : "Requirements", result.live));
+  if (result.after_reboot) {
+    target.append(
+      reportSection(`After rebooting ${result.reboot_hosts.join(", ")}`, result.after_reboot),
+    );
+  }
+  if (result.solved) document.dispatchEvent(new CustomEvent("lab:solved"));
 }
 
 async function pollJob(jobId, renderMode) {

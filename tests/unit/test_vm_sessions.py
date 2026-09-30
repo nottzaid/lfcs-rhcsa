@@ -9,10 +9,12 @@ import pytest
 from sysadmin_lab.application.guest_execution import (
     GuestCommandResult,
     GuestEndpoint,
+    GuestReadinessError,
 )
 from sysadmin_lab.application.session_artifacts import GuestAccess, SessionPaths
 from sysadmin_lab.application.sessions import SessionConflictError, SessionCoordinator
 from sysadmin_lab.application.vm_sessions import (
+    MachineUnreachableError,
     SingleHostVmSessionService,
     VmHostRequest,
     VmProvisioningError,
@@ -143,12 +145,15 @@ class FakeLeases:
 class FakeReadiness:
     endpoints: list[GuestEndpoint] = field(default_factory=list)
     restarted: list[GuestEndpoint] = field(default_factory=list)
+    restart_failure: Exception | None = None
 
     def wait(self, endpoint: GuestEndpoint) -> None:
         self.endpoints.append(endpoint)
 
     def wait_for_restart(self, endpoint: GuestEndpoint) -> None:
         self.restarted.append(endpoint)
+        if self.restart_failure is not None:
+            raise self.restart_failure
 
 
 @dataclass
@@ -226,6 +231,22 @@ def test_service_reboots_only_an_owned_ready_machine(tmp_path: Path) -> None:
     ]
     assert sessions.states[provisioned.state.session_id].status is SessionStatus.READY
     assert sessions.states[provisioned.state.session_id].revision == 4
+
+
+def test_unbootable_machine_after_reboot_leaves_the_session_usable(tmp_path: Path) -> None:
+    service, sessions, _machines, _artifacts, _resources, readiness, _executor = dependencies(
+        tmp_path
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(scenario_id="fstab-lab", host_name="node2", base_image=base)
+    readiness.restart_failure = GuestReadinessError("guest SSH did not become ready")
+
+    with pytest.raises(MachineUnreachableError, match="node2 did not come back") as raised:
+        service.reboot(provisioned.state.session_id, ("node2",))
+
+    assert raised.value.host_name == "node2"
+    assert sessions.states[provisioned.state.session_id].status is SessionStatus.READY
 
 
 def test_service_provisions_multiple_hosts_in_one_session(tmp_path: Path) -> None:

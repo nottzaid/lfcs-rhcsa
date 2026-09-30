@@ -11,7 +11,7 @@ from typer.testing import CliRunner
 
 from sysadmin_lab.application.checking import CheckReport, CheckResult
 from sysadmin_lab.application.ports import CheckObservation
-from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
 from sysadmin_lab.application.verification import (
     PhaseResult,
     VerificationPhase,
@@ -30,10 +30,11 @@ SESSION_ID = UUID("10000000-0000-0000-0000-000000000001")
 
 
 def test_catalog_validate_reports_manifest_count() -> None:
-    root = Path(__file__).parents[2]
-    result = runner.invoke(app, ["catalog", "validate", str(root / "examples" / "scenarios")])
+    scenarios = Path(__file__).parents[2] / "scenarios"
+    result = runner.invoke(app, ["catalog", "validate", str(scenarios)])
     assert result.exit_code == 0
-    assert "validated 1 scenario manifest(s)" in result.stdout
+    count = len(list(scenarios.glob("*.yaml")))
+    assert f"validated {count} scenario manifest(s)" in result.stdout
 
 
 def test_catalog_validate_reports_contract_error(tmp_path: Path) -> None:
@@ -90,7 +91,8 @@ class FakeRuntime:
         self.sessions = SimpleNamespace(get=lambda _session_id: self.ready)
         self.machines = SimpleNamespace(list=lambda _session_id: (self.machine,))
         root = Path(__file__).parents[2]
-        manifest = load_catalog(root / "examples" / "scenarios")[0]
+        manifest = load_catalog(root / "scenarios")[0]
+        self.manifest = manifest
         self.check_id = manifest.checks[0].check_id
         self.checks = SimpleNamespace(
             run=lambda _session_id, _manifest: CheckReport(
@@ -112,7 +114,7 @@ class FakeRuntime:
         )
         self.scenarios = SimpleNamespace(
             start=lambda _manifest, _setup, _images: self.started,
-            check=lambda _session_id, _manifest: self.report,
+            check=lambda _session_id, _manifest, **_options: LearnerCheckReport(self.report),
             reset=lambda _session_id, _manifest, _setup, _images: self.started,
             destroy=lambda _session_id: destroyed_state,
         )
@@ -155,7 +157,7 @@ def test_session_commands_use_shared_runtime_service(
             "session",
             "check",
             str(SESSION_ID),
-            str(root / "examples" / "scenarios" / "selinux-web-port.yaml"),
+            str(root / "scenarios" / f"{fake.manifest.scenario_id}.yaml"),
         ],
     )
     assert checked.exit_code == 0
@@ -186,6 +188,7 @@ def test_public_scenario_commands_use_learner_service(
     checked = runner.invoke(app, ["scenario", "check", str(SESSION_ID)])
     assert checked.exit_code == 0
     assert "score: 1/1" in checked.stdout
+    assert "solved" in checked.stdout
 
     status = runner.invoke(app, ["scenario", "status", str(SESSION_ID)])
     assert status.exit_code == 0
@@ -253,3 +256,35 @@ def test_up_rejects_non_loopback_and_busy_port() -> None:
         busy = runner.invoke(app, ["up", "--port", str(port), "--no-browser"])
     assert busy.exit_code == 2
     assert f"port {port} is already in use" in busy.stderr
+
+
+@pytest.mark.parametrize(
+    ("after_reboot", "unreachable", "expected"),
+    [
+        (True, None, "after rebooting node2:"),
+        (False, "node2", "node2 did not come back over SSH after rebooting"),
+        (False, None, "persistence not proven: rerun without --skip-reboot"),
+    ],
+)
+def test_scenario_check_reports_the_persistence_phase(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    after_reboot: bool,
+    unreachable: str | None,
+    expected: str,
+) -> None:
+    fake = FakeRuntime(tmp_path)
+    learner = LearnerCheckReport(
+        fake.report,
+        ("node2",),
+        fake.report if after_reboot else None,
+        unreachable,
+    )
+    fake.scenarios.check = lambda _session_id, _manifest, **_options: learner
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: fake)
+    monkeypatch.setattr("sysadmin_lab.cli.find_scenario", lambda _path, _id: fake.manifest)
+
+    checked = runner.invoke(app, ["scenario", "check", str(SESSION_ID)])
+
+    assert expected in checked.stdout
+    assert checked.exit_code == (0 if after_reboot else 1)

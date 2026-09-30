@@ -4,10 +4,9 @@ from dataclasses import dataclass
 from pathlib import Path
 from uuid import UUID
 
-from sysadmin_lab.application.checking import CheckReport
 from sysadmin_lab.application.image_acquisition import HttpsDownloader, ImageAcquirer
 from sysadmin_lab.application.image_building import resolve_built_image
-from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
 from sysadmin_lab.catalog import (
     find_scenario,
     load_action_manifest,
@@ -95,11 +94,13 @@ class LabWorkspace:
         with open_vm_runtime(self.paths.runtime_root) as runtime:
             return runtime.scenarios.start(manifest, setup, images)
 
-    def check(self, session_id: UUID) -> CheckReport:
+    def check(self, session_id: UUID, *, prove_persistence: bool = True) -> LearnerCheckReport:
         with open_vm_runtime(self.paths.runtime_root) as runtime:
             state = runtime.sessions.get(session_id)
             manifest = self.scenario(state.scenario_id)
-            return runtime.scenarios.check(session_id, manifest)
+            return runtime.scenarios.check(
+                session_id, manifest, prove_persistence=prove_persistence
+            )
 
     def reset(self, session_id: UUID) -> StartedScenario:
         with open_vm_runtime(self.paths.runtime_root) as runtime:

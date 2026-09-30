@@ -73,10 +73,8 @@ class ScenarioVerifier:
                 )
             )
 
-            if manifest.persistence.reboot:
-                reboot_hosts = manifest.persistence.hosts or tuple(
-                    host.name for host in manifest.topology.hosts
-                )
+            reboot_hosts = manifest.reboot_hosts
+            if reboot_hosts:
                 self._driver.reboot(session, reboot_hosts)
                 phases.append(
                     self._evaluate(
@@ -100,7 +98,7 @@ class ScenarioVerifier:
                         solution=solution,
                     )
                 )
-                if manifest.persistence.reboot:
+                if reboot_hosts:
                     self._driver.reboot(session, reboot_hosts)
                     phases.append(
                         self._evaluate(

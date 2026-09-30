@@ -8,6 +8,7 @@ from sysadmin_lab.application.guest_execution import (
     GuestEndpoint,
     GuestExecutor,
     GuestReadiness,
+    GuestReadinessError,
 )
 from sysadmin_lab.application.machines import (
     DomainLeaseReadiness,
@@ -24,6 +25,14 @@ from sysadmin_lab.domain.virtual_machines import DomainSpec, domain_identity, re
 
 class VmProvisioningError(RuntimeError):
     pass
+
+
+class MachineUnreachableError(RuntimeError):
+    """A rebooted machine did not accept SSH again within the readiness window."""
+
+    def __init__(self, host_name: str, detail: str) -> None:
+        super().__init__(f"{host_name} did not come back after rebooting: {detail}")
+        self.host_name = host_name
 
 
 @dataclass(frozen=True, slots=True)
@@ -190,7 +199,15 @@ class SingleHostVmSessionService:
                     raise VmProvisioningError(
                         f"reboot command failed for {machine.host_name}: {detail}"
                     )
-                self._guest_readiness.wait_for_restart(endpoint)
+                try:
+                    self._guest_readiness.wait_for_restart(endpoint)
+                except GuestReadinessError as exc:
+                    raise MachineUnreachableError(machine.host_name, str(exc)) from exc
+        except MachineUnreachableError:
+            # The domain still exists; a boot-blocking change inside the guest is usually
+            # the learner's to find on the console, so the session stays usable.
+            self._sessions.transition(session_id, SessionStatus.READY)
+            raise
         except Exception as exc:
             self._sessions.transition(session_id, SessionStatus.FAILED, error=str(exc))
             raise

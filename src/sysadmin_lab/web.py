@@ -25,7 +25,7 @@ from sysadmin_lab.application.lab_workspace import (
     ScenarioSessionSnapshot,
     WorkspacePaths,
 )
-from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
 from sysadmin_lab.domain.mock_exams import MockExamManifest
 from sysadmin_lab.domain.models import ScenarioManifest, ScenarioStatus
 from sysadmin_lab.domain.progress import ScenarioProgress
@@ -90,6 +90,19 @@ def _session_json(snapshot: ScenarioSessionSnapshot) -> dict[str, Any]:
             }
             for machine in snapshot.machines
         ],
+    }
+
+
+def _learner_report_json(report: LearnerCheckReport) -> dict[str, Any]:
+    return {
+        "solved": report.solved,
+        "live_passed": report.live_passed,
+        "reboot_hosts": list(report.reboot_hosts),
+        "unreachable_host": report.unreachable_host,
+        "live": _report_json(report.live),
+        "after_reboot": (
+            _report_json(report.after_reboot) if report.after_reboot is not None else None
+        ),
     }
 
 
@@ -252,9 +265,7 @@ def create_app(
         sessions = active_workspace.sessions(limit=20)
         progress = active_workspace.progress()
         mock_exams = tuple(
-            mock
-            for mock in active_workspace.mock_exams()
-            if mock.status is ScenarioStatus.VERIFIED
+            mock for mock in active_workspace.mock_exams() if mock.status is ScenarioStatus.VERIFIED
         )
         active_by_scenario = {
             snapshot.state.scenario_id: snapshot
@@ -368,7 +379,7 @@ def create_app(
         return submit_job(
             kind="check",
             resource_key=f"session:{session_id}",
-            operation=lambda: _report_json(active_workspace.check(session_id)),
+            operation=lambda: _learner_report_json(active_workspace.check(session_id)),
         )
 
     @app.post(

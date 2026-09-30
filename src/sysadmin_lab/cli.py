@@ -17,7 +17,7 @@ from sysadmin_lab.application.image_building import (
     SubprocessBuildRunner,
     resolve_built_image,
 )
-from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
 from sysadmin_lab.application.verification import ScenarioVerifier
 from sysadmin_lab.application.vm_verification import VmScenarioDriver
 from sysadmin_lab.catalog import (
@@ -56,12 +56,8 @@ def _ensure_default_image(root: Path) -> Path:
         source = ImageAcquirer(HttpsDownloader()).acquire(
             manifest, root / "runtime" / "cache" / "isos"
         )
-        return KickstartImageBuilder(SubprocessBuildRunner()).build(
-            manifest,
-            manifest_path,
-            source,
-            image_cache,
-        ).artifact
+        builder = KickstartImageBuilder(SubprocessBuildRunner())
+        return builder.build(manifest, manifest_path, source, image_cache).artifact
 
 
 def _loopback_port_available(host: str, port: int) -> bool:
@@ -310,8 +306,28 @@ def _show_report(report: CheckReport) -> None:
         status = (
             "ERROR" if result.observation.error else "PASS" if result.observation.passed else "FAIL"
         )
-        typer.echo(f"{status} {result.check.check_id}: {result.observation.message}")
+        typer.echo(f"{status} {result.check.description} ({result.observation.message})")
     typer.echo(f"score: {report.earned_weight}/{report.available_weight}")
+
+
+def _show_learner_report(report: LearnerCheckReport) -> None:
+    hosts = ", ".join(report.reboot_hosts)
+    if report.reboot_hosts:
+        typer.echo("live state:")
+    _show_report(report.live)
+    if report.unreachable_host:
+        typer.echo(
+            f"{report.unreachable_host} did not come back over SSH after rebooting. Open its "
+            "console in virt-manager to see why it cannot finish booting."
+        )
+    elif report.after_reboot is not None:
+        typer.echo(f"after rebooting {hosts}:")
+        _show_report(report.after_reboot)
+    elif report.reboot_hosts and report.live_passed:
+        typer.echo(f"persistence not proven: rerun without --skip-reboot to reboot {hosts}")
+    elif report.reboot_hosts:
+        typer.echo(f"once the live state passes, the check reboots {hosts} to prove persistence")
+    typer.echo("solved" if report.solved else "not solved yet")
 
 
 @scenario_app.command("start")
@@ -341,6 +357,13 @@ def start_scenario(
 @scenario_app.command("check")
 def check_scenario(
     session_id: UUID,
+    prove_persistence: Annotated[
+        bool,
+        typer.Option(
+            "--prove-persistence/--skip-reboot",
+            help="Reboot the scenario's persistence hosts once the live state passes.",
+        ),
+    ] = True,
     scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
     runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
 ) -> None:
@@ -349,12 +372,14 @@ def check_scenario(
         with open_vm_runtime(runtime_root) as runtime:
             state = runtime.sessions.get(session_id)
             manifest = find_scenario(scenario_directory, state.scenario_id)
-            report = runtime.scenarios.check(session_id, manifest)
+            report = runtime.scenarios.check(
+                session_id, manifest, prove_persistence=prove_persistence
+            )
     except Exception as exc:
         typer.echo(f"scenario check failed: {exc}", err=True)
         raise typer.Exit(code=2) from exc
-    _show_report(report)
-    if report.has_errors or not report.required_passed:
+    _show_learner_report(report)
+    if not report.solved:
         raise typer.Exit(code=1)
 
 

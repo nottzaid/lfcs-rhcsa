@@ -197,6 +197,9 @@ dd { margin: 0; text-align: right; }
 .check-results li span { color: var(--muted); }
 .result-passed strong { color: var(--green-dark); }
 .result-failed strong, .result-error strong { color: var(--red); }
+.check-phase h3 { display: flex; justify-content: space-between; margin: 0; padding: 14px 20px 4px; font-size: 14px; }
+.check-phase h3 span { color: var(--muted); font-weight: 400; }
+.reboot-note { font-size: 13px; color: var(--muted); }
 
 .operation-panel { position: fixed; z-index: 20; right: 22px; bottom: 22px; width: min(430px, calc(100vw - 44px)); border: 1px solid #aab2b9; background: #fff; box-shadow: 0 10px 35px rgb(0 0 0 / 24%); border-radius: 5px; padding: 17px; display: flex; gap: 13px; }
 .operation-panel[hidden] { display: none; }

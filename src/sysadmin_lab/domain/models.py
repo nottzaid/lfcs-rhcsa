@@ -32,9 +32,6 @@ class CheckKind(StrEnum):
     COMMAND = "command"
     FILE = "file"
     SERVICE = "service"
-    NETWORK = "network"
-    LIBVIRT = "libvirt"
-    CUSTOM = "custom"
 
 
 class ScenarioStatus(StrEnum):
@@ -156,6 +153,13 @@ class ScenarioManifest(StrictModel):
     setup: str = Field(min_length=1)
     reference_solution: str = Field(min_length=1)
     alternate_solutions: tuple[str, ...] = ()
+
+    @property
+    def reboot_hosts(self) -> tuple[str, ...]:
+        """Hosts whose persistence is proven by rebooting them, in topology order."""
+        if not self.persistence.reboot:
+            return ()
+        return self.persistence.hosts or tuple(host.name for host in self.topology.hosts)
 
     @model_validator(mode="after")
     def validate_references(self) -> Self:

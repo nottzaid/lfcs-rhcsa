@@ -12,6 +12,7 @@ from sysadmin_lab.application.progress import ProgressService
 from sysadmin_lab.application.session_checks import SessionCheckService
 from sysadmin_lab.application.sessions import SessionCoordinator
 from sysadmin_lab.application.vm_sessions import (
+    MachineUnreachableError,
     ProvisionedSession,
     SingleHostVmSessionService,
     VmHostRequest,
@@ -30,6 +31,39 @@ class ScenarioLaunchError(RuntimeError):
 class StartedScenario:
     provisioned: ProvisionedSession
     initial_report: CheckReport
+
+
+@dataclass(frozen=True, slots=True)
+class LearnerCheckReport:
+    """A learner's check: the live state, then the state after any required reboot."""
+
+    live: CheckReport
+    reboot_hosts: tuple[str, ...] = ()
+    after_reboot: CheckReport | None = None
+    unreachable_host: str | None = None
+
+    @property
+    def live_passed(self) -> bool:
+        return self.live.required_passed and not self.live.has_errors
+
+    @property
+    def persistence_proven(self) -> bool:
+        if not self.reboot_hosts:
+            return True
+        report = self.after_reboot
+        return report is not None and report.required_passed and not report.has_errors
+
+    @property
+    def solved(self) -> bool:
+        return self.live_passed and self.persistence_proven
+
+    @property
+    def final(self) -> CheckReport:
+        return self.after_reboot or self.live
+
+    @property
+    def earned_weight(self) -> int:
+        return 0 if self.unreachable_host else self.final.earned_weight
 
 
 class ScenarioSessionService:
@@ -95,17 +129,33 @@ class ScenarioSessionService:
             raise
         return StartedScenario(provisioned, report)
 
-    def check(self, session_id: UUID, manifest: ScenarioManifest) -> CheckReport:
-        report = self._checks.run(session_id, manifest)
+    def check(
+        self,
+        session_id: UUID,
+        manifest: ScenarioManifest,
+        *,
+        prove_persistence: bool = True,
+    ) -> LearnerCheckReport:
+        """Grade the live state and, once it passes, prove required persistence by reboot."""
+        live = self._checks.run(session_id, manifest)
+        report = LearnerCheckReport(live, manifest.reboot_hosts)
+        if report.reboot_hosts and prove_persistence and report.live_passed:
+            try:
+                self._vm_sessions.reboot(session_id, report.reboot_hosts)
+            except MachineUnreachableError as exc:
+                report = LearnerCheckReport(live, report.reboot_hosts, None, exc.host_name)
+            else:
+                after = self._checks.run(session_id, manifest)
+                report = LearnerCheckReport(live, report.reboot_hosts, after)
         self._progress.record(
             CheckAttempt.now(
                 session_id=session_id,
                 scenario_id=manifest.scenario_id,
                 scenario_version=manifest.version,
                 earned_weight=report.earned_weight,
-                available_weight=report.available_weight,
-                required_passed=report.required_passed,
-                has_errors=report.has_errors,
+                available_weight=report.final.available_weight,
+                required_passed=report.solved,
+                has_errors=report.final.has_errors,
             )
         )
         return report

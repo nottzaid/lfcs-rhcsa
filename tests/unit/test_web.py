@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from sysadmin_lab.application.checking import CheckReport, CheckResult
 from sysadmin_lab.application.lab_workspace import ScenarioSessionSnapshot
 from sysadmin_lab.application.ports import CheckObservation
-from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
 from sysadmin_lab.catalog import load_catalog
 from sysadmin_lab.domain.models import ScenarioStatus
 from sysadmin_lab.domain.progress import ScenarioProgress
@@ -88,9 +88,9 @@ class FakeWorkspace:
             self.report,
         )
 
-    def check(self, session_id: UUID) -> CheckReport:
+    def check(self, session_id: UUID) -> LearnerCheckReport:
         self.session(session_id)
-        return self.report
+        return LearnerCheckReport(self.report)
 
     def reset(self, session_id: UUID) -> StartedScenario:
         self.session(session_id)
@@ -161,8 +161,9 @@ def test_session_page_and_api_show_connection_and_state_grading(tmp_path: Path) 
         assert accepted.status_code == 202
         completed = wait_for_job(client, accepted.json()["job_id"])
         assert completed["status"] == "succeeded"
-        assert completed["result"]["required_passed"] is True
-        assert completed["result"]["results"][0]["message"] == "matched"
+        assert completed["result"]["solved"] is True
+        assert completed["result"]["after_reboot"] is None
+        assert completed["result"]["live"]["results"][0]["message"] == "matched"
 
 
 def test_start_reset_destroy_jobs_return_browser_destinations(tmp_path: Path) -> None:
@@ -215,3 +216,19 @@ def test_topic_page_prefers_durable_solved_progress_over_active_state(tmp_path: 
         progress = client.get("/api/progress").json()[0]
         assert progress["solved"] is True
         assert progress["attempts"] == 3
+
+
+def test_json_api_exposes_released_scenarios_sessions_and_progress(tmp_path: Path) -> None:
+    workspace = FakeWorkspace(tmp_path)
+    with TestClient(create_app(workspace=workspace)) as client:  # type: ignore[arg-type]
+        scenarios = client.get("/api/scenarios").json()
+        assert [item["scenario_id"] for item in scenarios] == [workspace.manifest.scenario_id]
+        detail = client.get(f"/api/scenarios/{workspace.manifest.scenario_id}").json()
+        assert detail["hosts"][0]["name"] == workspace.manifest.topology.hosts[0].name
+
+        sessions = client.get("/api/sessions").json()
+        assert sessions[0]["machines"][0]["ssh_command"].endswith("labadmin@192.0.2.10")
+        session = client.get(f"/api/sessions/{SESSION_ID}").json()
+        assert session["status"] == "ready"
+        assert client.get("/api/progress").json() == []
+        assert client.get("/mocks/missing").status_code == 404

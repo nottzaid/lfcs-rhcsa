@@ -41,7 +41,7 @@ class FakeRuntime:
         self.reset_args: tuple | None = None
         self.scenarios = SimpleNamespace(
             start=self.start,
-            check=lambda _session_id, manifest: ("report", manifest.scenario_id),
+            check=lambda _session_id, manifest, **_options: ("report", manifest.scenario_id),
             reset=self.reset,
             destroy=lambda _session_id: self.state.transition(SessionStatus.DESTROYING).transition(
                 SessionStatus.DESTROYED
