@@ -46,7 +46,9 @@ class DomainLeaseReadiness:
         self,
         domain_name: str,
         *,
-        attempts: int = 60,
+        # A first boot on a busy or modest host can take minutes before DHCP; the wait
+        # returns as soon as a lease appears, so a generous ceiling costs fast hosts nothing.
+        attempts: int = 150,
         interval_seconds: float = 2.0,
     ) -> str:
         if attempts < 1:

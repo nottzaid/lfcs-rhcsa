@@ -61,6 +61,8 @@ def test_builder_creates_overlay_seed_and_access_details(tmp_path: Path) -> None
     parsed = yaml.safe_load(user_data)
     assert parsed["hostname"] == "lal-node1"
     assert parsed["users"][1]["plain_text_passwd"] == access.password
+    # Only the guest's own name is managed; scenario edits to /etc/hosts must survive boots.
+    assert parsed["manage_etc_hosts"] == "localhost"
 
 
 def test_builder_reuses_key_but_never_existing_session(tmp_path: Path) -> None:

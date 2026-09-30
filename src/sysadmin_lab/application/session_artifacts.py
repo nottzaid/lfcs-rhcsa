@@ -208,10 +208,10 @@ class SessionArtifactBuilder:
             runcmd.insert(0, ["sh", "-c", RENAME_INTERFACES])
         userdata = {
             "hostname": hostname,
-            # Scenarios may legitimately administer /etc/hosts.  Cloud-init still applies
-            # the per-session hostname, but must not rewrite learner configuration after a
-            # reboot and invalidate an otherwise persistent solution.
-            "manage_etc_hosts": False,
+            # Scenarios administer /etc/hosts, so cloud-init must never re-render it. The
+            # "localhost" mode only keeps a 127.0.1.1 line for the guest's own name: without
+            # it, every lookup of the hostname waits for DNS, which hosts may block.
+            "manage_etc_hosts": "localhost",
             "ssh_pwauth": True,
             "users": [
                 "default",
