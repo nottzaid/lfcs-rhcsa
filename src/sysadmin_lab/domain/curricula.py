@@ -88,8 +88,12 @@ class CurriculumManifest(StrictModel):
 
     @property
     def objective_ids(self) -> frozenset[str]:
-        return frozenset(
-            f"{domain.domain_id}.{competency.competency_id}"
+        return frozenset(self.objective_titles)
+
+    @property
+    def objective_titles(self) -> dict[str, str]:
+        return {
+            f"{domain.domain_id}.{competency.competency_id}": competency.title
             for domain in self.domains
             for competency in domain.competencies
-        )
+        }

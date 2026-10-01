@@ -73,10 +73,6 @@ objectives:
     version: lfcs-2026-08
     objective_id: users-groups.local-accounts
     title: Create and manage local user and group accounts
-  - track: professional
-    version: v1
-    objective_id: repair-account-without-data-loss
-    title: Repair account metadata while preserving application data
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies

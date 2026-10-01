@@ -100,3 +100,9 @@ def test_scenario_objectives_resolve_against_versioned_curriculum() -> None:
     )
     with pytest.raises(CatalogError, match="unknown objective"):
         validate_objective_references((wrong,), (curriculum,))
+
+    retitled = scenario.model_copy(
+        update={"objectives": (scenario.objectives[0].model_copy(update={"title": "Daemons"}),)}
+    )
+    with pytest.raises(CatalogError, match="is titled 'Daemons'; the curriculum says 'Services'"):
+        validate_objective_references((retitled,), (curriculum,))

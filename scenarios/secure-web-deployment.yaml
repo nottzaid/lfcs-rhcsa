@@ -85,11 +85,11 @@ objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: essential-commands.tls-certificates
-    title: Create and manage SSL certificates
+    title: Work with SSL certificates
   - track: lfcs
     version: lfcs-2026-08
     objective_id: essential-commands.services
-    title: Manage and configure services
+    title: Create, configure, and troubleshoot services
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies

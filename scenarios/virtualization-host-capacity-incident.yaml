@@ -17,8 +17,8 @@ task: >-
   a 768 MiB qcow2 virtio disk at /var/lib/libvirt/images/capacity-guest.qcow2, and one NIC
   attached to br-lab. Do not stop the exercisers or touch the lab management interface.
 objectives:
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.kernel-parameters, title: Configure kernel parameters persistent and non-persistent}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.libvirt, title: Manage Virtual Machines with libvirt}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.kernel-parameters, title: "Configure kernel parameters, persistent and non-persistent"}
+  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.libvirt, title: Manage Virtual Machines (libvirt)}
   - {track: lfcs, version: lfcs-2026-08, objective_id: networking.bridges-bonds, title: Configure bridge and bonding devices}
   - {track: lfcs, version: lfcs-2026-08, objective_id: storage.performance, title: Monitor storage performance}
   - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.performance, title: Monitor and troubleshoot system performance and services}

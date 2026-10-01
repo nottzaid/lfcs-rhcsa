@@ -101,7 +101,7 @@ objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: essential-commands.diskspace
-    title: Monitor and troubleshoot disk space usage
+    title: Troubleshoot diskspace issues
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies

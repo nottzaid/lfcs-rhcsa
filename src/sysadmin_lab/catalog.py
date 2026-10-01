@@ -92,7 +92,7 @@ def validate_objective_references(
 ) -> None:
     known_tracks = {curriculum.track for curriculum in curricula}
     indexes = {
-        (curriculum.track, curriculum.curriculum_id): curriculum.objective_ids
+        (curriculum.track, curriculum.curriculum_id): curriculum.objective_titles
         for curriculum in curricula
     }
     errors: list[str] = []
@@ -110,6 +110,12 @@ def validate_objective_references(
                 errors.append(
                     f"{manifest.scenario_id}: unknown objective {reference.objective_id} "
                     f"in {reference.version}"
+                )
+            elif reference.title != objectives[reference.objective_id]:
+                errors.append(
+                    f"{manifest.scenario_id}: {reference.objective_id} is titled "
+                    f"{reference.title!r}; the curriculum says "
+                    f"{objectives[reference.objective_id]!r}"
                 )
     if errors:
         raise CatalogError("invalid objective references: " + "; ".join(errors))

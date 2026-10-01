@@ -94,7 +94,7 @@ objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: networking.troubleshoot
-    title: Troubleshoot networking
+    title: Monitor and troubleshoot networking
   - track: lfcs
     version: lfcs-2026-08
     objective_id: networking.packet-filtering
