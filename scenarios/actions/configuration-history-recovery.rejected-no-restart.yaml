@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: restore-only-the-approved-file
+  - action_id: commit-without-applying
     target: node2
     arguments:
       - sudo
@@ -12,4 +12,3 @@ actions:
         cd /etc/lal-app
         git restore --source=approved-v1 -- app.conf
         git commit --quiet -m 'Restore approved worker settings' app.conf
-        systemctl restart lal-app.service

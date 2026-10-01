@@ -1,17 +1,70 @@
 schema_version: 1
 scenario_id: service-constraint-failure
-version: 1
+version: 2
 status: verified
-title: Hardening prevents the API from writing its state
-summary: Diagnose a systemd sandbox failure and grant only the required write path.
-estimated_minutes: 30
+title: The API broke when security hardened it
+summary: A service fails right after a hardening drop-in, and the hardening has to stay.
+estimated_minutes: 25
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  lal-api.service fails on node2 after a hardening change. Make it start successfully and
-  remain enabled while preserving ProtectSystem=strict. Grant write access only to the
-  service state directory /var/lib/lal-api; do not make /usr, /etc, or all of /var writable.
-  A healthy service writes "ready" to /var/lib/lal-api/state.
+task: |
+  The security team added a hardening drop-in to `lal-api.service` on **node2**. Since
+  then the service fails every time it starts. The hardening is mandatory: the service must
+  keep seeing the operating system read-only and must not see home directories.
+
+  Work out what the application needs and grant exactly that.
+requirements:
+  - "`lal-api.service` is running and enabled, and it records `ready` in its state file."
+  - "`ProtectSystem=strict` and `ProtectHome=yes` stay in effect for the service."
+  - "Inside the service's sandbox, only its own state directory `/var/lib/lal-api` becomes writable: `/var/lib`, `/var`, `/etc`, and `/usr` stay read-only to it."
+hints:
+  - "Let the service tell you what it tried to do: `systemctl status lal-api` and `journalctl -u lal-api -b`. `systemctl cat lal-api` shows the unit and every drop-in."
+  - "`ProtectSystem=strict` mounts the whole file hierarchy read-only for the service, except for paths you open up explicitly. Read the `ProtectSystem=` entry in `systemd.exec(5)`."
+  - "`ReadWritePaths=` opens specific paths. `StateDirectory=` creates a directory under `/var/lib`, gives it to the service's user, and makes it writable in the sandbox."
+debrief: |
+  ## What was wrong
+
+  The drop-in `10-hardening.conf` set `ProtectSystem=strict`: systemd mounts `/`, including
+  `/var` and `/etc`, read-only in the service's private mount namespace. The API writes its
+  state to `/var/lib/lal-api/state` at startup, and the journal shows exactly that:
+
+  ```text
+  lal-api: /var/lib/lal-api/state: Read-only file system
+  ```
+
+  ## A clean fix
+
+  ```bash
+  sudo systemctl edit lal-api.service
+  #   [Service]
+  #   StateDirectory=lal-api
+  sudo systemctl restart lal-api.service
+  ```
+
+  `StateDirectory=lal-api` is the idiomatic answer for a service that owns state: systemd
+  creates `/var/lib/lal-api` if needed, hands it to the service's `User=`, and punches a
+  writable hole for exactly that path. `ReadWritePaths=/var/lib/lal-api` works too when the
+  directory already exists with the right owner. Both leave the hardening untouched.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl show lal-api -p ProtectSystem -p ProtectHome -p ReadWritePaths -p StateDirectory
+  pid=$(systemctl show -p MainPID --value lal-api)
+  sudo nsenter -t "$pid" -m touch /var/lib/lal-api/probe    # works
+  sudo nsenter -t "$pid" -m touch /var/lib/probe            # Read-only file system
+  ```
+
+  `nsenter -m` runs a command inside the service's mount namespace, so you see the file
+  system exactly as the service does. `systemd-analyze security lal-api` scores the overall
+  sandbox.
+
+  ## Tempting but wrong
+
+  - **Deleting or overriding the hardening.** The service starts, and the security
+    requirement is gone.
+  - **`ReadWritePaths=/var`.** It works because it is far too broad: the service can now
+    rewrite every other service's state and logs.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -21,59 +74,64 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: systemd execution environment documentation
-    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html
   - kind: man-page
-    title: systemd.exec manual
+    title: ProtectSystem=, ReadWritePaths=, and StateDirectory=
     man_page: systemd.exec(5)
+  - kind: man-page
+    title: Run a command in another process's namespaces
+    man_page: nsenter(1)
+  - kind: man-page
+    title: Drop-ins and systemctl edit
+    man_page: systemctl(1)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
   - check_id: api-running
     kind: service
     target: node2
-    description: The API service is running and enabled.
-    parameters:
-      name: lal-api.service
-      active: true
-      enabled: true
-  - check_id: strict-filesystem-hardening-retained
-    kind: command
-    target: node2
-    description: ProtectSystem remains strict.
-    parameters:
-      arguments: [systemctl, show, -p, ProtectSystem, --value, lal-api.service]
-      stdout_equals: strict
-  - check_id: write-exception-is-narrow
-    kind: command
-    target: node2
-    description: The service has a writable state directory without broad exceptions.
-    parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          rw=$(systemctl show -p ReadWritePaths --value lal-api.service);
-          state=$(systemctl show -p StateDirectory --value lal-api.service);
-          { grep -qw -- /var/lib/lal-api <<<"$rw" || grep -qw -- lal-api <<<"$state"; } &&
-          ! grep -Eq '(^| )/( |$)|(^| )/var( |$)|(^| )/etc( |$)|(^| )/usr( |$)' <<<"$rw"
-  - check_id: api-state-created
+    description: lal-api.service is running and enabled.
+    parameters: {name: lal-api.service, active: true, enabled: true}
+  - check_id: state-recorded
     kind: file
     target: node2
-    description: The service can write the required state.
+    description: The API recorded ready in its state file.
+    parameters: {path: /var/lib/lal-api/state, kind: file, contains: ready}
+  - check_id: hardening-retained
+    kind: command
+    target: node2
+    description: ProtectSystem=strict and ProtectHome=yes stay in effect.
     parameters:
-      path: /var/lib/lal-api/state
-      kind: file
-      owner: lalapi
-      group: lalapi
-      contains: ready
+      script: |
+        expect_eq "$(unit_value lal-api.service ProtectSystem)" strict "ProtectSystem"
+        expect_eq "$(unit_value lal-api.service ProtectHome)" yes "ProtectHome"
+  - check_id: sandbox-stays-narrow
+    kind: command
+    target: node2
+    description: Only /var/lib/lal-api is writable inside the service's sandbox.
+    parameters:
+      sudo: true
+      script: |
+        pid=$(unit_value lal-api.service MainPID)
+        (( pid > 0 )) || fail "lal-api is not running"
+        in_sandbox() { nsenter --target "$pid" --mount -- "$@"; }
+        in_sandbox touch /var/lib/lal-api/.check 2>/dev/null ||
+          fail "/var/lib/lal-api is not writable inside the service's sandbox"
+        in_sandbox rm -f /var/lib/lal-api/.check
+        for path in /var/lib /var /etc /usr; do
+          if in_sandbox touch "$path/.lal-check" 2>/dev/null; then
+            in_sandbox rm -f "$path/.lal-check"
+            fail "$path is writable inside the service's sandbox"
+          fi
+        done
 persistence:
   reboot: false
 setup: actions/service-constraint-failure.setup.yaml
 reference_solution: actions/service-constraint-failure.solution.yaml
 alternate_solutions: [actions/service-constraint-failure.alternate.yaml]
+rejected_solutions:
+  - actions/service-constraint-failure.rejected-remove-hardening.yaml
+  - actions/service-constraint-failure.rejected-open-all-of-var.yaml

@@ -1,18 +1,85 @@
 schema_version: 1
 scenario_id: private-ca-service-certificate
-version: 1
+version: 2
 status: verified
-title: The internal API needs a verifiable service certificate
-summary: Issue a SAN certificate from an existing private CA and protect its key material.
-estimated_minutes: 40
-task_type: build
+title: Clients reject the internal API's certificate
+summary: A certificate signed by the right CA is still rejected by health checks and browsers.
+estimated_minutes: 30
+task_type: fix
 difficulty: advanced
-task: >-
-  The private CA certificate and key are /etc/lal-pki/ca.crt and /etc/lal-pki/private/ca.key
-  on node2. Issue /etc/lal-pki/api.crt with private key /etc/lal-pki/private/api.key for
-  common name api.internal. The certificate must be signed by this CA, valid for 365 days,
-  and include SAN entries DNS:api.internal and IP:127.0.0.1. Protect private keys with mode
-  0600 and make the certificate mode 0644. Do not replace the CA.
+task: |
+  nginx on **node2** serves the internal API at `https://api.internal:8443/` with a
+  certificate issued by the team's private CA (`/etc/lal-pki/ca.crt`, key in
+  `/etc/lal-pki/private/ca.key`). The health checks, which trust that CA and reach the API
+  by address, have failed since the certificate was deployed:
+
+  ```text
+  $ curl --cacert /etc/lal-pki/ca.crt https://127.0.0.1:8443/
+  curl: (60) SSL: certificate subject name 'api.internal' does not match target hostname '127.0.0.1'
+  ```
+
+  Browsers reject `https://api.internal:8443/` as well. Issue a replacement certificate
+  from the existing CA and put it into service.
+requirements:
+  - "Clients that trust `/etc/lal-pki/ca.crt` get `api-ready` from both `https://api.internal:8443/` and `https://127.0.0.1:8443/` with full verification."
+  - "The certificate nginx uses, `/etc/lal-pki/api.crt`, is signed by the existing CA, is valid for at least 365 more days, and names `DNS:api.internal` and `IP:127.0.0.1` as Subject Alternative Names."
+  - "The API's private key, `/etc/lal-pki/private/api.key`, is owned by root with mode `0600`; the certificate has mode `0644`."
+  - "The CA's certificate and key are not changed."
+  - "nginx is running and enabled."
+hints:
+  - "Look at what nginx is actually serving: `openssl s_client -connect 127.0.0.1:8443 -servername api.internal </dev/null | openssl x509 -noout -text`. Which names does it contain?"
+  - "Clients match the name or address they connected to against the certificate's **Subject Alternative Name** extension. You need `DNS:api.internal` and `IP:127.0.0.1` there."
+  - "Create a key and CSR with `openssl req`, then sign it with the CA using `openssl x509 -req -CA ... -CAkey ...`. Extensions in a CSR are dropped when signing unless you pass `-extfile` or `-copy_extensions copy`. nginx reads its certificate at start and reload."
+debrief: |
+  ## What was wrong
+
+  The deployed certificate was signed by the right CA, but it named the service only in its
+  subject: `CN=api.internal`. RFC 2818 made the `subjectAltName` extension the place clients
+  look for names and addresses. An IP address is never matched against a CN, so every
+  check against `127.0.0.1` failed. Browsers and Go reject a certificate without SANs for
+  host names too. curl with OpenSSL still falls back to the CN when a certificate has no SAN
+  at all, which is why `curl https://api.internal:8443/` happened to work. Its private key was
+  also readable by every user on the host.
+
+  ## A clean fix
+
+  ```bash
+  cd /etc/lal-pki
+  sudo openssl req -new -newkey rsa:2048 -nodes -keyout private/api.key \
+    -subj /CN=api.internal -out /tmp/api.csr
+  printf 'subjectAltName=DNS:api.internal,IP:127.0.0.1\n' > /tmp/api.ext
+  sudo openssl x509 -req -in /tmp/api.csr -CA ca.crt -CAkey private/ca.key \
+    -CAcreateserial -days 397 -extfile /tmp/api.ext -out api.crt
+  sudo chmod 0600 private/api.key && sudo chmod 0644 api.crt
+  sudo nginx -t && sudo systemctl reload nginx
+  ```
+
+  `-extfile` supplies the extensions at signing time. The alternative is to put
+  `-addext subjectAltName=...` in the CSR and sign with `-copy_extensions copy`; without
+  one of the two, `openssl x509 -req` silently signs a certificate with no SAN, which
+  reproduces the original fault.
+
+  ## Check it yourself
+
+  ```bash
+  openssl verify -CAfile /etc/lal-pki/ca.crt /etc/lal-pki/api.crt
+  openssl x509 -in /etc/lal-pki/api.crt -noout -ext subjectAltName -enddate
+  curl --cacert /etc/lal-pki/ca.crt https://api.internal:8443/
+  curl --cacert /etc/lal-pki/ca.crt https://127.0.0.1:8443/
+  ```
+
+  ## Tempting but wrong
+
+  - **A self-signed certificate with the right names.** It has the SAN, but nothing ties it
+    to the CA the clients trust, so verification fails with "self-signed certificate".
+  - **Signing the CSR without extensions.** A new CN-only certificate fails exactly like the
+    old one.
+  - **Replacing the files without reloading nginx.** nginx keeps serving the certificate it
+    loaded at start.
+  - **Regenerating the key over the old file under `umask 077`.** The umask applies only
+    when a file is created; overwriting the existing `0644` key keeps `0644`. Set the mode
+    explicitly.
+  - **`curl -k`.** It hides the problem by turning verification off.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -23,61 +90,84 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: upstream
-    title: OpenSSL req documentation
-    url: https://docs.openssl.org/3.5/man1/openssl-req/
-  - kind: upstream
-    title: OpenSSL x509 documentation
-    url: https://docs.openssl.org/3.5/man1/openssl-x509/
+    title: "RFC 2818: host name matching uses subjectAltName"
+    url: https://www.rfc-editor.org/rfc/rfc2818#section-3.1
+  - kind: man-page
+    title: Create keys and certificate requests
+    man_page: openssl-req(1ossl)
+  - kind: man-page
+    title: Sign requests and inspect certificates
+    man_page: openssl-x509(1ossl)
+  - kind: man-page
+    title: X.509 v3 extension syntax
+    man_page: x509v3_config(5ossl)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
-  - check_id: certificate-verifies
+  - check_id: verified-by-name
     kind: command
     target: node2
-    description: The API certificate validates against the provided private CA.
+    description: A client trusting the CA gets api-ready from https://api.internal:8443/.
     parameters:
-      arguments: [openssl, verify, -CAfile, /etc/lal-pki/ca.crt, /etc/lal-pki/api.crt]
-      stdout_contains: "/etc/lal-pki/api.crt: OK"
-  - check_id: certificate-identity
+      script: |
+        body=$(curl --silent --show-error --max-time 5 --cacert /etc/lal-pki/ca.crt \
+          --resolve api.internal:8443:127.0.0.1 https://api.internal:8443/ 2>&1) || fail "${body%%$'\n'*}"
+        expect_eq "$body" api-ready "the response"
+  - check_id: verified-by-address
     kind: command
     target: node2
-    description: The certificate has the required subject and SAN identities.
+    description: A client trusting the CA gets api-ready from https://127.0.0.1:8443/.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(openssl x509 -in /etc/lal-pki/api.crt -noout -subject -nameopt RFC2253)" = 'subject=CN=api.internal' &&
-          san=$(openssl x509 -in /etc/lal-pki/api.crt -noout -ext subjectAltName) &&
-          grep -Fq 'DNS:api.internal' <<<"$san" && grep -Fq 'IP Address:127.0.0.1' <<<"$san"
-  - check_id: certificate-key-match
+      script: |
+        body=$(curl --silent --show-error --max-time 5 --cacert /etc/lal-pki/ca.crt \
+          https://127.0.0.1:8443/ 2>&1) || fail "${body%%$'\n'*}"
+        expect_eq "$body" api-ready "the response"
+  - check_id: certificate-issued-properly
     kind: command
     target: node2
-    description: The certificate public key matches the API private key.
+    description: /etc/lal-pki/api.crt is signed by the existing CA, valid for at least 365 days, and names both SANs.
+    parameters:
+      script: |
+        names=$(openssl x509 -in /etc/lal-pki/api.crt -noout -ext subjectAltName 2>/dev/null | tail -n +2)
+        grep -qw 'DNS:api.internal' <<<"$names" || fail "the certificate has no DNS:api.internal Subject Alternative Name"
+        grep -qw 'IP Address:127.0.0.1' <<<"$names" || fail "the certificate has no IP:127.0.0.1 Subject Alternative Name"
+        result=$(openssl verify -CAfile /etc/lal-pki/ca.crt /etc/lal-pki/api.crt 2>&1) ||
+          fail "the certificate does not verify against the CA: ${result##*$'\n'}"
+        openssl x509 -in /etc/lal-pki/api.crt -noout -checkend $((365 * 86400 - 3600)) >/dev/null ||
+          fail "the certificate expires $(openssl x509 -in /etc/lal-pki/api.crt -noout -enddate | cut -d= -f2), less than 365 days from now"
+  - check_id: key-protected
+    kind: file
+    target: node2
+    description: The API private key is owned by root with mode 0600.
+    parameters: {path: /etc/lal-pki/private/api.key, kind: file, owner: root, mode: "0600"}
+  - check_id: certificate-readable
+    kind: file
+    target: node2
+    description: The certificate has mode 0644.
+    parameters: {path: /etc/lal-pki/api.crt, kind: file, mode: "0644"}
+  - check_id: ca-unchanged
+    kind: command
+    target: node2
+    description: The CA's certificate and key are unchanged.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(openssl x509 -in /etc/lal-pki/api.crt -pubkey -noout | sha256sum | cut -d' ' -f1)" =
-          "$(openssl pkey -in /etc/lal-pki/private/api.key -pubout | sha256sum | cut -d' ' -f1)"
-  - check_id: api-private-key-protected
-    kind: file
+      script: |
+        sha256sum --check --status /usr/share/lal-pki/ca.sha256 || fail "the CA certificate or key was changed"
+  - check_id: web-service-persistent
+    kind: service
     target: node2
-    description: The API private key is root-owned and private.
-    parameters: {path: /etc/lal-pki/private/api.key, kind: file, owner: root, group: root, mode: "0600"}
-  - check_id: api-certificate-readable
-    kind: file
-    target: node2
-    description: The issued certificate is safely readable by services.
-    parameters: {path: /etc/lal-pki/api.crt, kind: file, owner: root, group: root, mode: "0644"}
+    description: nginx is running and enabled.
+    parameters: {name: nginx.service, active: true, enabled: true}
 persistence:
   reboot: false
 setup: actions/private-ca-service-certificate.setup.yaml
 reference_solution: actions/private-ca-service-certificate.solution.yaml
 alternate_solutions: [actions/private-ca-service-certificate.alternate.yaml]
+rejected_solutions:
+  - actions/private-ca-service-certificate.rejected-self-signed.yaml
+  - actions/private-ca-service-certificate.rejected-no-san.yaml
+  - actions/private-ca-service-certificate.rejected-no-reload.yaml

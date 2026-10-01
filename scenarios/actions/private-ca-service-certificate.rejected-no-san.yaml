@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: issue-a-certificate-with-subject-alternative-names
+  - action_id: reissue-without-extensions
     target: node2
     arguments:
       - sudo
@@ -11,11 +11,8 @@ actions:
         set -euo pipefail
         cd /etc/lal-pki
         openssl req -new -newkey rsa:2048 -nodes -subj /CN=api.internal \
-          -keyout private/api.key -out /tmp/api.csr
-        printf 'subjectAltName=DNS:api.internal,IP:127.0.0.1\n' > /tmp/api.ext
+          -addext 'subjectAltName=DNS:api.internal,IP:127.0.0.1' -keyout private/api.key -out /tmp/api.csr
         openssl x509 -req -in /tmp/api.csr -CA ca.crt -CAkey private/ca.key -CAcreateserial \
-          -days 397 -extfile /tmp/api.ext -out api.crt
+          -days 397 -out api.crt
         chmod 0600 private/api.key
-        chmod 0644 api.crt
-        nginx -t
         systemctl reload nginx.service

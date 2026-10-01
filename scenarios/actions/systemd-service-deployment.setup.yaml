@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: install-collector-program
+  - action_id: copy-the-collector-to-the-server
     target: node2
     arguments:
       - sudo
@@ -9,11 +9,12 @@ actions:
       - -c
       - |
         set -euo pipefail
-        id collector >/dev/null 2>&1 || useradd --system --home-dir /var/lib/lal-collector --shell /sbin/nologin collector
+        useradd --system --home-dir /var/lib/lal-collector --no-create-home --shell /sbin/nologin collector
         install -d -o collector -g collector -m 0750 /var/lib/lal-collector
         install -d -o root -g root -m 0755 /opt/lal/bin
         cat > /opt/lal/bin/collector <<'EOF'
         #!/bin/bash
+        # Writes its site to ./ready, then collects forever.
         set -eu
         printf '%s\n' "${COLLECTOR_SITE:?COLLECTOR_SITE is required}" > ready
         while :; do sleep 60; done
@@ -21,16 +22,3 @@ actions:
         chmod 0755 /opt/lal/bin/collector
         printf 'COLLECTOR_SITE=warehouse-7\n' > /etc/lal-collector.conf
         chmod 0644 /etc/lal-collector.conf
-        rm -f /var/lib/lal-collector/ready
-  - action_id: remove-undeployed-unit
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - >-
-        systemctl disable --now lal-collector.service >/dev/null 2>&1 || true;
-        rm -f /etc/systemd/system/lal-collector.service;
-        rm -rf /etc/systemd/system/lal-collector.service.d;
-        systemctl daemon-reload

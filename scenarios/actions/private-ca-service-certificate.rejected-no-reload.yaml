@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: issue-a-certificate-with-subject-alternative-names
+  - action_id: issue-correctly-but-leave-nginx-alone
     target: node2
     arguments:
       - sudo
@@ -16,6 +16,3 @@ actions:
         openssl x509 -req -in /tmp/api.csr -CA ca.crt -CAkey private/ca.key -CAcreateserial \
           -days 397 -extfile /tmp/api.ext -out api.crt
         chmod 0600 private/api.key
-        chmod 0644 api.crt
-        nginx -t
-        systemctl reload nginx.service

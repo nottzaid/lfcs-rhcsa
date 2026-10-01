@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: install-hardened-api
+  - action_id: install-the-api
     target: node2
     arguments:
       - sudo
@@ -8,31 +8,55 @@ actions:
       - bash
       - -c
       - |
-        id lalapi >/dev/null 2>&1 || useradd --system --home-dir /var/lib/lal-api --shell /sbin/nologin lalapi
+        set -euo pipefail
+        useradd --system --home-dir /var/lib/lal-api --no-create-home --shell /sbin/nologin lalapi
         install -d -o lalapi -g lalapi -m 0750 /var/lib/lal-api
-        rm -f /var/lib/lal-api/state
         cat > /usr/local/sbin/lal-api <<'EOF'
-        #!/bin/bash
-        set -eu
-        printf 'ready\n' > /var/lib/lal-api/state
-        exec sleep infinity
+        #!/usr/bin/python3
+        import sys
+        import time
+
+        STATE = "/var/lib/lal-api/state"
+        try:
+            with open(STATE, "w") as state:
+                state.write("ready\n")
+        except OSError as error:
+            sys.exit(f"lal-api: {STATE}: {error.strerror}")
+        print("lal-api: ready", flush=True)
+        while True:
+            time.sleep(3600)
         EOF
         chmod 0755 /usr/local/sbin/lal-api
         cat > /etc/systemd/system/lal-api.service <<'EOF'
         [Unit]
-        Description=Hardened training API
+        Description=Internal API
 
         [Service]
         User=lalapi
         Group=lalapi
         ExecStart=/usr/local/sbin/lal-api
-        ProtectSystem=strict
-        ProtectHome=yes
 
         [Install]
         WantedBy=multi-user.target
         EOF
-        rm -rf /etc/systemd/system/lal-api.service.d
+  - action_id: land-the-security-hardening
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d /etc/systemd/system/lal-api.service.d
+        cat > /etc/systemd/system/lal-api.service.d/10-hardening.conf <<'EOF'
+        # Security baseline SEC-114: required for every internal service.
+        [Service]
+        ProtectSystem=strict
+        ProtectHome=yes
+        PrivateTmp=yes
+        NoNewPrivileges=yes
+        EOF
         systemctl daemon-reload
         systemctl enable lal-api.service
         systemctl start lal-api.service || true

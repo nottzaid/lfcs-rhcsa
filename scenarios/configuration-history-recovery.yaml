@@ -1,73 +1,155 @@
 schema_version: 1
 scenario_id: configuration-history-recovery
-version: 1
+version: 2
 status: verified
-title: A rejected configuration is still in the working tree
-summary: Recover one tracked file from approved Git history without discarding later work.
+title: A rejected configuration change is still in production
+summary: An emergency change was rejected in review but is still committed and running.
 estimated_minutes: 25
 task_type: fix
 difficulty: foundation
-task: >-
-  The Git repository in /etc/lal-app contains configuration history. The tag approved-v1
-  identifies the approved worker settings, but app.conf was later committed with a rejected
-  change. Restore only app.conf from approved-v1 and commit that restoration on the current
-  branch. Preserve the README history and leave the working tree clean. Do not delete
-  or recreate the repository.
+task: |
+  The configuration of `lal-app` on **node2** lives in the Git repository `/etc/lal-app`.
+  During last night's incident someone committed a change that cut the worker count to 2.
+  Review rejected the `app.conf` part of that change, so the worker settings must go back
+  to the approved release, tagged `approved-v1`. The documentation edits made in and after
+  that commit were accepted and stay.
+
+  The repository has been pushed to other hosts, so its published history must not be
+  rewritten. When you are done, the running service must actually use the approved
+  settings.
+requirements:
+  - "`app.conf` in the latest commit is identical to `app.conf` at `approved-v1`."
+  - "The documentation keeps every change made since `approved-v1`: the on-call contact in `README` and `docs/retention.md`."
+  - "The published history is kept: the previous tip of the current branch is an ancestor of the new one, and the new commits change nothing but `app.conf`."
+  - "The working tree is clean."
+  - "`lal-app.service` is running with the approved settings."
+hints:
+  - "`git log --oneline --stat` shows which files each commit touched. `git diff approved-v1 -- app.conf` shows exactly what drifted."
+  - "Undoing a whole commit is not the same as restoring one file. Compare `git revert` with `git restore --source=<commit> -- <path>` in `git-restore(1)`."
+  - "A service reads its configuration when it starts. Committing a change does not reach a process that is already running."
+debrief: |
+  ## What was wrong
+
+  The incident commit changed two files: `app.conf` (workers 8 → 2) and `README` (a new
+  on-call contact). Only the `app.conf` half was rejected. A later commit added
+  `docs/retention.md`. The service was still running with the rejected worker count.
+
+  ## A clean fix
+
+  ```bash
+  cd /etc/lal-app
+  sudo git log --oneline --stat
+  sudo git restore --source=approved-v1 -- app.conf
+  sudo git commit -m "Restore approved worker settings" app.conf
+  sudo systemctl restart lal-app
+  ```
+
+  `git restore --source` takes one path from any commit, leaving every other file and all
+  history alone. The new commit goes on top of the old tip, so anyone who already pulled the
+  branch can fast-forward to it. `git checkout approved-v1 -- app.conf` and
+  `git show approved-v1:app.conf > app.conf` achieve the same thing.
+
+  ## Check it yourself
+
+  ```bash
+  sudo git diff approved-v1 -- app.conf      # prints nothing
+  sudo git log --oneline -3 --stat
+  sudo git status --short                    # prints nothing
+  systemctl status lal-app                    # shows the worker count it loaded
+  ```
+
+  ## Tempting but wrong
+
+  - **`git revert` of the incident commit.** It restores `app.conf`, but it also takes the
+    accepted on-call contact out of `README`, because a revert undoes the whole commit.
+    `git revert --no-commit` followed by restoring `README` would work, but restoring the
+    one file is simpler.
+  - **`git reset --hard approved-v1`.** `app.conf` is right, but two commits disappear
+    from the branch: rewriting history that other hosts already have, and losing the
+    documentation with them.
+  - **Committing without restarting.** Git holds the approved file; the process still runs
+    the rejected settings it read at startup.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: essential-commands.git
-    title: Use Git to manage files
+    title: Basic Git Operations
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: Git restore documentation
-    url: https://git-scm.com/docs/git-restore
-  - kind: upstream
-    title: Git commit documentation
-    url: https://git-scm.com/docs/git-commit
   - kind: man-page
-    title: git manual
-    man_page: git(1)
+    title: Restore files from any commit
+    man_page: git-restore(1)
+  - kind: man-page
+    title: Undo whole commits
+    man_page: git-revert(1)
+  - kind: man-page
+    title: Inspect history
+    man_page: git-log(1)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
-  - check_id: approved-configuration-restored
+  - check_id: approved-settings-committed
     kind: command
     target: node2
-    description: The current app.conf matches the approved tag.
+    description: app.conf in the latest commit matches approved-v1.
     parameters:
       sudo: true
-      arguments: [git, -C, /etc/lal-app, diff, --quiet, approved-v1, --, app.conf]
-  - check_id: later-history-preserved
+      script: |
+        cd /etc/lal-app
+        git diff --quiet approved-v1 HEAD -- app.conf ||
+          fail "app.conf differs from approved-v1: $(git diff approved-v1 HEAD -- app.conf | grep '^[-+][a-z]' | tr '\n' ' ')"
+  - check_id: documentation-kept
     kind: command
     target: node2
-    description: The later documentation commit remains in current history.
+    description: The documentation keeps every change made since approved-v1.
     parameters:
       sudo: true
-      arguments: [git, -C, /etc/lal-app, merge-base, --is-ancestor, docs-update, HEAD]
-  - check_id: restoration-committed
+      script: |
+        tip=$(cat /usr/share/lal-app/published-tip)
+        lost=$(git -C /etc/lal-app diff --name-only "$tip" HEAD -- README docs | tr '\n' ' ')
+        [[ -z "$lost" ]] || fail "accepted documentation changed: $lost"
+  - check_id: history-kept
     kind: command
     target: node2
-    description: The restoration is a focused commit rather than an uncommitted edit.
+    description: The previous tip is an ancestor of the new one, and the new commits change only app.conf.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          test -z "$(git -C /etc/lal-app status --porcelain)" &&
-          test "$(git -C /etc/lal-app diff-tree --no-commit-id --name-only -r HEAD)" = app.conf &&
-          test "$(git -C /etc/lal-app show HEAD^:app.conf)" = 'workers=2' &&
-          test "$(git -C /etc/lal-app show HEAD:app.conf)" = 'workers=8'
+      script: |
+        cd /etc/lal-app
+        tip=$(cat /usr/share/lal-app/published-tip)
+        git merge-base --is-ancestor "$tip" HEAD || fail "the published history was rewritten"
+        changed=$(git diff --name-only "$tip" HEAD | tr '\n' ' ')
+        [[ -n "$changed" ]] || fail "nothing has been committed on top of the published history"
+        expect_eq "${changed% }" app.conf "the files changed since the published tip"
+  - check_id: working-tree-clean
+    kind: command
+    target: node2
+    description: The working tree is clean.
+    parameters:
+      sudo: true
+      script: |
+        status=$(git -C /etc/lal-app status --porcelain)
+        [[ -z "$status" ]] || fail "uncommitted changes: $(tr '\n' ' ' <<<"$status")"
+  - check_id: service-runs-approved-settings
+    kind: command
+    target: node2
+    description: lal-app.service is running with the approved settings.
+    parameters:
+      script: |
+        systemctl is-active --quiet lal-app.service || fail "lal-app.service is not running"
+        expect_eq "$(cat /run/lal-app/workers)" 8 "the worker count the running service loaded"
 persistence:
   reboot: false
 setup: actions/configuration-history-recovery.setup.yaml
 reference_solution: actions/configuration-history-recovery.solution.yaml
 alternate_solutions: [actions/configuration-history-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/configuration-history-recovery.rejected-revert-whole-commit.yaml
+  - actions/configuration-history-recovery.rejected-reset.yaml
+  - actions/configuration-history-recovery.rejected-no-restart.yaml

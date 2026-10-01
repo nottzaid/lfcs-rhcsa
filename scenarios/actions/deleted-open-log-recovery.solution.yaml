@@ -1,13 +1,10 @@
 schema_version: 1
 actions:
-  - action_id: configure-visible-logging
+  - action_id: restart-the-process-holding-the-deleted-log
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        printf 'KEEP_DELETED=0\n' > /etc/lal-writer.conf;
-        systemctl restart lal-writer.service;
-        sleep 1
+      - systemctl restart lal-ingest.service && sleep 2

@@ -1,23 +1,16 @@
 schema_version: 1
 actions:
-  - action_id: set-persistent-unit-properties
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - systemctl
-      - set-property
-      - lal-indexer.service
-      - CPUQuota=25%
-  - action_id: add-priority-override
+  - action_id: set-property-for-the-quota-and-a-drop-in-for-priority
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        install -d /etc/systemd/system/lal-indexer.service.d;
-        printf '%s\n' '[Service]' 'Nice=10' > /etc/systemd/system/lal-indexer.service.d/priority.conf;
-        systemctl daemon-reload;
-        systemctl restart lal-indexer.service
+      - |
+        set -euo pipefail
+        systemctl set-property lal-search-indexer.service CPUQuota=20%
+        install -d /etc/systemd/system/lal-search-indexer.service.d
+        printf '[Service]\nNice=10\n' > /etc/systemd/system/lal-search-indexer.service.d/50-priority.conf
+        systemctl daemon-reload
+        systemctl restart lal-search-indexer.service
