@@ -32,6 +32,7 @@ dev = [
   "pytest-cov>=6.2,<7",
   "ruff>=0.12,<1",
   "types-PyYAML>=6.0.12,<7",
+  "selenium>=4.30,<5",
 ]
 
 [tool.hatch.build.targets.wheel]
