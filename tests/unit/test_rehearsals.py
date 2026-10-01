@@ -1,4 +1,4 @@
-"""Mock exam rehearsals score the checks run since they began, as the exam would."""
+"""Mock exam rehearsals score the checks run since they began, with partial credit."""
 
 from __future__ import annotations
 

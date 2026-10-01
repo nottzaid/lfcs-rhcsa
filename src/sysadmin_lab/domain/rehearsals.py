@@ -51,8 +51,9 @@ def score_rehearsal(
 ) -> RehearsalScore:
     """Score each task by the checks run on its current version since the rehearsal began.
 
-    Like the exam, a task earns partial credit for the requirements it meets; a check that
-    errored says nothing about the learner's work and earns nothing.
+    An unsolved task earns partial credit for the requirements it meets, as candidates
+    report the exam does (the Linux Foundation documents only that any valid method counts).
+    A check that errored says nothing about the learner's work and earns nothing.
     """
     counted = [
         attempt
