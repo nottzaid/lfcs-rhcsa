@@ -101,9 +101,11 @@ checks:
       script: |
         lv_bytes=$(lvs --noheadings --units b --nosuffix -o lv_size vgdata/lvlogs | tr -d ' ')
         (( lv_bytes >= 1073741824 )) || fail "lvlogs is $((lv_bytes / 1048576)) MiB; it needs at least 1024 MiB"
-        fs_bytes=$(df --output=size -B1 /srv/logs | tail -n 1)
-        (( fs_bytes * 100 >= lv_bytes * 94 )) ||
-          fail "the filesystem is $((fs_bytes / 1048576)) MiB inside a $((lv_bytes / 1048576)) MiB volume; grow the filesystem too"
+        # The filesystem's own block count; df leaves out the journal and metadata.
+        header=$(dumpe2fs -h /dev/vgdata/lvlogs 2>/dev/null)
+        fs_bytes=$(( $(sed -n 's/^Block count: *//p' <<<"$header") * $(sed -n 's/^Block size: *//p' <<<"$header") ))
+        (( lv_bytes - fs_bytes < 4194304 )) ||
+          fail "the filesystem spans $((fs_bytes / 1048576)) MiB of a $((lv_bytes / 1048576)) MiB volume; grow the filesystem too"
   - check_id: spare-disk-in-group
     kind: command
     target: node2
