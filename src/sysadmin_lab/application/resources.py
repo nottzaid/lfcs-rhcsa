@@ -89,7 +89,8 @@ class ResourceManager:
             raise
         return record
 
-    def remove(self, identity: ResourceIdentity) -> None:
+    def remove(self, identity: ResourceIdentity, *, missing_ok: bool = False) -> None:
+        """Undefine an owned resource; with missing_ok, forget one that is already gone."""
         record = self._registry.get(identity.kind, identity.name)
         if record is None:
             raise ResourceSafetyError(f"registry has no ownership record for {identity.name}")
@@ -98,7 +99,12 @@ class ResourceManager:
 
         resource = self._gateway.find(identity.kind, identity.name)
         if resource is None:
-            raise ResourceDriftError(f"registered resource is absent from libvirt: {identity.name}")
+            if not missing_ok:
+                raise ResourceDriftError(
+                    f"registered resource is absent from libvirt: {identity.name}"
+                )
+            self._registry.remove(record)  # nothing in libvirt to touch; only the record
+            return
         self._assert_resource(resource, record)
         if resource.is_active():
             resource.stop()

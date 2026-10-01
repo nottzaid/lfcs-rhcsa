@@ -211,6 +211,22 @@ def test_manager_reports_registered_resource_missing_from_libvirt() -> None:
         manager.remove(expected)
 
 
+def test_destroying_may_forget_a_resource_that_is_already_gone() -> None:
+    expected = identity()
+    gateway = FakeGateway()
+    registry = MemoryResourceRegistry()
+    manager = ResourceManager(gateway, registry)
+    manager.define(base_xml(expected), expected)
+    vanished = gateway.resources.pop((expected.kind, expected.name))
+
+    manager.remove(expected, missing_ok=True)
+
+    assert registry.get(expected.kind, expected.name) is None
+    assert vanished.calls == []  # nothing in libvirt was touched
+    with pytest.raises(ResourceSafetyError, match="no ownership record"):
+        manager.remove(expected, missing_ok=True)  # never forgets what it does not own
+
+
 def test_registry_refuses_duplicate_or_mismatched_record() -> None:
     expected = identity()
     gateway = FakeGateway()

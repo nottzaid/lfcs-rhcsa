@@ -173,4 +173,5 @@ the runtime directory, the host firewall, the lab image, and sessions left behin
   runs at full speed; without it, QEMU emulates the CPU and the guest still works, slowly.
 - **A crash left lab VMs behind.** `uv run labctl scenario list` shows every session that
   was not destroyed, and `uv run labctl scenario destroy SESSION_UUID` removes one session's
-  domains, disks, and networks; only resources registered to that session are touched.
+  domains, disks, and networks; only resources registered to that session are touched. It
+  also clears a session whose machines were already deleted, for example in virt-manager.

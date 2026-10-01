@@ -22,7 +22,7 @@ from sysadmin_lab.application.vm_sessions import (
     VmSessionService,
 )
 from sysadmin_lab.domain.models import DiskSpec, NicSpec
-from sysadmin_lab.domain.resources import ResourceIdentity, ResourceKind
+from sysadmin_lab.domain.resources import ResourceDriftError, ResourceIdentity, ResourceKind
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import ScenarioInterface
@@ -129,6 +129,7 @@ class FakeResources:
     defined: list[str] = field(default_factory=list)
     fail_on: str | None = None
     connected: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
+    vanished: set[str] = field(default_factory=set)
 
     def define(self, xml: str, identity: ResourceIdentity, *, start: bool = False) -> object:
         assert start
@@ -149,9 +150,13 @@ class FakeResources:
     def is_registered(self, identity: ResourceIdentity) -> bool:
         return self.registered.get(identity.name) == identity
 
-    def remove(self, identity: ResourceIdentity) -> None:
+    def remove(self, identity: ResourceIdentity, *, missing_ok: bool = False) -> None:
+        if identity.name in self.vanished:  # deleted in libvirt behind the lab's back
+            if not missing_ok:
+                raise ResourceDriftError(f"registered resource is absent: {identity.name}")
+        else:
+            self.removed.append(identity.name)
         del self.registered[identity.name]
-        self.removed.append(identity.name)
 
     def connect_interfaces(self, identity: ResourceIdentity, macs: tuple[str, ...]) -> None:
         self.connected.append((identity.role, macs))
@@ -168,6 +173,9 @@ class FakeLeases:
     def wait_released(self, domain_name: str) -> bool:
         self.released.append(domain_name)
         return True
+
+    def holds(self, domain_name: str, address: str) -> bool:
+        return address == self.address
 
 
 @dataclass
@@ -469,7 +477,7 @@ def test_a_destroy_that_fails_is_recorded_on_the_session(tmp_path: Path) -> None
     base.touch()
     provisioned = service.provision(scenario_id="base-smoke", host_name="node1", base_image=base)
 
-    def refuse(identity: ResourceIdentity) -> None:
+    def refuse(identity: ResourceIdentity, *, missing_ok: bool = False) -> None:
         raise RuntimeError(f"libvirt refused to undefine {identity.name}")
 
     resources.remove = refuse  # type: ignore[method-assign]
@@ -664,3 +672,42 @@ def test_a_failed_provision_releases_the_leases_its_guests_took(tmp_path: Path) 
     with pytest.raises(VmProvisioningError, match="cloud-init failed"):
         service.provision(scenario_id="base-smoke", host_name="node1", base_image=base)
     assert released == ["192.0.2.10"]
+
+
+def test_a_session_whose_machines_vanished_from_libvirt_can_still_be_destroyed(
+    tmp_path: Path,
+) -> None:
+    # Someone deleted the guests in virt-manager; only the lab's records remain.
+    service, sessions, machines, artifacts, resources, *_rest = dependencies(tmp_path)
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision_many(
+        scenario_id="peer-lab",
+        requests=(VmHostRequest("node1", base), VmHostRequest("node2", base)),
+    )
+    resources.vanished = {machine.identity.name for machine in provisioned.machines}
+
+    assert service.destroy(provisioned.state.session_id).status is SessionStatus.DESTROYED
+    assert resources.registered == {} and resources.removed == []
+    assert machines.list(provisioned.state.session_id) == ()
+    assert len(artifacts.destroyed) == 2
+    assert sessions.states[provisioned.state.session_id].status is SessionStatus.DESTROYED
+
+
+def test_an_address_the_guest_no_longer_holds_is_never_released_from_it(tmp_path: Path) -> None:
+    # Off for an hour, the guest lost its lease; another machine, perhaps one sharing this
+    # runtime's key, may have it now, and must not have its network taken down.
+    leases = FakeLeases()
+    service, _sessions, _machines, _artifacts, resources, _readiness, executor = dependencies(
+        tmp_path, leases=leases
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(scenario_id="base-smoke", host_name="node1", base_image=base)
+    leases.address = "192.0.2.99"
+
+    service.destroy(provisioned.state.session_id)
+
+    assert all(call[1][:3] != ("sudo", "sh", "-c") for call in executor.calls)
+    assert leases.released == []
+    assert resources.removed == [provisioned.machine.identity.name]
