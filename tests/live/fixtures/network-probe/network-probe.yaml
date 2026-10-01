@@ -16,8 +16,8 @@ topology:
   networks:
     - {name: lan, cidr: 10.99.0.0/24}
   hosts:
-    - {name: router, image: rocky-10.2-lab-v1, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
-    - {name: client, image: rocky-10.2-lab-v1, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: router, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: client, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
 checks:
   - check_id: router-interface-named
     kind: command
