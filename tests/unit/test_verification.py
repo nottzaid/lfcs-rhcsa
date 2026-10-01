@@ -212,3 +212,18 @@ def test_a_rejected_solution_that_the_grader_accepts_fails_verification() -> Non
     assert [phase.phase for phase in report.phases if not phase.accepted] == [
         VerificationPhase.REJECTED_REBOOTED
     ]
+
+
+def test_a_check_that_produces_no_observation_cannot_pass_a_phase() -> None:
+    class SilentCheckDriver(FakeDriver):
+        def run_checks(
+            self, session: LabSession, manifest: ScenarioManifest
+        ) -> tuple[CheckObservation, ...]:
+            return super().run_checks(session, manifest)[1:]  # one check never reports
+
+    raw = minimal_manifest()
+    raw["checks"] = [*raw["checks"], {**raw["checks"][0], "check_id": "second-check"}]
+    manifest = ScenarioManifest.model_validate(raw)
+    report = ScenarioVerifier(SilentCheckDriver()).verify(manifest)
+    solved = next(phase for phase in report.phases if phase.phase.value == "solved")
+    assert not solved.passed and not report.passed

@@ -81,3 +81,11 @@ def test_source_verification_rejects_any_mismatch(tmp_path: Path, problem: str) 
         path.write_bytes(b"tampered" if problem == "digest" else payload)
     with pytest.raises(ImageVerificationError):
         verify_installation_source(manifest, path)
+
+
+def test_a_source_with_the_right_size_and_wrong_bytes_is_refused(tmp_path: Path) -> None:
+    payload = b"installation media"
+    source = tmp_path / "source.iso"
+    source.write_bytes(payload.upper())  # same length, different content
+    with pytest.raises(ImageVerificationError, match="checksum mismatch"):
+        verify_installation_source(image_manifest(payload), source)

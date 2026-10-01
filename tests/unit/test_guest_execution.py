@@ -126,3 +126,23 @@ def test_guest_endpoint_validates_inputs(
     values.update(changes)
     with pytest.raises(ValueError, match=match):
         GuestEndpoint(**values)  # type: ignore[arg-type]
+
+
+def test_a_guest_already_down_at_the_first_probe_counts_as_restarting(tmp_path: Path) -> None:
+    executor = FakeExecutor(
+        [
+            GuestCommandTimeout("no answer"),  # already rebooting
+            GuestCommandResult(0, "", ""),
+            GuestCommandResult(0, "running\n", ""),
+        ]
+    )
+    GuestReadiness(executor, sleep=lambda _seconds: None).wait_for_restart(endpoint(tmp_path))
+    assert executor.commands == [("true",), ("true",), ("systemctl", "is-system-running", "--wait")]
+
+
+def test_readiness_refuses_to_try_zero_times(tmp_path: Path) -> None:
+    readiness = GuestReadiness(FakeExecutor([]), sleep=lambda _seconds: None)
+    with pytest.raises(ValueError, match="readiness attempts must be positive"):
+        readiness.wait(endpoint(tmp_path), attempts=0)
+    with pytest.raises(ValueError, match="offline attempts must be positive"):
+        readiness.wait_for_restart(endpoint(tmp_path), offline_attempts=0)
