@@ -39,3 +39,10 @@ shell bootstrap.
 Bootstrap, diagnostics, packaging, and clean-host testing are product features. They cannot be
 deferred to an untested installation script at the end of development.
 
+
+## Implementation notes (2026-10)
+
+`labctl doctor` exists as specified: read-only, with an actionable fix for each failure.
+Still open: `labctl down`, resumable long-running setup, and release CI that replays the
+documented path on a clean host. Until `down` exists, `labctl scenario list` and
+`labctl scenario destroy` stop a lab's machines; learner progress is kept either way.

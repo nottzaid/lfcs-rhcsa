@@ -143,6 +143,11 @@ uv run pytest tests/live/test_verified_scenario_replay.py
 
 ## Troubleshooting
 
+`uv run labctl doctor` checks this host for everything the lab needs, without changing
+anything, and prints the fix for each problem it finds: KVM and nested virtualization,
+system libvirt and its default network, the commands the lab runs, whether QEMU can reach
+the runtime directory, the host firewall, the lab image, and sessions left behind.
+
 - **Guests are slow to start services, or SSSD and NFS time out.** Guests resolve names
   through libvirt's DNS service on `192.168.122.1`. A host firewall that blocks it, for
   example ufw's default incoming policy, makes every lookup wait for a timeout. Allow DNS

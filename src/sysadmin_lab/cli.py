@@ -9,7 +9,19 @@ from uuid import UUID
 
 import typer
 
+from sysadmin_lab.adapters.sqlite_sessions import SqliteSessionRepository
 from sysadmin_lab.application.checking import CheckReport
+from sysadmin_lab.application.doctor import (
+    Severity,
+    firewall_finding,
+    image_finding,
+    kvm_finding,
+    libvirt_findings,
+    nested_finding,
+    session_finding,
+    tool_findings,
+    unit_is_active,
+)
 from sysadmin_lab.application.image_acquisition import HttpsDownloader, ImageAcquirer
 from sysadmin_lab.application.image_building import (
     ImageBuildError,
@@ -117,6 +129,53 @@ def up(
         opener.daemon = True
         opener.start()
     uvicorn.run(create_app(root), host=host, port=port, log_level="info")
+
+
+@app.command("doctor")
+def doctor(
+    project_root: Annotated[Path, typer.Option(file_okay=False)] = Path("."),
+) -> None:
+    """Check this host for everything the lab needs, without changing anything."""
+    root = project_root.resolve()
+    manifest_path = root / "images" / "rocky-10.2" / "iso-manifest.yaml"
+    runtime_root = root / "runtime"
+
+    def open_libvirt() -> object:
+        import libvirt  # type: ignore[import-untyped]
+
+        connection = libvirt.open("qemu:///system")
+        if connection is None:
+            raise ConnectionError("libvirt returned no connection")
+        return connection
+
+    def built_image() -> Path:
+        manifest = load_image_manifest(manifest_path)
+        images = runtime_root / "cache" / "images"
+        return resolve_built_image(manifest, manifest_path, images).artifact
+
+    findings = [
+        kvm_finding(),
+        nested_finding(),
+        *tool_findings(),
+        *libvirt_findings(open_libvirt, runtime_root),
+        firewall_finding(unit_is_active),
+        image_finding(built_image),
+    ]
+    state_path = runtime_root / "state" / "lab.db"
+    if state_path.exists():
+        with SqliteSessionRepository(state_path) as sessions:
+            findings.append(
+                session_finding(
+                    (str(state.session_id), state.status.value, state.scenario_id)
+                    for state in sessions.list_all(limit=1000)
+                )
+            )
+    for finding in findings:
+        typer.echo(f"{finding.severity.value:<4}  {finding.subject}: {finding.detail}")
+        if finding.fix and finding.severity is not Severity.OK:
+            typer.echo(f"      fix: {finding.fix}")
+    if any(finding.severity is Severity.FAIL for finding in findings):
+        raise typer.Exit(code=1)
 
 
 @catalog_app.command("validate")
