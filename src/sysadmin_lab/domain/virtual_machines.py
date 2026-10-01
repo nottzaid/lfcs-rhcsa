@@ -168,6 +168,10 @@ def render_domain_xml(spec: DomainSpec) -> str:
         ET.SubElement(extra, "mac", {"address": scenario_interface.mac})
         ET.SubElement(extra, "source", {"network": scenario_interface.network})
         ET.SubElement(extra, "model", {"type": "virtio"})
+        # Unplugged until first boot has named the NIC and told NetworkManager to leave it
+        # alone. With carrier, NetworkManager would try DHCP on a segment without a DHCP
+        # server, and cloud-init, which creates the login user, waits a minute for that.
+        ET.SubElement(extra, "link", {"state": "down"})
 
     serial = ET.SubElement(devices, "serial", {"type": "pty"})
     serial_target = ET.SubElement(serial, "target", {"type": "isa-serial", "port": "0"})

@@ -88,8 +88,10 @@ def test_scenario_interfaces_get_stable_macs_on_isolated_networks(tmp_path: Path
     )
     management, scenario = root.findall("./devices/interface")
     assert management.find("source").attrib["network"] == "default"
+    assert management.find("link") is None  # SSH and DHCP need it from the first moment
     assert scenario.find("source").attrib["network"] == network.name
     assert scenario.find("mac").attrib["address"] == mac
+    assert scenario.find("link").attrib == {"state": "down"}  # until first boot names it
 
     with pytest.raises(ValueError, match="invalid scenario interface MAC"):
         ScenarioInterface("lan0", network.name, "02:00:00:00:00:01")

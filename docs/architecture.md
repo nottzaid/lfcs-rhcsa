@@ -93,8 +93,11 @@ A scenario can declare isolated networks, and its hosts NICs on them. Each sessi
 own libvirt networks with no addresses, DHCP, or forwarding: the scenario's setup assigns
 addresses, so routers, gateways, and firewalls are real hosts. NICs get the names the
 manifest declares (a systemd `.link` file per MAC address), and NetworkManager does not
-create automatic profiles for them. The management NIC stays on libvirt's default network
-for SSH and is never part of a task.
+create automatic profiles for them. Both take effect late in first boot, so scenario NICs
+start with their virtual cable unplugged and the platform plugs them in once cloud-init has
+finished; otherwise NetworkManager would try DHCP on them, and boot would wait a minute for
+it. The management NIC stays on libvirt's default network for SSH and is never part of a
+task.
 
 ## Test layers
 

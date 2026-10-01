@@ -69,9 +69,13 @@ class FakeResource:
 @dataclass
 class FakeGateway:
     resources: dict[tuple[ResourceKind, str], FakeResource] = field(default_factory=dict)
+    connected: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
 
     def find(self, kind: ResourceKind, name: str) -> FakeResource | None:
         return self.resources.get((kind, name))
+
+    def connect_interfaces(self, name: str, macs: tuple[str, ...]) -> None:
+        self.connected.append((name, macs))
 
     def define(self, kind: ResourceKind, xml: str) -> FakeResource:
         parsed = identity_from_libvirt_xml(xml)
@@ -381,3 +385,26 @@ def test_a_definition_the_registry_could_not_record_is_undefined_again() -> None
         ResourceManager(gateway, registry).define(base_xml(expected), expected, start=True)
     assert gateway.resources[(expected.kind, expected.name)].calls == ["undefine"]
     assert registry.get(expected.kind, expected.name) is None
+
+
+def test_only_an_owned_domain_has_its_nics_plugged_in() -> None:
+    domain = identity(ResourceKind.DOMAIN)
+    gateway = FakeGateway()
+    manager = ResourceManager(gateway, MemoryResourceRegistry())
+    macs = ("52:54:00:aa:00:01",)
+
+    with pytest.raises(ResourceSafetyError, match="no ownership record"):
+        manager.connect_interfaces(domain, macs)
+    manager.define(base_xml(domain), domain)
+    with pytest.raises(ResourceSafetyError, match="no ownership record"):
+        manager.connect_interfaces(replace(domain, resource_id=uuid4()), macs)
+    with pytest.raises(ResourceSafetyError, match="only domains have interfaces"):
+        manager.connect_interfaces(identity(ResourceKind.NETWORK), macs)
+
+    manager.connect_interfaces(domain, macs)
+    assert gateway.connected == [(domain.name, macs)]
+
+    del gateway.resources[(domain.kind, domain.name)]
+    with pytest.raises(ResourceDriftError, match="absent from libvirt"):
+        manager.connect_interfaces(domain, macs)
+    assert gateway.connected == [(domain.name, macs)]

@@ -125,6 +125,7 @@ class VmSessionService:
         state = self._sessions.transition(state.session_id, SessionStatus.PROVISIONING)
         created: list[SessionMachine] = []
         attempted_roles: list[str] = []
+        unplugged: dict[str, tuple[str, ...]] = {}
         try:
             for network in networks:
                 network_resource = network_identity(scenario_id, state.session_id, network)
@@ -142,6 +143,7 @@ class VmSessionService:
                     )
                     for nic in request.interfaces
                 )
+                unplugged[request.host_name] = tuple(interface.mac for interface in interfaces)
                 paths, access = self._artifacts.create(
                     session_id=state.session_id,
                     role=request.host_name,
@@ -187,6 +189,12 @@ class VmSessionService:
                 if not cloud_init.succeeded:
                     detail = cloud_init.stderr.strip() or cloud_init.stdout.strip()
                     raise VmProvisioningError(f"cloud-init failed: {detail}")
+                if unplugged[machine.host_name]:
+                    # cloud-init has named the scenario NICs and set NetworkManager to leave
+                    # them alone, so they can carry traffic now.
+                    self._resources.connect_interfaces(
+                        machine.identity, unplugged[machine.host_name]
+                    )
                 ready.append(machine)
             state = self._sessions.transition(state.session_id, SessionStatus.READY)
             return ProvisionedSession(state, tuple(ready))

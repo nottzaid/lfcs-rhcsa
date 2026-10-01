@@ -57,6 +57,10 @@ class FakeDomain:
         self.calls.append(("undefine", flags))
         return 0
 
+    def updateDeviceFlags(self, xml: str, flags: int = 0) -> int:
+        self.calls.append(("update", xml, flags))
+        return 0
+
     def interfaceAddresses(self, source: int, flags: int = 0) -> object:
         self.calls.append(("addresses", source, flags))
         return {
@@ -150,6 +154,8 @@ class FakeApi:
     VIR_ERR_NO_DOMAIN = 42
     VIR_ERR_NO_NETWORK = 43
     VIR_DOMAIN_XML_INACTIVE = 1
+    VIR_DOMAIN_AFFECT_LIVE = 1
+    VIR_DOMAIN_AFFECT_CONFIG = 2
     VIR_DOMAIN_UNDEFINE_MANAGED_SAVE = 2
     VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA = 4
     VIR_DOMAIN_UNDEFINE_NVRAM = 8
@@ -269,3 +275,32 @@ def test_context_exit_signature_accepts_exception_details() -> None:
     traceback: TracebackType | None = None
     gateway.__exit__(RuntimeError, RuntimeError("test"), traceback)
     assert connection.closed
+
+
+def test_connect_interfaces_plugs_in_the_named_nics_now_and_at_every_later_start() -> None:
+    document = """<domain><name>lal-node</name><devices>
+      <interface type="network"><source network="default"/></interface>
+      <interface type="network"><mac address="52:54:00:AA:00:01"/><link state="down"/></interface>
+      <interface type="network"><mac address="52:54:00:aa:00:02"/></interface>
+      <interface type="network"><mac address="52:54:00:aa:00:03"/><link state="down"/></interface>
+    </devices></domain>"""
+    domain = FakeDomain("lal-node", document)
+    gateway = LibvirtGateway(FakeConnection(domains={"lal-node": domain}), FakeApi(None))
+
+    gateway.connect_interfaces("lal-node", ("52:54:00:aa:00:01", "52:54:00:aa:00:02"))
+
+    updates = [call for call in domain.calls if call[0] == "update"]
+    assert [flags for _update, _xml, flags in updates] == [
+        FakeApi.VIR_DOMAIN_AFFECT_LIVE,
+        FakeApi.VIR_DOMAIN_AFFECT_LIVE,
+        FakeApi.VIR_DOMAIN_AFFECT_CONFIG,
+        FakeApi.VIR_DOMAIN_AFFECT_CONFIG,
+    ]
+    assert ("xml", FakeApi.VIR_DOMAIN_XML_INACTIVE) in domain.calls  # the saved definition
+    for _update, xml, _flags in updates:
+        interface = ET.fromstring(xml)
+        assert interface.find("mac").attrib["address"].lower() != "52:54:00:aa:00:03"
+        assert interface.find("link").attrib == {"state": "up"}
+
+    with pytest.raises(LookupError, match="no interface with MAC 52:54:00:aa:00:09"):
+        gateway.connect_interfaces("lal-node", ("52:54:00:aa:00:09",))

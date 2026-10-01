@@ -126,6 +126,7 @@ class FakeResources:
     xml: str = ""
     defined: list[str] = field(default_factory=list)
     fail_on: str | None = None
+    connected: list[tuple[str, tuple[str, ...]]] = field(default_factory=list)
 
     def define(self, xml: str, identity: ResourceIdentity, *, start: bool = False) -> object:
         assert start
@@ -149,6 +150,9 @@ class FakeResources:
     def remove(self, identity: ResourceIdentity) -> None:
         del self.registered[identity.name]
         self.removed.append(identity.name)
+
+    def connect_interfaces(self, identity: ResourceIdentity, macs: tuple[str, ...]) -> None:
+        self.connected.append((identity.role, macs))
 
 
 @dataclass
@@ -527,3 +531,47 @@ def test_a_reboot_that_cannot_be_sent_fails_the_session(
         service.reboot(provisioned.state.session_id, ("node2",))
     state = sessions.states[provisioned.state.session_id]
     assert (state.status, state.error) == (SessionStatus.FAILED, failure)
+
+
+@pytest.mark.parametrize("cloud_exit", [0, 1])
+def test_scenario_nics_are_plugged_in_only_once_cloud_init_has_configured_them(
+    cloud_exit: int, tmp_path: Path
+) -> None:
+    service, _sessions, _machines, artifacts, resources, _readiness, executor = dependencies(
+        tmp_path, cloud_exit=cloud_exit
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    plugged_after: list[tuple[str, tuple[str, ...], tuple[str, ...]]] = []
+
+    def plug(identity: ResourceIdentity, macs: tuple[str, ...]) -> None:
+        plugged_after.append((identity.role, macs, executor.calls[-1][1]))
+
+    resources.connect_interfaces = plug  # type: ignore[method-assign]
+    requests = (
+        VmHostRequest("router", base, interfaces=(NicSpec(network="lan", name="lan0"),)),
+        VmHostRequest("mon", base),
+        VmHostRequest(
+            "client",
+            base,
+            interfaces=(NicSpec(network="lan", name="lan0"), NicSpec(network="wan", name="wan0")),
+        ),
+    )
+
+    if cloud_exit:
+        with pytest.raises(VmProvisioningError, match="cloud-init failed"):
+            service.provision_many(
+                scenario_id="branch-routing", requests=requests, networks=("lan", "wan")
+            )
+        assert plugged_after == []  # a guest cloud-init did not configure stays unplugged
+        return
+    service.provision_many(scenario_id="branch-routing", requests=requests, networks=("lan", "wan"))
+
+    domains = [xml for xml in resources.defined if xml.startswith("<domain")]
+    assert all(xml.count('<link state="down" />') == xml.count("<mac ") for xml in domains)
+    waited = ("sudo", "cloud-init", "status", "--wait")
+    macs = {role: tuple(nic.mac for nic in nics) for role, nics in artifacts.interfaces.items()}
+    assert plugged_after == [  # mon has only its management NIC, which is never unplugged
+        ("router", macs["router"], waited),
+        ("client", macs["client"], waited),
+    ]

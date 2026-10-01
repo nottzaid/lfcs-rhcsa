@@ -28,6 +28,16 @@ checks:
         test -e /sys/class/net/lan0 || fail "no lan0: $(ls /sys/class/net | tr '\n' ' ')"
         ! nmcli -g NAME connection show | grep -q '^Wired connection' || fail "NM created $(nmcli -g NAME connection show | tr '\n' ',')"
         test -e /sys/class/net/enp1s0 || fail "management NIC renamed: $(ls /sys/class/net | tr '\n' ' ')"
+        expect_eq "$(cat /sys/class/net/lan0/carrier)" 1 "lan0 carrier"
+        ! systemctl is-failed --quiet NetworkManager-wait-online.service || fail "NetworkManager-wait-online failed: $(journalctl -b -u NetworkManager-wait-online --output=cat | tail -1)"
+  - check_id: boot-never-waited-on-scenario-nics
+    kind: command
+    target: client
+    description: The scenario NIC has carrier, and booting never waited for DHCP on it.
+    parameters:
+      script: |
+        expect_eq "$(cat /sys/class/net/lan0/carrier)" 1 "lan0 carrier"
+        ! systemctl is-failed --quiet NetworkManager-wait-online.service || fail "NetworkManager-wait-online failed: $(journalctl -b -u NetworkManager-wait-online --output=cat | tail -1)"
   - check_id: client-reaches-router
     kind: command
     target: client
