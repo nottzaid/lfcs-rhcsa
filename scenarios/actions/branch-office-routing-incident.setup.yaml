@@ -1,8 +1,7 @@
 schema_version: 1
 actions:
-  - action_id: build-broken-branch-topology
-    target: node2
-    timeout_seconds: 90
+  - action_id: run-the-datacenter-services
+    target: dc
     arguments:
       - sudo
       - --
@@ -10,46 +9,98 @@ actions:
       - -c
       - |
         set -euo pipefail
-        systemctl disable --now lal-dc-http.service >/dev/null 2>&1 || true
-        systemctl disable --now firewalld.service nftables.service >/dev/null 2>&1 || true
-        nft delete table inet lal_branch >/dev/null 2>&1 || true
-        ip netns delete lal-branch >/dev/null 2>&1 || true
-        ip netns delete lal-dc >/dev/null 2>&1 || true
-        ip link delete branch0 >/dev/null 2>&1 || true
-        ip link delete dc0 >/dev/null 2>&1 || true
-        ip netns add lal-branch
-        ip netns add lal-dc
-        ip link add branch0 type veth peer name eth0 netns lal-branch
-        ip link add dc0 type veth peer name eth0 netns lal-dc
-        ip addr add 10.70.0.1/24 dev branch0
-        ip addr add 172.20.0.1/24 dev dc0
-        ip link set branch0 up
-        ip link set dc0 up
-        ip netns exec lal-branch ip link set lo up
-        ip netns exec lal-branch ip addr add 10.70.0.2/24 dev eth0
-        ip netns exec lal-branch ip link set eth0 up
-        ip netns exec lal-dc ip link set lo up
-        ip netns exec lal-dc ip addr add 172.20.0.2/24 dev eth0
-        ip netns exec lal-dc ip link set eth0 up
-        install -d /srv/lal-dc
-        printf 'branch-ready\n' > /srv/lal-dc/index.html
-        cat > /etc/systemd/system/lal-dc-http.service <<'EOF'
+        nmcli connection add type ethernet ifname dc0 con-name dc ipv4.method manual \
+          ipv4.addresses 172.20.0.2/24 ipv4.routes '10.70.0.0/24 172.20.0.1' ipv6.method disabled >/dev/null
+        nmcli connection add type dummy ifname vip0 con-name vip ipv4.method manual \
+          ipv4.addresses 172.21.0.10/32 ipv6.method disabled >/dev/null
+        nmcli connection up dc >/dev/null
+        nmcli connection up vip >/dev/null
+        install -d /opt/dc
+        cat > /opt/dc/listen.py <<'PY'
+        """listen.py PORT TEXT: answer every connection on the order service address with TEXT."""
+        import sys
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        port, text = int(sys.argv[1]), sys.argv[2]
+
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = f"{text}\n".encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+
+        HTTPServer(("172.21.0.10", port), Handler).serve_forever()
+        PY
+        for service in "orders 8080 branch-ready" "orders-db 5432 database"; do
+          set -- $service
+          cat > "/etc/systemd/system/$1.service" <<UNIT
         [Unit]
-        Description=Linux Admin Lab datacenter endpoint
-        After=network.target
+        Description=Datacenter service $1
+        After=network-online.target
+        Wants=network-online.target
 
         [Service]
-        NetworkNamespacePath=/run/netns/lal-dc
-        ExecStart=/usr/bin/python3 -m http.server 8080 --directory /srv/lal-dc --bind 172.20.0.2
-        Restart=on-failure
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 /opt/dc/listen.py $2 $3
+        Restart=always
+        RestartSec=2
 
         [Install]
         WantedBy=multi-user.target
-        EOF
+        UNIT
+        done
         systemctl daemon-reload
-        systemctl start lal-dc-http.service
-        sysctl -w net.ipv4.ip_forward=0 >/dev/null
-        rm -f /etc/sysctl.d/80-lal-forwarding.conf /etc/nftables/lal-branch.nft
-        sed -i '\#lal-branch.nft#d' /etc/sysconfig/nftables.conf
-        nft add table inet lal_branch
-        nft 'add chain inet lal_branch forward { type filter hook forward priority 0; policy drop; }'
+        systemctl enable --now orders.service orders-db.service
+        firewall-cmd --quiet --permanent --add-port=8080/tcp --add-port=5432/tcp
+        firewall-cmd --quiet --reload
+  - action_id: run-a-branch-desktop
+    target: branch
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname branch0 con-name branch ipv4.method manual \
+          ipv4.addresses 10.70.0.10/24 ipv4.routes '172.16.0.0/12 10.70.0.1' ipv6.method disabled >/dev/null
+        nmcli connection up branch >/dev/null
+        echo '172.21.0.10 orders.dc.internal' >> /etc/hosts
+        install -d /srv/desktop
+        echo branch-desktop > /srv/desktop/index.html
+        cat > /etc/systemd/system/desktop-share.service <<'UNIT'
+        [Unit]
+        Description=A branch desktop's file share
+        After=network-online.target
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -m http.server 8000 --directory /srv/desktop
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now desktop-share.service
+        firewall-cmd --quiet --permanent --add-port=8000/tcp
+        firewall-cmd --quiet --reload
+  - action_id: install-the-replacement-router
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname branch0 con-name branch ipv4.method manual \
+          ipv4.addresses 10.70.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection add type ethernet ifname dc0 con-name dc ipv4.method manual \
+          ipv4.addresses 172.20.0.11/24 ipv6.method disabled >/dev/null
+        nmcli connection up branch >/dev/null
+        nmcli connection up dc >/dev/null

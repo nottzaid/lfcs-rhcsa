@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: repair-network-path
+  - action_id: correct-the-datacenter-address-and-route-the-vips
     target: node2
     arguments:
       - sudo
@@ -8,13 +8,11 @@ actions:
       - bash
       - -c
       - |
-        ip -n lal-branch route add 172.20.0.0/24 via 10.70.0.1
-        ip -n lal-dc route add 10.70.0.0/24 via 172.20.0.1
-        cat > /etc/sysctl.d/80-lal-forwarding.conf <<'EOF'
-        net.ipv4.ip_forward=1
-        EOF
-        sysctl -p /etc/sysctl.d/80-lal-forwarding.conf
-  - action_id: write-and-load-stateful-filter
+        set -euo pipefail
+        nmcli connection modify dc -ipv4.addresses 172.20.0.11/24 +ipv4.addresses 172.20.0.1/24
+        nmcli connection modify dc +ipv4.routes '172.21.0.10/32 172.20.0.2'
+        nmcli device reapply dc0
+  - action_id: replace-firewalld-with-an-nftables-ruleset
     target: node2
     arguments:
       - sudo
@@ -22,9 +20,27 @@ actions:
       - bash
       - -c
       - |
-        install -d /etc/nftables
-        nft flush table inet lal_branch
-        nft 'add rule inet lal_branch forward ct state established,related accept'
-        nft 'add rule inet lal_branch forward ip saddr 10.70.0.0/24 ip daddr 172.20.0.0/24 tcp dport 8080 accept'
-        nft list table inet lal_branch > /etc/nftables/lal-branch.nft
-        grep -qF 'include "/etc/nftables/lal-branch.nft"' /etc/sysconfig/nftables.conf || echo 'include "/etc/nftables/lal-branch.nft"' >> /etc/sysconfig/nftables.conf
+        set -euo pipefail
+        systemctl disable --now firewalld.service
+        cat > /etc/nftables/router.nft <<'NFT'
+        flush ruleset
+
+        table inet filter {
+          chain input {
+            type filter hook input priority filter; policy drop;
+            ct state established,related accept
+            iifname "lo" accept
+            meta l4proto { icmp, ipv6-icmp } accept
+            tcp dport 22 accept
+          }
+          chain forward {
+            type filter hook forward priority filter; policy drop;
+            ct state established,related accept
+            iifname "branch0" oifname "dc0" ip daddr 172.21.0.10 tcp dport 8080 accept
+          }
+        }
+        NFT
+        printf 'include "/etc/nftables/router.nft"\n' > /etc/sysconfig/nftables.conf
+        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-router.conf
+        sysctl --quiet --load /etc/sysctl.d/90-router.conf
+        systemctl enable --now nftables.service

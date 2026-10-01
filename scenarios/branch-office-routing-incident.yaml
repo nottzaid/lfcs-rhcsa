@@ -1,75 +1,186 @@
 schema_version: 1
 scenario_id: branch-office-routing-incident
-version: 1
+version: 2
 status: verified
-title: The branch office cannot reach its datacenter service
-summary: Repair addressing, routes, forwarding, and a least-privilege nftables policy.
+title: The branch office lost the order service
+summary: A replacement router passes nothing between a branch and the datacenter; restore exactly the one service the branch needs.
 estimated_minutes: 60
 task_type: troubleshoot
 difficulty: exam
-task: >-
-  node2 is the router between namespace lal-branch (10.70.0.0/24 through 10.70.0.1) and
-  lal-dc (172.20.0.0/24 through 172.20.0.1). Their endpoint addresses are already correct,
-  but routing and forwarding are broken. Configure persistent IPv4 forwarding, install the
-  necessary namespace routes, and create a persistent nftables inet table named lal_branch.
-  Permit branch clients to initiate TCP connections only to datacenter port 8080, permit
-  established return traffic, and keep other forwarded traffic dropped. The service at
-  172.20.0.2:8080 must return branch-ready. Do not change endpoint or router addresses.
+task: |
+  The branch office reaches the datacenter through a router, **node2**, which was replaced
+  last night. Since then the branch cannot use the order service at
+  `http://orders.dc.internal:8080/` (172.21.0.10).
+
+  The network plan:
+
+  | Network | Hosts |
+  | --- | --- |
+  | branch, 10.70.0.0/24 | router `branch0` 10.70.0.1; desktop **branch** 10.70.0.10 |
+  | datacenter, 172.20.0.0/24 | router `dc0` 172.20.0.1; service gateway **dc** 172.20.0.2 |
+  | service addresses, 172.21.0.0/24 | reached through **dc** (172.20.0.2) |
+
+  Security policy for this router: branch hosts may open connections to the order
+  service, TCP port 8080 on 172.21.0.10, and to nothing else in the datacenter; the
+  datacenter may not open connections into the branch. The order service shares its
+  address with the order database (port 5432), which the branch must never reach.
+
+  Fix the router. The branch desktop and the datacenter hosts are configured correctly;
+  leave them as they are.
+requirements:
+  - "From **branch**, `http://orders.dc.internal:8080/` answers `branch-ready`."
+  - "From branch, the order database (172.21.0.10, TCP 5432) cannot be reached."
+  - "From **dc**, nothing in the branch can be reached, such as the desktop's share at `http://10.70.0.10:8000/`."
+  - "branch and dc are unchanged: they still route through the router addresses in the plan."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "Compare node2 with the plan before touching a firewall: `ip -br address`, `ip route`, and `sysctl net.ipv4.ip_forward`. Then ask how a reply from 172.21.0.10 would find its way back to the branch."
+  - "A router needs a route for every network it forwards to; networks behind another router need a static route through it. In NetworkManager that is the profile's `ipv4.routes`."
+  - "firewalld decides what passes between zones with policies (`firewalld.policies(5)`); a rich rule in a policy can allow one destination and port. nftables can do the same in a forward chain with policy drop."
+debrief: |
+  ## What was wrong
+
+  The replacement router was set up from a template, with three faults:
+
+  1. **An address typo.** `dc0` had 172.20.0.11 instead of 172.20.0.1. dc sends everything
+     for the branch to 172.20.0.1, so even with forwarding on, no reply would come back.
+  2. **A missing static route.** The service addresses, 172.21.0.0/24, sit behind dc. Without
+     a route through 172.20.0.2, node2 sent that traffic to its default gateway.
+  3. **No forwarding**: `net.ipv4.ip_forward` was 0, and firewalld had no policy for
+     traffic between the two sides.
+
+  ## A clean fix
+
+  ```bash
+  sudo nmcli connection modify dc ipv4.addresses 172.20.0.1/24 ipv4.routes '172.21.0.0/24 172.20.0.2'
+  sudo nmcli connection up dc
+  echo 'net.ipv4.ip_forward = 1' | sudo tee /etc/sysctl.d/90-router.conf
+  sudo sysctl --load /etc/sysctl.d/90-router.conf
+  sudo firewall-cmd --permanent --new-zone=branch
+  sudo firewall-cmd --permanent --new-zone=datacenter
+  sudo firewall-cmd --permanent --zone=branch --change-interface=branch0
+  sudo firewall-cmd --permanent --zone=datacenter --change-interface=dc0
+  sudo firewall-cmd --permanent --new-policy branch-to-orders
+  sudo firewall-cmd --permanent --policy branch-to-orders --add-ingress-zone branch --add-egress-zone datacenter
+  sudo firewall-cmd --permanent --policy branch-to-orders \
+    --add-rich-rule='rule family="ipv4" destination address="172.21.0.10" port port="8080" protocol="tcp" accept'
+  sudo firewall-cmd --reload
+  ```
+
+  firewalld accepts replies of connections it allowed, and rejects anything between zones
+  that no policy allows, so the datacenter cannot open connections into the branch. The
+  equivalent nftables forward chain: policy drop, accept established traffic, and accept
+  `iifname "branch0" oifname "dc0" ip daddr 172.21.0.10 tcp dport 8080`.
+
+  ## Check it yourself
+
+  ```bash
+  ip route get 172.21.0.10                       # node2: via 172.20.0.2 dev dc0
+  curl http://orders.dc.internal:8080/           # branch
+  timeout 3 bash -c '</dev/tcp/172.21.0.10/5432' # branch: must fail
+  ```
+
+  ## Tempting but wrong
+
+  - **Putting both interfaces in the `trusted` zone.** The order service works, and so do
+    the database and every other port, in both directions.
+  - **Changing dc's route to match the typo.** It works, until any other datacenter host
+    needs the branch, and the router no longer matches the plan everyone else uses.
 objectives:
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.ip-hostname, title: Configure IPv4 and IPv6 networking and hostname resolution}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.troubleshoot, title: Troubleshoot networking}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.packet-filtering, title: Implement packet filtering}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.static-routing, title: Configure static routing}
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.ip-hostname
+    title: Configure IPv4 and IPv6 networking and hostname resolution
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.troubleshoot
+    title: Troubleshoot networking
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.packet-filtering
+    title: Configure packet filtering, port redirection, and NAT
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.static-routing
+    title: Configure static routing
 sources:
-  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
-  - {kind: upstream, title: nftables official wiki, url: https://wiki.nftables.org/wiki-nftables/index.php/Main_Page}
-  - {kind: man-page, title: ip-netns manual, man_page: ip-netns(8)}
-  - {kind: man-page, title: ip-route manual, man_page: ip-route(8)}
-  - {kind: man-page, title: sysctl manual, man_page: sysctl(8)}
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Routes and route lookups
+    man_page: ip-route(8)
+  - kind: man-page
+    title: ipv4.addresses and ipv4.routes
+    man_page: nm-settings-nmcli(5)
+  - kind: man-page
+    title: Policies between zones
+    man_page: firewalld.policies(5)
+  - kind: man-page
+    title: Rich rules
+    man_page: firewalld.richlanguage(5)
 topology:
+  networks:
+    - {name: branch, cidr: 10.70.0.0/24}
+    - {name: datacenter, cidr: 172.20.0.0/24}
   hosts:
-    - {name: node2, image: rocky-10.2-lab-v1, memory_mib: 1280, vcpus: 1}
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: branch, name: branch0}, {network: datacenter, name: dc0}]
+    - name: branch
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: branch, name: branch0}]
+    - name: dc
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: datacenter, name: dc0}]
 checks:
-  - check_id: forwarding-live-and-persistent
+  - check_id: orders-reachable
     kind: command
-    target: node2
-    description: IPv4 forwarding is active and represented in persistent sysctl configuration.
+    target: branch
+    description: branch gets branch-ready from the order service.
     parameters:
-      sudo: true
-      arguments: [bash, -c, 'test "$(sysctl -n net.ipv4.ip_forward)" = 1 && grep -RqsE ''^[[:space:]]*net\.ipv4\.ip_forward[[:space:]]*=[[:space:]]*1([[:space:]]*(#.*)?)?$'' /etc/sysctl.conf /etc/sysctl.d']
-  - check_id: branch-route-installed
+      script: |
+        answer=$(curl --silent --show-error --max-time 5 http://orders.dc.internal:8080/ 2>&1) ||
+          fail "branch cannot reach the order service: ${answer#curl: }"
+        expect_eq "$answer" branch-ready "the order service's answer"
+  - check_id: database-closed-to-branch
     kind: command
-    target: node2
-    description: The branch endpoint routes datacenter traffic through node2.
-    parameters: {sudo: true, arguments: [ip, netns, exec, lal-branch, ip, route, get, 172.20.0.2], stdout_contains: 'via 10.70.0.1'}
-  - check_id: datacenter-return-route-installed
-    kind: command
-    target: node2
-    description: The datacenter endpoint has a return route through node2.
-    parameters: {sudo: true, arguments: [ip, netns, exec, lal-dc, ip, route, get, 10.70.0.2], stdout_contains: 'via 172.20.0.1'}
-  - check_id: filtering-policy-live
-    kind: command
-    target: node2
-    description: The named forwarding chain defaults to drop and has stateful port-8080 rules.
+    target: branch
+    description: branch cannot reach the order database.
     parameters:
-      sudo: true
-      arguments: [bash, -c, 'rules=$(nft list table inet lal_branch) && grep -q ''hook forward.*policy drop'' <<<"$rules" && grep -q ''ct state established,related accept'' <<<"$rules" && grep -Eq ''ip saddr 10\.70\.0\.0/24 ip daddr 172\.20\.0\.0/24 tcp dport 8080.*accept'' <<<"$rules"']
-  - check_id: filtering-policy-persisted
-    kind: file
-    target: node2
-    description: The repaired nftables policy is loaded from the distribution configuration.
-    parameters: {path: /etc/nftables/lal-branch.nft, kind: file, contains: 'table inet lal_branch'}
-  - check_id: allowed-service-reachable
+      script: |
+        if timeout 4 bash -c 'exec 3<>/dev/tcp/172.21.0.10/5432' 2>/dev/null; then
+          fail "branch can open a connection to the order database at 172.21.0.10:5432"
+        fi
+  - check_id: branch-closed-to-datacenter
     kind: command
-    target: node2
-    description: The branch reaches the required datacenter service through the router.
-    parameters: {sudo: true, arguments: [ip, netns, exec, lal-branch, curl, --fail, --silent, --max-time, '3', http://172.20.0.2:8080/], stdout_equals: branch-ready}
-  - check_id: unrelated-forwarding-remains-blocked
+    target: dc
+    description: dc cannot open connections into the branch.
+    parameters:
+      script: |
+        if answer=$(curl --silent --max-time 4 http://10.70.0.10:8000/ 2>/dev/null); then
+          fail "dc opened http://10.70.0.10:8000/ in the branch and got: $answer"
+        fi
+  - check_id: neighbors-unchanged
     kind: command
-    target: node2
-    description: An unrelated datacenter TCP port is not reachable from the branch.
-    parameters: {sudo: true, arguments: [bash, -c, '! ip netns exec lal-branch timeout 2 bash -c ''</dev/tcp/172.20.0.2/22''']}
-persistence: {reboot: false}
+    target: dc
+    description: dc still routes the branch through 172.20.0.1.
+    parameters:
+      script: |
+        route=$(ip -4 route show 10.70.0.0/24)
+        [[ $route == *"via 172.20.0.1 "* ]] || fail "dc's route to the branch changed: ${route:-none}"
+persistence:
+  reboot: true
+  hosts: [node2]
 setup: actions/branch-office-routing-incident.setup.yaml
 reference_solution: actions/branch-office-routing-incident.solution.yaml
 alternate_solutions: [actions/branch-office-routing-incident.alternate.yaml]
+rejected_solutions:
+  - actions/branch-office-routing-incident.rejected-forward-everything.yaml
+  - actions/branch-office-routing-incident.rejected-route-around-the-typo.yaml
