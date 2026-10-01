@@ -143,10 +143,7 @@ def doctor(
     def open_libvirt() -> object:
         import libvirt  # type: ignore[import-untyped]
 
-        connection = libvirt.open("qemu:///system")
-        if connection is None:
-            raise ConnectionError("libvirt returned no connection")
-        return connection
+        return libvirt.open("qemu:///system")  # raises libvirtError when it cannot connect
 
     def built_image() -> Path:
         manifest = load_image_manifest(manifest_path)

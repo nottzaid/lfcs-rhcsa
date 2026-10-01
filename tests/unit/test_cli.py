@@ -773,3 +773,30 @@ def test_up_opens_the_catalog_in_a_browser_once_the_site_is_serving(
     result = runner.invoke(app, ["up", "--port", "8793", "--project-root", str(root)])
     assert result.exit_code == 0, result.stderr
     assert opened == ["http://127.0.0.1:8793/scenarios/topic/lfcs"]
+
+
+def test_doctor_fails_with_the_fix_when_libvirt_is_unreachable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def refuse(uri: str) -> object:
+        raise ConnectionError(f"Failed to connect socket for {uri}: Permission denied")
+
+    monkeypatch.setattr("libvirt.open", refuse)  # also keeps a polkit prompt from appearing
+    project = tmp_path / "lab"
+    project.mkdir()
+    (project / "images").symlink_to(Path(__file__).parents[2] / "images")
+
+    result = runner.invoke(app, ["doctor", "--project-root", str(project)])
+    assert result.exit_code == 1
+    lines = result.stdout.splitlines()
+    failure = lines.index(
+        "fail  libvirt: cannot connect to qemu:///system: "
+        "Failed to connect socket for qemu:///system: Permission denied"
+    )
+    assert lines[failure + 1] == (
+        "      fix: start virtqemud.socket (or libvirtd) and join the libvirt group"
+    )
+    assert any(
+        line.startswith("warn  lab image: not ready (built image is missing") for line in lines
+    )
+    assert not any("sessions" in line for line in lines)  # no lab state yet, so none to list

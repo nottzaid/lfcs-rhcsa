@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sqlite3
 from dataclasses import dataclass, field, replace
 from uuid import UUID, uuid4
 
@@ -8,7 +9,7 @@ from hypothesis import given
 from hypothesis import strategies as st
 
 from sysadmin_lab.adapters.memory_registry import MemoryResourceRegistry
-from sysadmin_lab.application.resources import ManagedResource, ResourceManager
+from sysadmin_lab.application.resources import ManagedResource, ResourceManager, ResourceRecord
 from sysadmin_lab.domain.resources import (
     LAB_NAME_PREFIX,
     MAX_RESOURCE_NAME_LENGTH,
@@ -281,3 +282,102 @@ def test_identities_refuse_names_libvirt_or_the_lab_cannot_use() -> None:
         ResourceIdentity(ResourceKind.NETWORK, "lal-" + "x" * 64, session_id, uuid4(), "a", "b")
     with pytest.raises(ValueError, match="invalid role"):
         ResourceIdentity(ResourceKind.NETWORK, "lal-ok", session_id, uuid4(), "a", "Bad Role")
+
+
+def test_a_registry_record_for_another_owner_of_the_same_name_is_never_acted_on() -> None:
+    expected = identity()
+    gateway = FakeGateway()
+    manager = ResourceManager(gateway, MemoryResourceRegistry())
+    manager.define(base_xml(expected), expected)
+    other = replace(expected, resource_id=uuid4())
+
+    with pytest.raises(ResourceSafetyError, match="registry identity mismatch"):
+        manager.is_registered(other)
+    with pytest.raises(ResourceSafetyError, match="registry identity mismatch"):
+        manager.remove(other)
+    assert gateway.resources[(expected.kind, expected.name)].calls == []
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "refusal"),
+    [("kind", ResourceKind.DOMAIN, "kind mismatch"), ("name", "lal-other", "name mismatch")],
+)
+def test_a_resource_libvirt_describes_differently_is_left_alone(
+    field_name: str, value: object, refusal: str
+) -> None:
+    expected = identity()
+    gateway = FakeGateway()
+    manager = ResourceManager(gateway, MemoryResourceRegistry())
+    manager.define(base_xml(expected), expected)
+    resource = gateway.resources[(expected.kind, expected.name)]
+    setattr(resource, field_name, value)
+
+    with pytest.raises(ResourceSafetyError, match=refusal):
+        manager.remove(expected)
+    assert resource.calls == []
+
+
+class StrippingGateway(FakeGateway):
+    """A libvirt that drops the lab's ownership metadata from what it defines."""
+
+    def define(self, kind: ResourceKind, xml: str) -> FakeResource:
+        resource = super().define(kind, xml)
+        resource.document = base_xml(identity_from_libvirt_xml(xml))
+        return resource
+
+
+def test_a_definition_the_lab_cannot_prove_it_owns_is_not_rolled_back() -> None:
+    expected = identity()
+    gateway = StrippingGateway()
+    registry = MemoryResourceRegistry()
+
+    with pytest.raises(ResourceSafetyError, match="no Linux Admin Lab"):
+        ResourceManager(gateway, registry).define(base_xml(expected), expected, start=True)
+    assert gateway.resources[(expected.kind, expected.name)].calls == []
+    assert registry.get(expected.kind, expected.name) is None
+
+
+class HalfStartingResource(FakeResource):
+    def start(self) -> None:
+        self.calls.append("start")
+        self.active = True
+        raise TimeoutError("network start timed out")
+
+
+class HalfStartingGateway(FakeGateway):
+    def define(self, kind: ResourceKind, xml: str) -> FakeResource:
+        defined = super().define(kind, xml)
+        resource = HalfStartingResource(defined.kind, defined.name, defined.uuid, xml)
+        self.resources[(kind, defined.name)] = resource
+        return resource
+
+
+def test_a_start_that_fails_halfway_is_stopped_and_rolled_back() -> None:
+    expected = identity()
+    gateway = HalfStartingGateway()
+    registry = MemoryResourceRegistry()
+
+    with pytest.raises(TimeoutError, match="timed out"):
+        ResourceManager(gateway, registry).define(base_xml(expected), expected, start=True)
+    assert gateway.resources[(expected.kind, expected.name)].calls == [
+        "start",
+        "stop",
+        "undefine",
+    ]
+    assert registry.get(expected.kind, expected.name) is None
+
+
+class LockedRegistry(MemoryResourceRegistry):
+    def add(self, record: ResourceRecord) -> None:
+        raise sqlite3.OperationalError("database is locked")
+
+
+def test_a_definition_the_registry_could_not_record_is_undefined_again() -> None:
+    expected = identity()
+    gateway = FakeGateway()
+    registry = LockedRegistry()
+
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        ResourceManager(gateway, registry).define(base_xml(expected), expected, start=True)
+    assert gateway.resources[(expected.kind, expected.name)].calls == ["undefine"]
+    assert registry.get(expected.kind, expected.name) is None

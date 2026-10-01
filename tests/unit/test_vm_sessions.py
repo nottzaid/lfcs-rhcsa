@@ -407,3 +407,123 @@ def test_service_rejects_nics_on_undeclared_networks(tmp_path: Path) -> None:
     with pytest.raises(VmProvisioningError, match="undeclared scenario networks: wan"):
         service.provision_many(scenario_id="branch-routing", requests=(request,), networks=())
     assert sessions.states == {}
+
+
+@pytest.mark.parametrize(
+    ("hosts", "networks", "refusal"),
+    [
+        ((), (), "at least one VM host is required"),
+        (("node1", "node1"), (), "VM host names must be unique"),
+        (("node1",), ("lan", "lan"), "scenario network names must be unique"),
+    ],
+)
+def test_a_malformed_request_is_refused_before_a_session_exists(
+    hosts: tuple[str, ...], networks: tuple[str, ...], refusal: str, tmp_path: Path
+) -> None:
+    service, sessions, *_rest = dependencies(tmp_path)
+    base = tmp_path / "base.qcow2"
+    requests = tuple(VmHostRequest(host, base) for host in hosts)
+
+    with pytest.raises(VmProvisioningError, match=refusal):
+        service.provision_many(scenario_id="peer-lab", requests=requests, networks=networks)
+    assert sessions.states == {}
+
+
+def test_destroy_cleans_up_a_machine_whose_domain_was_never_defined(tmp_path: Path) -> None:
+    # The controller died between recording a machine and defining its domain.
+    service, _sessions, machines, artifacts, resources, *_rest = dependencies(tmp_path)
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(scenario_id="base-smoke", host_name="node1", base_image=base)
+    del resources.registered[provisioned.machine.identity.name]
+
+    destroyed = service.destroy(provisioned.state.session_id)
+
+    assert destroyed.status is SessionStatus.DESTROYED
+    assert resources.removed == []  # nothing in libvirt is touched that the lab does not own
+    assert artifacts.destroyed == [(provisioned.state.session_id, "node1")]
+    assert machines.list(provisioned.state.session_id) == ()
+
+
+def test_a_destroy_that_fails_is_recorded_on_the_session(tmp_path: Path) -> None:
+    service, sessions, machines, _artifacts, resources, *_rest = dependencies(tmp_path)
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(scenario_id="base-smoke", host_name="node1", base_image=base)
+
+    def refuse(identity: ResourceIdentity) -> None:
+        raise RuntimeError(f"libvirt refused to undefine {identity.name}")
+
+    resources.remove = refuse  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match="refused to undefine"):
+        service.destroy(provisioned.state.session_id)
+
+    state = sessions.states[provisioned.state.session_id]
+    assert state.status is SessionStatus.FAILED
+    assert state.error == f"libvirt refused to undefine {provisioned.machine.identity.name}"
+    assert machines.list(provisioned.state.session_id)  # kept, so destroy can be retried
+
+
+def test_only_a_ready_session_is_rebooted(tmp_path: Path) -> None:
+    service, _sessions, *_rest, executor = dependencies(tmp_path)
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(scenario_id="base-smoke", host_name="node1", base_image=base)
+    service.destroy(provisioned.state.session_id)
+
+    with pytest.raises(VmProvisioningError, match="only a ready scenario can be rebooted"):
+        service.reboot(provisioned.state.session_id, ("node1",))
+    assert executor.calls[-1][1] == ("sudo", "cloud-init", "status", "--wait")  # no reboot sent
+
+
+def test_a_reboot_touches_only_the_requested_hosts(tmp_path: Path) -> None:
+    service, _sessions, _machines, _artifacts, _resources, readiness, executor = dependencies(
+        tmp_path
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision_many(
+        scenario_id="peer-lab",
+        requests=(VmHostRequest("node1", base), VmHostRequest("node2", base)),
+    )
+    executor.calls.clear()
+
+    service.reboot(provisioned.state.session_id, ("node2",))
+
+    assert [call[1] for call in executor.calls] == [("sudo", "--", "systemctl", "reboot")]
+    assert len(readiness.restarted) == 1
+
+
+@pytest.mark.parametrize(
+    ("break_it", "failure"),
+    [
+        ("sudo", "reboot command failed for node2: sudo: a password is required"),
+        ("address", "machine has no address: node2"),
+    ],
+)
+def test_a_reboot_that_cannot_be_sent_fails_the_session(
+    break_it: str, failure: str, tmp_path: Path
+) -> None:
+    service, sessions, machines, _artifacts, _resources, _readiness, executor = dependencies(
+        tmp_path
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(scenario_id="base-smoke", host_name="node2", base_image=base)
+    if break_it == "sudo":
+        executor.result = GuestCommandResult(1, "", "sudo: a password is required\n")
+    else:
+        machine = provisioned.machine
+        machines.values[(machine.session_id, "node2")] = SessionMachine(
+            machine.session_id,
+            "node2",
+            machine.identity,
+            machine.username,
+            machine.password,
+            machine.private_key,
+        )
+
+    with pytest.raises(VmProvisioningError, match=failure):
+        service.reboot(provisioned.state.session_id, ("node2",))
+    state = sessions.states[provisioned.state.session_id]
+    assert (state.status, state.error) == (SessionStatus.FAILED, failure)
