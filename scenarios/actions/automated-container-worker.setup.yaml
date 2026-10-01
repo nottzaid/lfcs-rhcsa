@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: build-local-worker-assets
+  - action_id: publish-the-signed-assets-repository
     target: node2
     timeout_seconds: 180
     arguments:
@@ -10,36 +10,47 @@ actions:
       - -c
       - |
         set -euo pipefail
-        rm -rf /tmp/lal-worker-rpmbuild /srv/lal-worker-repo
-        install -d /tmp/lal-worker-rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} /srv/lal-worker-repo
-        cat > /tmp/lal-worker-rpmbuild/SPECS/lal-worker-assets.spec <<'EOF'
+        export GNUPGHOME=$(mktemp -d)
+        gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
+          --quick-gen-key 'Lab Automation Team <automation@lab.invalid>' rsa3072 sign never
+        top=$(mktemp -d)
+        install -d "$top"/{SPECS,RPMS,BUILD,SOURCES,SRPMS}
+        cat > "$top/SPECS/lal-worker-assets.spec" <<'SPEC'
         Name: lal-worker-assets
-        Version: 1.0
+        Version: 2.1
         Release: 1
-        Summary: Linux Admin Lab worker assets
+        Summary: Reference data for the report worker
         License: MIT
         BuildArch: noarch
         %description
-        Offline worker payload for Linux Admin Lab.
+        Reference data the report worker reads from /assets.
         %install
         mkdir -p %{buildroot}/usr/share/lal-worker-assets
-        printf 'approved-worker\n' > %{buildroot}/usr/share/lal-worker-assets/payload
+        printf '2.1\n' > %{buildroot}/usr/share/lal-worker-assets/VERSION
         %files
-        /usr/share/lal-worker-assets/payload
-        EOF
-        rpmbuild -bb --define '_topdir /tmp/lal-worker-rpmbuild' /tmp/lal-worker-rpmbuild/SPECS/lal-worker-assets.spec
-        cp /tmp/lal-worker-rpmbuild/RPMS/noarch/lal-worker-assets-1.0-1.noarch.rpm /srv/lal-worker-repo/
-        createrepo_c /srv/lal-worker-repo
-        rpm -e lal-worker-assets >/dev/null 2>&1 || true
-        cat > /etc/yum.repos.d/lal-worker.repo <<'EOF'
+        /usr/share/lal-worker-assets
+        SPEC
+        rpmbuild -bb --quiet --define "_topdir $top" "$top/SPECS/lal-worker-assets.spec" 2>/dev/null
+        install -d -m 0755 /srv/lal-worker-repo
+        cp "$top"/RPMS/noarch/*.rpm /srv/lal-worker-repo/
+        rpmsign --addsign --define '_gpg_name Lab Automation Team' --define "_gpg_path $GNUPGHOME" \
+          /srv/lal-worker-repo/*.rpm >/dev/null
+        createrepo_c --quiet /srv/lal-worker-repo
+        gpg --export --armor > /srv/lal-worker-repo/RPM-GPG-KEY-lal-worker
+        rm -rf "$GNUPGHOME" "$top"
+        # node2 is air-gapped: its only package source is the internal repository.
+        dnf config-manager --set-disabled baseos appstream extras >/dev/null
+        cat > /etc/yum.repos.d/lal-worker.repo <<'REPO'
         [lal-worker]
-        name=Linux Admin Lab worker repository
-        baseurl=file:///srv/missing-worker-repo
+        name=Report worker packages
+        baseurl=file:///srv/lal-worker-repo
+        # Disabled during the September migration, pending review.
         enabled=0
-        gpgcheck=0
-        EOF
+        gpgcheck=1
+        gpgkey=file:///srv/lal-worker-repo/RPM-GPG-KEY-lal-worker
+        REPO
         dnf clean all >/dev/null
-  - action_id: build-worker-history-and-image
+  - action_id: build-the-worker-image
     target: node2
     timeout_seconds: 120
     arguments:
@@ -48,32 +59,33 @@ actions:
       - bash
       - -c
       - |
-        rm -rf /etc/lal-automation
-        install -d /etc/lal-automation
-        git -C /etc/lal-automation init -q --initial-branch=main
-        git -C /etc/lal-automation config user.name 'Automation Team'
-        git -C /etc/lal-automation config user.email automation@lab.invalid
-        printf 'SITE=amman\n' > /etc/lal-automation/worker.conf
-        git -C /etc/lal-automation add worker.conf
-        git -C /etc/lal-automation commit -q -m 'Approve worker site'
-        git -C /etc/lal-automation tag approved-worker
-        printf 'Run through Quadlet.\n' > /etc/lal-automation/README
-        git -C /etc/lal-automation add README
-        git -C /etc/lal-automation commit -q -m 'Document deployment'
-        printf 'SITE=retired\n' > /etc/lal-automation/worker.conf
-        git -C /etc/lal-automation add worker.conf
-        git -C /etc/lal-automation commit -q -m 'Rejected site change'
-        podman rm -f lal-automation >/dev/null 2>&1 || true
-        podman rmi localhost/lal-worker:1 >/dev/null 2>&1 || true
-        root=/tmp/lal-worker-rootfs
+        set -euo pipefail
+        root=$(mktemp -d)
+        install -d "$root/usr/local/bin" "$root/data" "$root/assets"
+        for program in /usr/bin/bash /usr/bin/sleep; do
+          cp --parents "$program" "$root"
+          ldd "$program" | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
+            while read -r library; do cp --parents --dereference "$library" "$root"; done
+        done
+        ln -s usr/bin "$root/bin"
+        cat > "$root/usr/local/bin/lal-worker" <<'WORKER'
+        #!/usr/bin/bash
+        # The report worker: announces the site and asset version it serves, then waits for work.
+        trap 'exit 0' TERM INT
+        [[ -n "${SITE:-}" ]] || { echo "lal-worker: SITE is not set" >&2; exit 2; }
+        if ! version=$(< /assets/VERSION); then
+          echo "lal-worker: no reference data in /assets" >&2
+          exit 1
+        fi
+        printf 'site=%s assets=%s\n' "$SITE" "$version" > /data/ready
+        echo "lal-worker: ready for site $SITE with assets $version"
+        while :; do sleep 3600 & wait $!; done
+        WORKER
+        chmod 0755 "$root/usr/local/bin/lal-worker"
+        tar -C "$root" -cf - . | podman import --quiet \
+          --change 'CMD=["/usr/local/bin/lal-worker"]' - localhost/lal-worker:1 >/dev/null
         rm -rf "$root"
-        install -d "$root/bin" "$root/lib64" "$root/usr/lib64"
-        cp --parents /bin/bash "$root"
-        ldd /bin/bash | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' | while read -r lib; do cp --parents "$lib" "$root"; done
-        tar -C "$root" -cf - . | podman import - localhost/lal-worker:1
-        rm -rf "$root" /var/lib/lal-automation
-        install -d -m 0770 /var/lib/lal-automation /etc/containers/systemd
-  - action_id: remove-incomplete-worker-units
+  - action_id: deploy-the-worker-as-last-week-left-it
     target: node2
     arguments:
       - sudo
@@ -81,6 +93,57 @@ actions:
       - bash
       - -c
       - |
-        systemctl disable --now lal-automation.service lal-automation-refresh.timer >/dev/null 2>&1 || true
-        rm -f /etc/containers/systemd/lal-automation.container /etc/systemd/system/lal-automation-refresh.{service,timer}
+        set -euo pipefail
+        install -d /etc/lal-automation /var/lib/lal-automation /usr/share/lal-automation
+        cd /etc/lal-automation
+        git init --quiet --initial-branch=main
+        git config user.name 'Ops Team'
+        git config user.email 'ops@lab.invalid'
+        printf '# Report worker settings. Deploy only what is tagged approved-worker.\n' > README
+        printf 'SITE=amman\n' > worker.conf
+        git add README worker.conf
+        git commit --quiet -m 'Worker settings for the Amman site'
+        git tag approved-worker
+        printf 'SITE=test-lab\n' > worker.conf
+        git commit --quiet -am 'Point the worker at the test lab'
+        git rev-parse HEAD > /usr/share/lal-automation/unapproved-commit
+        cat > /etc/containers/systemd/lal-automation.container <<'QUADLET'
+        [Unit]
+        Description=Nightly report worker
+
+        [Container]
+        Image=localhost/lal-worker:1
+        ContainerName=lal-automation
+        EnvironmentFile=/etc/lal-automation/worker.conf
+        Volume=/var/lib/lal-automation:/data:Z
+        Volume=/usr/share/lal-worker-assets:/assets:ro
+
+        [Service]
+        Restart=on-failure
+        RestartSec=10
+
+        [Install]
+        WantedBy=multi-user.target
+        QUADLET
+        cat > /etc/systemd/system/lal-automation-refresh.service <<'UNIT'
+        [Unit]
+        Description=Refresh the report worker's reference data
+        Requires=lal-automation.service
+        After=lal-automation.service
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/bin/podman exec lal-automation /usr/bin/bash -c 'printf "%%(%%s)T\n" -1 > /data/refreshed'
+        UNIT
+        cat > /etc/systemd/system/lal-automation-refresh.timer <<'UNIT'
+        [Unit]
+        Description=Refresh the report worker's reference data
+
+        [Timer]
+        OnCalendar=hourly
+
+        [Install]
+        WantedBy=timers.target
+        UNIT
         systemctl daemon-reload
+        systemctl start lal-automation.service || true

@@ -1,10 +1,10 @@
 schema_version: 1
 actions:
-  - action_id: enable-the-repository-and-install-the-assets
+  - action_id: install-with-the-repository-enabled-for-one-command
     target: node2
     timeout_seconds: 120
-    arguments: [sudo, --, bash, -c, "dnf config-manager --set-enabled lal-worker && dnf -y -q install lal-worker-assets"]
-  - action_id: restore-the-approved-configuration-in-a-new-commit
+    arguments: [sudo, --, dnf, -y, -q, --enablerepo=lal-worker, install, lal-worker-assets]
+  - action_id: restore-configure-and-schedule
     target: node2
     arguments:
       - sudo
@@ -16,18 +16,7 @@ actions:
         cd /etc/lal-automation
         git restore --source=approved-worker worker.conf
         git commit --quiet -am 'Restore the approved worker configuration'
-  - action_id: restart-the-worker
-    target: node2
-    arguments: [sudo, --, systemctl, restart, lal-automation.service]
-  - action_id: refresh-every-15-minutes-and-catch-up
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - |
-        set -euo pipefail
+        systemctl restart lal-automation.service
         sed -i 's/^OnCalendar=hourly$/OnCalendar=*:0\/15\nPersistent=true/' /etc/systemd/system/lal-automation-refresh.timer
         systemctl daemon-reload
         systemctl enable --now lal-automation-refresh.timer

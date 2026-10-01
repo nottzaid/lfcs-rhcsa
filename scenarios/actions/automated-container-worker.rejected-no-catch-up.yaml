@@ -1,0 +1,22 @@
+schema_version: 1
+actions:
+  - action_id: fix-everything-but-missed-runs
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        dnf config-manager --set-enabled lal-worker
+        dnf -y -q install lal-worker-assets
+        cd /etc/lal-automation
+        git restore --source=approved-worker worker.conf
+        git commit --quiet -am 'Restore the approved worker configuration'
+        systemctl restart lal-automation.service
+        sed -i 's/^OnCalendar=hourly$/OnCalendar=*:0\/15/' /etc/systemd/system/lal-automation-refresh.timer
+        systemctl daemon-reload
+        systemctl enable --now lal-automation-refresh.timer
+        systemctl start lal-automation-refresh.service
