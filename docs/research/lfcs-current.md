@@ -4,7 +4,7 @@
 - Retrieved: 2026-08-11
 - Certification page last modified by publisher: 2026-08-06
 - Machine-readable record: [`curricula/lfcs-2026-08.yaml`](../../curricula/lfcs-2026-08.yaml)
-- Machine-checked portfolio: [`curricula/lfcs-2026-08-portfolio.yaml`](../../curricula/lfcs-2026-08-portfolio.yaml)
+- Coverage: every competency has a focused scenario; `tests/contract/test_scenarios.py` derives this from the scenario manifests.
 
 ## Published domains
 
