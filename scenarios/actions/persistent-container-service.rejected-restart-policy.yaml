@@ -1,0 +1,8 @@
+schema_version: 1
+actions:
+  - action_id: start-restart-always-containers-at-boot
+    target: node2
+    arguments: [sudo, --, systemctl, enable, podman-restart.service]
+  - action_id: start-the-old-container
+    target: node2
+    arguments: [sudo, --, podman, start, lal-worker]

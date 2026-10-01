@@ -1,108 +1,220 @@
 schema_version: 1
 scenario_id: recurring-user-report
-version: 1
+version: 2
 status: verified
 title: The weekday usage report never arrives
-summary: Repair a user-owned cron schedule and its non-interactive execution environment.
-estimated_minutes: 20
+summary: A user's cron job runs at the wrong time, and fails when it does run.
+estimated_minutes: 25
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  On node2, the reportbot account owns a broken cron schedule for the supplied
-  generate-usage-report command. Schedule the compact report for 06:40 UTC every Monday through
-  Friday in reportbot's personal crontab. Make the command resolvable in cron's non-interactive
-  environment without changing the supplied script, keep cron active and enabled, and run the job
-  once as reportbot to prove it produces /var/lib/lal-reports/latest. Do not reboot node1; it is
-  not part of this scenario.
+task: |
+  Every weekday morning the finance team expects a compact usage report from **node2**,
+  produced by `generate-usage-report` running as the `reportbot` account. It has never
+  arrived. Running the command by hand in a `reportbot` login shell works perfectly:
+
+  ```text
+  $ generate-usage-report --format compact && head -n 1 /var/lib/lal-reports/latest
+  format=compact
+  ```
+
+  The report must be produced at **06:40 UTC, Monday to Friday**, from `reportbot`'s own
+  crontab. Leave the report script itself alone.
+requirements:
+  - "`reportbot`'s crontab runs `generate-usage-report --format compact` at 06:40 UTC every Monday to Friday, and at no other time."
+  - "Run exactly as cron runs it, the job succeeds and leaves a compact report in `/var/lib/lal-reports/latest`, owned by `reportbot`."
+  - "The cron daemon is running and enabled."
+  - "The report script is unchanged."
+hints:
+  - "Read the crontab as cron does: `sudo crontab -u reportbot -l`. Every line matters, including the ones that are not jobs. `crontab(5)` explains each field and the variables a crontab can set."
+  - "`CRON_TZ` changes the time zone the schedule is read in. The system clock here is UTC."
+  - "cron starts jobs with a minimal environment, not your login shell's. Compare `sudo -iu reportbot env` with what `crontab(5)` says cron provides, then ask where `generate-usage-report` lives."
+debrief: |
+  ## What was wrong
+
+  ```text
+  CRON_TZ=Asia/Amman
+  PATH=/usr/bin:/bin
+  MAILTO=""
+  15 3 * * * generate-usage-report --format verbose
+  ```
+
+  Four problems in four lines. The schedule (`15 3 * * *`) was daily, at the wrong time, and
+  read in Amman time, three hours ahead of UTC. `PATH` did not include `/opt/lal/bin`, so cron
+  could not find the command: the login shell only worked because `/etc/profile.d` adds that
+  directory for interactive logins. The report format was `verbose`. And `MAILTO=""`
+  discarded the error mail that would have explained all this.
+
+  ## A clean fix
+
+  ```text
+  PATH=/opt/lal/bin:/usr/bin:/bin
+  40 6 * * 1-5 generate-usage-report --format compact
+  ```
+
+  Removing `CRON_TZ` makes the schedule follow the system time zone, which is UTC. Keeping
+  `CRON_TZ=Asia/Amman` with `40 9 * * 1-5` fires at the same instants, but the next reader
+  has to do the time-zone arithmetic. Using the full path `/opt/lal/bin/generate-usage-report`
+  instead of changing `PATH` is equally good.
+
+  ## Check it yourself
+
+  ```bash
+  sudo crontab -u reportbot -l
+  # reproduce cron's environment for one run:
+  sudo -u reportbot env -i HOME=/var/lib/lal-reports SHELL=/bin/sh \
+    PATH=/opt/lal/bin:/usr/bin:/bin sh -c 'generate-usage-report --format compact'
+  journalctl -u crond --since today
+  ```
+
+  In day-of-week fields `0` and `7` are Sunday, so `0-4` is Sunday to Thursday, a common
+  off-by-one when writing "weekdays".
+
+  ## Tempting but wrong
+
+  - **Setting `PATH` in `~/.bash_profile`.** cron never reads login files.
+  - **Changing the time but keeping `CRON_TZ=Asia/Amman`.** The job runs at 03:40 UTC.
+  - **Putting it in `/etc/crontab` as root.** The report ends up owned by root, and it is
+    no longer the account's own schedule.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: operations.scheduled-jobs
     title: Manage or schedule jobs for executing commands
-  - track: professional
-    version: v1
-    objective_id: repair-user-cron-environment
-    title: Recover a user-owned scheduled report in a non-interactive environment
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: Cronie crontab file documentation
-    url: https://github.com/cronie-crond/cronie/blob/master/man/crontab.5
   - kind: man-page
-    title: crontab file format manual
+    title: Crontab format, environment, and CRON_TZ
     man_page: crontab(5)
   - kind: man-page
-    title: crontab command manual
+    title: Edit and list per-user crontabs
     man_page: crontab(1)
+  - kind: man-page
+    title: The cron daemon
+    man_page: cron(8)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: cron-daemon
+  - check_id: weekday-0640-utc-schedule
+    kind: command
+    target: node2
+    description: reportbot's crontab runs the compact report at 06:40 UTC Monday to Friday and at no other time.
+    parameters:
+      sudo: true
+      script: |
+        crontab -u reportbot -l 2>/dev/null | python3 -c '
+        import datetime, re, sys, zoneinfo
+        NAMES = {"sun": 0, "mon": 1, "tue": 2, "wed": 3, "thu": 4, "fri": 5, "sat": 6,
+                 "jan": 1, "feb": 2, "mar": 3, "apr": 4, "may": 5, "jun": 6, "jul": 7,
+                 "aug": 8, "sep": 9, "oct": 10, "nov": 11, "dec": 12}
+        SPECIAL = {"@yearly": "0 0 1 1 *", "@annually": "0 0 1 1 *", "@monthly": "0 0 1 * *",
+                   "@weekly": "0 0 * * 0", "@daily": "0 0 * * *", "@midnight": "0 0 * * *",
+                   "@hourly": "0 * * * *"}
+        def expand(field, low, high):
+            values = set()
+            for part in field.lower().split(","):
+                spec, _, step = part.partition("/")
+                if spec == "*":
+                    start, end = low, high
+                else:
+                    first, _, last = spec.partition("-")
+                    start = int(NAMES.get(first, first))
+                    end = int(NAMES.get(last, last)) if last else (high if step else start)
+                values.update(range(start, end + 1, int(step or 1)))
+            return values
+        zone, fires, jobs = "UTC", set(), 0
+        for line in sys.stdin:
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            variable = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$", line)
+            if variable:
+                if variable.group(1) == "CRON_TZ":
+                    zone = variable.group(2).strip("\x27\"") or "UTC"
+                continue
+            if line.startswith("@"):
+                word, _, command = line.partition(" ")
+                if word == "@reboot":
+                    continue
+                fields = SPECIAL[word].split()
+            else:
+                parts = line.split(None, 5)
+                fields, command = parts[:5], parts[5] if len(parts) > 5 else ""
+            if "generate-usage-report" not in command:
+                continue
+            jobs += 1
+            minutes, hours = expand(fields[0], 0, 59), expand(fields[1], 0, 23)
+            days, months = expand(fields[2], 1, 31), expand(fields[3], 1, 12)
+            weekdays = {day % 7 for day in expand(fields[4], 0, 7)}
+            restricted_day, restricted_weekday = fields[2] != "*", fields[4] != "*"
+            tz = zoneinfo.ZoneInfo(zone)
+            start = datetime.datetime(2026, 10, 5, tzinfo=tz)
+            for offset in range(7 * 24 * 60):
+                local = start + datetime.timedelta(minutes=offset)
+                weekday = (local.weekday() + 1) % 7
+                day_ok = (local.day in days or weekday in weekdays) if restricted_day and restricted_weekday \
+                    else (local.day in days and weekday in weekdays)
+                if local.minute in minutes and local.hour in hours and local.month in months and day_ok:
+                    utc = local.astimezone(datetime.timezone.utc)
+                    fires.add((utc.weekday(), utc.hour, utc.minute))
+        if not jobs:
+            sys.exit("reportbot has no cron entry running generate-usage-report")
+        wanted = {(day, 6, 40) for day in range(5)}
+        names = "Mon Tue Wed Thu Fri Sat Sun".split()
+        describe = lambda runs: ", ".join(f"{names[d]} {h:02d}:{m:02d}" for d, h, m in sorted(runs)[:4]) or "never"
+        if fires != wanted:
+            sys.exit(f"the report runs at (UTC): {describe(fires)}")
+        '
+  - check_id: runs-in-crons-environment
+    kind: command
+    target: node2
+    description: Run exactly as cron runs it, the job leaves a compact report owned by reportbot.
+    parameters:
+      sudo: true
+      timeout_seconds: 30
+      script: |
+        home=$(getent passwd reportbot | cut -d: -f6)
+        environment=(HOME="$home" LOGNAME=reportbot USER=reportbot SHELL=/bin/sh PATH=/usr/bin:/bin:/usr/sbin:/sbin)
+        command=
+        while IFS= read -r line; do
+          [[ "$line" =~ ^[[:space:]]*(#|$) ]] && continue
+          if [[ "$line" =~ ^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)[[:space:]]*=[[:space:]]*(.*)$ ]]; then
+            value=${BASH_REMATCH[2]}; value=${value#[\"\']}; value=${value%[\"\']}
+            environment+=("${BASH_REMATCH[1]}=$value")
+          elif [[ "$line" == *generate-usage-report* ]]; then
+            read -r _ _ _ _ _ command <<<"$line"
+            [[ "$line" == @* ]] && read -r _ command <<<"$line"
+          fi
+        done < <(crontab -u reportbot -l 2>/dev/null)
+        [[ -n "$command" ]] || fail "reportbot has no cron entry running generate-usage-report"
+        command=${command//\\%/%}
+        rm -f /var/lib/lal-reports/latest
+        output=$(cd "$home" && runuser -u reportbot -- env -i "${environment[@]}" /bin/sh -c "$command" 2>&1) ||
+          fail "run as cron runs it, the job fails: ${output##*$'\n'}"
+        [[ -f /var/lib/lal-reports/latest ]] || fail "the job ran but wrote no report"
+        expect_eq "$(stat -c %U /var/lib/lal-reports/latest)" reportbot "the owner of the report"
+        grep -qx format=compact /var/lib/lal-reports/latest || fail "the report is not in compact format"
+  - check_id: cron-daemon-persistent
     kind: service
     target: node2
-    description: Cron is active and starts automatically at boot.
-    parameters:
-      name: crond.service
-      active: true
-      enabled: true
-  - check_id: reportbot-schedule
+    description: The cron daemon is running and enabled.
+    parameters: {name: crond.service, active: true, enabled: true}
+  - check_id: script-unchanged
     kind: command
     target: node2
-    description: reportbot has the required weekday 06:40 UTC compact-report schedule.
+    description: The report script is unchanged.
     parameters:
-      sudo: true
-      arguments:
-        - sh
-        - -c
-        - >-
-          tab=$(crontab -u reportbot -l) &&
-          printf '%s\n' "$tab" | grep --extended-regexp --quiet
-          '^[[:space:]]*CRON_TZ[[:space:]]*=[[:space:]]*"?UTC"?[[:space:]]*$' &&
-          job=$(printf '%s\n' "$tab" | awk
-          '$1 == "40" && $2 == "6" && $3 == "*" && $4 == "*" &&
-          ($5 == "1-5" || tolower($5) == "mon-fri")
-          {for (i=6; i<=NF; i++) printf "%s%s", $i, (i<NF ? " " : "\n")}') &&
-          case "$job" in
-          '/opt/lal/bin/generate-usage-report --format compact') exit 0 ;;
-          'generate-usage-report --format compact')
-          path=$(printf '%s\n' "$tab" | sed --silent
-          's/^[[:space:]]*PATH[[:space:]]*=[[:space:]]*//p' | tail --lines=1) &&
-          case ":$path:" in *:/opt/lal/bin:*) exit 0 ;; *) exit 1 ;; esac ;;
-          *) exit 1 ;; esac
-  - check_id: report-output
-    kind: file
-    target: node2
-    description: A compact report was successfully produced by reportbot.
-    parameters:
-      path: /var/lib/lal-reports/latest
-      kind: file
-      owner: reportbot
-      group: reportbot
-      mode: "0640"
-      contains: format=compact
-  - check_id: report-identity
-    kind: command
-    target: node2
-    description: The proof run used reportbot's expected identity and home directory.
-    parameters:
-      sudo: true
-      arguments:
-        - sh
-        - -c
-        - >-
-          grep --fixed-strings --line-regexp --quiet user=reportbot
-          /var/lib/lal-reports/latest &&
-          grep --fixed-strings --line-regexp --quiet home=/var/lib/lal-reports
-          /var/lib/lal-reports/latest
+      script: |
+        sha256sum --check --status /usr/share/lal-reports/script.sha256 || fail "generate-usage-report was modified"
 persistence:
-  reboot: true
-  hosts: [node2]
+  reboot: false
 setup: actions/recurring-user-report.setup.yaml
 reference_solution: actions/recurring-user-report.solution.yaml
-alternate_solutions: [actions/recurring-user-report.alternate.yaml]
+alternate_solutions:
+  - actions/recurring-user-report.alternate.yaml
+  - actions/recurring-user-report.alternate-local-time.yaml
+rejected_solutions:
+  - actions/recurring-user-report.rejected-path-in-profile.yaml
+  - actions/recurring-user-report.rejected-wrong-zone.yaml

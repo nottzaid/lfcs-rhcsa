@@ -1,15 +1,14 @@
 schema_version: 1
 actions:
-  - action_id: write-required-kernel-tuning
+  - action_id: fix-the-value-where-it-is-set
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        printf '%s\n' 'net.ipv4.ip_forward = 1'
-        'fs.inotify.max_user_watches = 524288' > /etc/sysctl.d/90-lal-gateway.conf
-  - action_id: apply-required-kernel-tuning
-    target: node2
-    arguments: [sudo, --, sysctl, --load, /etc/sysctl.d/90-lal-gateway.conf]
+      - |
+        set -euo pipefail
+        sed -i 's/^fs.inotify.max_user_watches.*/fs.inotify.max_user_watches = 524288/' /etc/sysctl.d/99-legacy-limits.conf
+        sysctl --system >/dev/null
+        systemctl restart lal-sync.service

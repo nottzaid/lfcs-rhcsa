@@ -1,0 +1,10 @@
+schema_version: 1
+actions:
+  - action_id: raise-it-until-the-next-boot
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - sysctl -w fs.inotify.max_user_watches=524288 && systemctl restart lal-sync.service

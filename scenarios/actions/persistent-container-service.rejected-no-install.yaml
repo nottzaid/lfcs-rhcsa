@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: define-the-worker-quadlet
+  - action_id: define-a-quadlet-without-install
     target: node2
     arguments:
       - sudo
@@ -18,9 +18,6 @@ actions:
         ContainerName=lal-worker
         Environment=WORKER_SITE=amman
         Volume=/srv/worker-data:/data:Z
-
-        [Install]
-        WantedBy=multi-user.target
         QUADLET
         systemctl daemon-reload
   - action_id: start-the-worker-service

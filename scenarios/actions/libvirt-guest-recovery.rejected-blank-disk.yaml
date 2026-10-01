@@ -1,8 +1,8 @@
 schema_version: 1
 actions:
-  - action_id: move-the-disk-back
+  - action_id: create-a-disk-where-libvirt-looks
     target: node2
-    arguments: [sudo, --, mv, /var/lib/libvirt/images/archive/lal-utility-data.img, /var/lib/libvirt/images/lal-utility-data.img]
+    arguments: [sudo, --, qemu-img, create, -f, raw, /var/lib/libvirt/images/lal-utility-data.img, 64M]
   - action_id: autostart-and-start-everything
     target: node2
     arguments:

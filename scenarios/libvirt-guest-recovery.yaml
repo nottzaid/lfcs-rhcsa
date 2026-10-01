@@ -1,18 +1,83 @@
 schema_version: 1
 scenario_id: libvirt-guest-recovery
-version: 1
+version: 2
 status: verified
-title: The utility guest was removed from libvirt
-summary: Recreate and persist a small nested guest through the libvirt toolchain.
-estimated_minutes: 40
-task_type: build
-difficulty: advanced
-task: >-
-  On node2, create a libvirt guest named lfcs-guest with one vCPU, 384 MiB of memory, and a
-  768 MiB qcow2 virtio disk at /var/lib/libvirt/images/lfcs-guest.qcow2. This utility guest
-  has no operating system yet, so an import-style guest that remains at firmware is expected.
-  Run it with software emulation if nested KVM is unavailable. It must be running now and
-  configured to autostart when node2 boots. Do not modify any other libvirt guest.
+title: The utility appliance stays down
+summary: A libvirt guest did not come back after its host rebooted, and will not start by hand either.
+estimated_minutes: 35
+task_type: troubleshoot
+difficulty: intermediate
+task: |
+  **node2** is a small virtualization host. Its only guest, the `lal-utility` appliance,
+  did not come back after node2's last reboot, and starting it by hand fails too. The
+  appliance reports its state on its serial console, and its data disk holds records
+  nobody wants to lose.
+
+  One more thing from the change log: last week someone "tidied up"
+  `/var/lib/libvirt/images`, moving whatever looked unused into an `archive/` directory.
+
+  Get the appliance running with its data disk, and make sure it comes back by itself
+  whenever node2 boots.
+requirements:
+  - "`lal-utility` is running."
+  - "It runs with its original data disk, so its console reports `data disk ... online`."
+  - "It comes back by itself after node2 reboots."
+hints:
+  - "`virsh list --all` shows every defined guest, running or not, and `virsh start lal-utility` tells you why it will not start. Fix one error at a time."
+  - "A guest's disks and networks are in its definition: `virsh domblklist lal-utility`, `virsh dumpxml lal-utility`. `virsh net-list --all` shows the networks and whether they start at boot."
+  - "`virsh edit` or `virt-xml` changes a definition. `virsh autostart` and `virsh net-autostart` decide what starts with node2, and a guest cannot start before its network does. `virsh console lal-utility` shows the appliance's console; leave it with `Ctrl+]`."
+debrief: |
+  ## What was wrong
+
+  Three things, in the order `virsh start` reveals them:
+
+  ```text
+  error: Requested operation is not valid: network 'appliances' is not active
+  error: Cannot access storage file '/var/lib/libvirt/images/lal-utility-data.img': No such file or directory
+  ```
+
+  - The guest's network, `appliances`, had never been set to autostart, so it was down
+    after every boot.
+  - The data disk had been moved to `/var/lib/libvirt/images/archive/`.
+  - The guest itself was not set to autostart either, so even a healthy setup would have
+    stayed down after the reboot.
+
+  ## A clean fix
+
+  ```bash
+  sudo virsh net-autostart appliances
+  sudo virsh net-start appliances
+  sudo virt-xml lal-utility --edit target=vda \
+    --disk path=/var/lib/libvirt/images/archive/lal-utility-data.img
+  sudo virsh autostart lal-utility
+  sudo virsh start lal-utility
+  sudo virsh console lal-utility      # "lal-utility: data disk ... online"; Ctrl+] leaves
+  ```
+
+  Moving the image back to where the definition expects it is just as good. libvirt
+  labels a guest's disks for SELinux when the guest starts, so either location works.
+  `virsh edit lal-utility` changes the path in an editor, and validates the XML before
+  saving it.
+
+  ## Check it yourself
+
+  ```bash
+  sudo virsh dominfo lal-utility | grep -E 'State|Autostart'
+  sudo virsh net-info appliances | grep -E 'Active|Autostart'
+  sudo virsh domblklist lal-utility
+  ```
+
+  ## Tempting but wrong
+
+  - **Creating a new disk where libvirt looks for it.** The guest starts, and its console
+    says `/dev/vda holds no lal-utility data`: the records are still in `archive/`, and
+    the appliance runs without them.
+  - **`virsh net-start` without `net-autostart`.** Everything works until node2 reboots.
+    Then libvirt tries to autostart the guest, and the journal of `virtqemud` says:
+    `Failed to autostart VM 'lal-utility': Requested operation is not valid: network
+    'appliances' is not active`.
+  - **`virsh start` without `virsh autostart`.** The appliance stays down after the next
+    reboot, exactly as it did this time.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,74 +87,62 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: start, autostart, domblklist, edit, console, and the net-* commands
+    man_page: virsh(1)
+  - kind: man-page
+    title: Change a guest definition from the command line
+    man_page: virt-xml(1)
   - kind: upstream
     title: libvirt domain XML format
     url: https://libvirt.org/formatdomain.html
-  - kind: man-page
-    title: virsh manual
-    man_page: virsh(1)
-  - kind: man-page
-    title: virt-install manual
-    man_page: virt-install(1)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 2048
-      vcpus: 2
-      nested_virtualization: true
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 2048, vcpus: 2}
 checks:
-  - check_id: utility-guest-running
+  - check_id: appliance-running
     kind: command
     target: node2
-    description: The exact requested libvirt guest is running.
+    description: lal-utility is running.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          for attempt in $(seq 1 30); do
-            test "$(virsh -c qemu:///system domstate lfcs-guest 2>/dev/null)" = running && exit 0;
-            sleep 1;
-          done;
-          exit 1
-      timeout_seconds: 40
-  - check_id: utility-guest-resources
+      timeout_seconds: 60
+      script: |
+        virsh -q dominfo lal-utility >/dev/null 2>&1 || fail "libvirt has no guest called lal-utility"
+        running() { [[ $(virsh domstate lal-utility 2>/dev/null) == running ]]; }
+        autostart=$(virsh dominfo lal-utility | sed -n 's/^Autostart: *//p')
+        attempts=1
+        # Shortly after boot, libvirt may still be autostarting the guest.
+        if [[ $autostart == enable ]] && (( $(cut -d. -f1 /proc/uptime) < 300 )); then attempts=30; fi
+        if ! retry "$attempts" running; then
+          reason="it is not set to autostart"
+          if [[ $autostart == enable ]]; then
+            reason=$(journalctl -b -o cat --no-pager -u virtqemud.service | grep -F "autostart VM 'lal-utility'" | tail -n 1)
+          fi
+          fail "lal-utility is $(virsh domstate lal-utility)${reason:+: $reason}"
+        fi
+  - check_id: original-data-disk
     kind: command
     target: node2
-    description: The guest has one vCPU and 384 MiB of configured memory.
+    description: lal-utility runs with its original data disk.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(virsh -c qemu:///system dominfo lfcs-guest | awk -F: '/^CPU.s.:/ {gsub(/ /,"",$2); print $2}')" -eq 1 &&
-          test "$(virsh -c qemu:///system dominfo lfcs-guest | awk -F: '/^Max memory:/ {gsub(/ KiB/,"",$2); print $2+0}')" -eq 393216
-  - check_id: utility-guest-disk
-    kind: command
-    target: node2
-    description: The guest uses the exact qcow2 disk with at least 768 MiB virtual size.
-    parameters:
-      sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          virsh -c qemu:///system domblklist lfcs-guest --details | grep -Fq '/var/lib/libvirt/images/lfcs-guest.qcow2' &&
-          virsh -c qemu:///system domblkinfo lfcs-guest vda |
-          awk '$1=="Capacity:" && $2>=805306368 {ok=1} END {exit !ok}'
-  - check_id: utility-guest-autostart
-    kind: command
-    target: node2
-    description: libvirt records the guest for autostart.
-    parameters:
-      sudo: true
-      arguments: [bash, -c, "virsh -c qemu:///system dominfo lfcs-guest | grep -Eq '^Autostart:[[:space:]]+enable'" ]
+      script: |
+        disk=$(virsh domblklist lal-utility 2>/dev/null | awk '$1 == "vda" {print $2}')
+        [[ -n $disk && $disk != - ]] || fail "lal-utility has no disk vda"
+        [[ -f $disk ]] || fail "lal-utility's disk $disk does not exist"
+        header=$(mktemp)
+        qemu-img dd -U -O raw bs=64 count=1 if="$disk" of="$header" 2>/dev/null
+        read -r magic id < "$header"; rm -f "$header"
+        [[ $magic == LAL-UTILITY-DATA ]] || fail "lal-utility's disk $disk holds no lal-utility data"
+        expect_eq "$id" "$(cat /usr/share/lal-utility/data-id)" "the data disk's identity"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/libvirt-guest-recovery.setup.yaml
 reference_solution: actions/libvirt-guest-recovery.solution.yaml
 alternate_solutions: [actions/libvirt-guest-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/libvirt-guest-recovery.rejected-blank-disk.yaml
+  - actions/libvirt-guest-recovery.rejected-network-not-autostarted.yaml
+  - actions/libvirt-guest-recovery.rejected-guest-not-autostarted.yaml

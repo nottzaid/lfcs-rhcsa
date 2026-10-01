@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: rewrite-the-crontab
+  - action_id: fix-the-time-but-keep-the-zone
     target: node2
     arguments:
       - sudo
@@ -8,5 +8,5 @@ actions:
       - bash
       - -c
       - |
-        printf '%s\n' 'PATH=/opt/lal/bin:/usr/bin:/bin' \
+        printf '%s\n' 'CRON_TZ=Asia/Amman' 'PATH=/opt/lal/bin:/usr/bin:/bin' \
           '40 6 * * 1-5 generate-usage-report --format compact' | crontab -u reportbot -

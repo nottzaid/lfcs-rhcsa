@@ -1,73 +1,153 @@
 schema_version: 1
 scenario_id: repository-trust-repair
-version: 1
+version: 2
 status: verified
-title: The approved local repository cannot be used
-summary: Repair a repository definition and install the approved local package.
+title: The approved internal repository cannot be used
+summary: An air-gapped host must install from its signed internal repository, with signatures verified.
 estimated_minutes: 30
 task_type: fix
 difficulty: intermediate
-task: >-
-  A signed-off training package is already published in the local repository at
-  /srv/lal-repo on node2, but the repository definition is broken. Configure an enabled
-  DNF repository named lal-training that uses file:///srv/lal-repo. This isolated local
-  repository intentionally publishes unsigned training RPMs, so configure gpgcheck=0 for
-  this repository only. Install lal-release-notes from it. Do not disable signature checking
-  globally or alter the other Rocky repositories.
+task: |
+  **node2** is air-gapped: its only package source is the internal repository the release
+  team publishes at `/srv/lal-repo`. Every package in it is signed with the release team's
+  key, which they ship alongside as `/srv/lal-repo/RPM-GPG-KEY-lal-release`.
+
+  The operators need `lal-release-notes`, but `dnf install lal-release-notes` fails. Make
+  the repository usable and install the package. Security policy is explicit: packages are
+  installed only after their signatures are verified.
+requirements:
+  - "`lal-release-notes` is installed from the repository with id `lal-training`."
+  - "`lal-training` is enabled and verifies package signatures, and the release team's key is trusted, so its packages verify cleanly."
+  - "The installed package carries the release team's signature."
+  - "Signature checking stays on in the global dnf configuration."
+hints:
+  - "Read the error `dnf` gives you, then the repository definition: `grep -r lal-training /etc/yum.repos.d`. `dnf repolist --all` shows what dnf knows about."
+  - "A repository's `baseurl` must point where the metadata is: look for `repodata/` under `/srv`. `dnf.conf(5)` documents `gpgcheck` and `gpgkey`."
+  - "`rpm -K file.rpm` checks a package's signature against the keys rpm trusts; `rpm --import` or a `gpgkey=` line makes rpm trust a key."
+debrief: |
+  ## What was wrong
+
+  ```ini
+  [lal-training]
+  name=Internal release packages
+  baseurl=file:///srv/lal-repository
+  enabled=1
+  gpgcheck=0
+  ```
+
+  The `baseurl` pointed at a directory that does not exist, so dnf could not read the
+  repository at all. And signature checking was switched off for it. Setting `gpgcheck=1`
+  alone then fails differently, because no key is trusted yet:
+
+  ```text
+  You have enabled checking of packages via GPG keys. This is a good thing.
+  However, you do not have any GPG public keys installed. ...
+  ```
+
+  ## A clean fix
+
+  ```ini
+  [lal-training]
+  name=Internal release packages
+  baseurl=file:///srv/lal-repo
+  enabled=1
+  gpgcheck=1
+  gpgkey=file:///srv/lal-repo/RPM-GPG-KEY-lal-release
+  ```
+
+  ```bash
+  sudo dnf install lal-release-notes
+  ```
+
+  With `gpgkey=`, dnf offers to import the key the first time it needs it and then
+  verifies every package from the repository against it. `sudo rpm --import
+  /srv/lal-repo/RPM-GPG-KEY-lal-release` imports it ahead of time; that works too. In a real
+  environment, check a key's fingerprint against a trusted source before importing it:
+  importing a key means trusting every package it signs.
+
+  ## Check it yourself
+
+  ```bash
+  rpm -K /srv/lal-repo/lal-release-notes-*.rpm        # digests signatures OK
+  rpm -qi lal-release-notes | grep -E 'Signature|From repo'
+  dnf info --installed lal-release-notes | grep 'From repo'
+  rpm -q gpg-pubkey --qf '%{version} %{summary}\n'
+  ```
+
+  ## Tempting but wrong
+
+  - **Fixing the path and keeping `gpgcheck=0`.** The package installs, and nothing
+    verified it came from the release team.
+  - **`rpm -ivh --nosignature` on the file.** Same problem by a different route: the flag
+    tells rpm to skip exactly the check the policy requires.
+  - **`gpgcheck=0` in `/etc/dnf/dnf.conf`.** It switches verification off for every
+    repository on the host.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: operations.packages-repositories
-    title: Manage software packages and repositories
+    title: Search for, install, validate, and maintain software packages or repositories
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: distribution
-    title: DNF configuration reference
-    url: https://dnf.readthedocs.io/en/latest/conf_ref.html
   - kind: man-page
-    title: DNF manual
+    title: Repository options, gpgcheck and gpgkey
+    man_page: dnf.conf(5)
+  - kind: man-page
+    title: Install packages and inspect repositories
     man_page: dnf(8)
   - kind: man-page
-    title: DNF configuration manual
-    man_page: dnf.conf(5)
+    title: Import keys and check package signatures
+    man_page: rpmkeys(8)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: package-installed
+  - check_id: installed-from-the-repository
     kind: command
     target: node2
-    description: The approved package is installed.
-    parameters:
-      arguments: [rpm, --query, lal-release-notes]
-  - check_id: repository-usable
-    kind: command
-    target: node2
-    description: DNF can query the enabled local repository.
+    description: lal-release-notes is installed from the lal-training repository.
     parameters:
       sudo: true
-      arguments: [dnf, --quiet, repoquery, --repo, lal-training, lal-release-notes]
-      stdout_contains: lal-release-notes
-  - check_id: signature-policy-scoped
+      script: |
+        rpm -q lal-release-notes >/dev/null || fail "lal-release-notes is not installed"
+        origin=$(dnf -q repoquery --installed --qf '%{from_repo}' lal-release-notes 2>/dev/null)
+        expect_eq "$origin" lal-training "the repository lal-release-notes was installed from"
+  - check_id: repository-verifies-signatures
     kind: command
     target: node2
-    description: Signature checking is disabled only in the isolated repository definition.
+    description: lal-training is enabled, verifies signatures, and trusts the release team's key.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          file=$(grep -Rsl '^\[lal-training\]$' /etc/yum.repos.d) &&
-          test "$(grep -Ec '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*0[[:space:]]*$' "$file")" -eq 1 &&
-          ! grep -RqsE '^[[:space:]]*gpgcheck[[:space:]]*=[[:space:]]*0' /etc/dnf/dnf.conf
+      script: |
+        settings=$(dnf config-manager --dump lal-training 2>/dev/null) || fail "dnf does not know a repository called lal-training"
+        expect_eq "$(sed -n 's/^enabled = //p' <<<"$settings")" 1 "enabled for lal-training"
+        expect_eq "$(sed -n 's/^gpgcheck = //p' <<<"$settings")" 1 "gpgcheck for lal-training"
+        package=$(ls /srv/lal-repo/lal-release-notes-*.rpm | head -n 1)
+        verdict=$(rpm -K "$package" 2>&1) || fail "rpm does not trust the release key: ${verdict##*: }"
+  - check_id: release-team-signature
+    kind: command
+    target: node2
+    description: The installed package carries the release team's signature.
+    parameters:
+      script: |
+        signature=$(rpm -q --qf '%{RSAHEADER:pgpsig}' lal-release-notes 2>/dev/null)
+        [[ "$signature" == *"Key ID $(cat /usr/share/lal-repo/key-id)"* ]] ||
+          fail "the installed package is not signed by the release team (${signature:-no signature})"
+  - check_id: global-verification-on
+    kind: command
+    target: node2
+    description: Signature checking stays on in the global dnf configuration.
+    parameters:
+      sudo: true
+      script: |
+        expect_eq "$(dnf config-manager --dump main 2>/dev/null | sed -n 's/^gpgcheck = //p')" 1 "the global gpgcheck"
 persistence:
   reboot: false
 setup: actions/repository-trust-repair.setup.yaml
 reference_solution: actions/repository-trust-repair.solution.yaml
 alternate_solutions: [actions/repository-trust-repair.alternate.yaml]
+rejected_solutions:
+  - actions/repository-trust-repair.rejected-no-verification.yaml
+  - actions/repository-trust-repair.rejected-rpm-nosignature.yaml

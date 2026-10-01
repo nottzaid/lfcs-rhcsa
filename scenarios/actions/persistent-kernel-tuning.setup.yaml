@@ -1,15 +1,69 @@
 schema_version: 1
 actions:
-  - action_id: install-stale-kernel-tuning
+  - action_id: leave-a-legacy-limit-in-place
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        printf '%s\n' 'net.ipv4.ip_forward = 0'
-        'fs.inotify.max_user_watches = 8192' > /etc/sysctl.d/90-lal-gateway.conf
-  - action_id: apply-stale-kernel-tuning
+      - |
+        set -euo pipefail
+        printf '%s\n' '# Limits copied from the 2019 build template.' \
+          'fs.inotify.max_user_watches = 8192' 'kernel.pid_max = 4194304' \
+          > /etc/sysctl.d/99-legacy-limits.conf
+        sysctl --system >/dev/null
+  - action_id: install-the-sync-agent
     target: node2
-    arguments: [sudo, --, sysctl, --load, /etc/sysctl.d/90-lal-gateway.conf]
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        useradd --system --no-create-home --shell /sbin/nologin lalsync
+        install -d -m 0755 /srv/sync
+        cd /srv/sync
+        for branch in $(seq 1 30); do for leaf in $(seq 1 400); do echo "b$branch/d$leaf"; done; done |
+          xargs mkdir -p
+        cat > /usr/local/bin/lal-sync <<'EOF'
+        #!/usr/bin/python3
+        """Watch every directory under /srv/sync, as a file-sync agent does."""
+        import ctypes
+        import os
+        import sys
+
+        libc = ctypes.CDLL("libc.so.6", use_errno=True)
+        inotify = libc.inotify_init1(0)
+        watched = 0
+        for directory, _subdirectories, _files in os.walk("/srv/sync"):
+            if libc.inotify_add_watch(inotify, directory.encode(), 0x302) < 0:
+                error = os.strerror(ctypes.get_errno())
+                sys.exit(f"lal-sync: watch limit reached after {watched} directories: {error}")
+            watched += 1
+        with open("/run/lal-sync/status", "w") as status:
+            status.write("complete\n")
+        print(f"lal-sync: watching {watched} directories", flush=True)
+        while True:
+            os.read(inotify, 65536)
+        EOF
+        chmod 0755 /usr/local/bin/lal-sync
+        cat > /etc/systemd/system/lal-sync.service <<'EOF'
+        [Unit]
+        Description=Mirror /srv/sync
+
+        [Service]
+        User=lalsync
+        ExecStart=/usr/local/bin/lal-sync
+        RuntimeDirectory=lal-sync
+        Restart=on-failure
+        RestartSec=15
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable lal-sync.service
+        systemctl start lal-sync.service || true

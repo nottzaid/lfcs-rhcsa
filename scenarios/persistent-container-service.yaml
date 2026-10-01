@@ -1,18 +1,101 @@
 schema_version: 1
 scenario_id: persistent-container-service
-version: 1
+version: 2
 status: verified
-title: The worker container must survive host maintenance
-summary: Run a prebuilt local image as a persistent systemd-managed Podman workload.
+title: The worker container did not survive the reboot
+summary: A container started by hand vanished at the last reboot; recover its settings and make it a real service.
 estimated_minutes: 35
-task_type: build
+task_type: fix
 difficulty: advanced
-task: >-
-  The local image localhost/lal-worker:1 is already present on node2. Run it as a rootful
-  container named lal-worker under systemd. Pass WORKER_SITE=amman, bind-mount
-  /srv/worker-data at /data with SELinux relabeling, and execute the image's /bin/bash to
-  write the site value to /data/ready before remaining active. The container must start at
-  boot and be running now. Do not pull an image from the internet.
+task: |
+  The report worker on **node2** runs in a Podman container called `lal-worker`, which a
+  colleague started by hand last month. It did not come back after the weekend's
+  maintenance reboot, and `/srv/worker-data/heartbeat` has not changed since. The colleague
+  is on leave and left no notes.
+
+  Bring the worker back with the settings it was started with, and make it a proper
+  service: operators manage it as `lal-worker.service` and read its output with
+  `podman logs lal-worker`, and it must come back by itself after every reboot.
+requirements:
+  - "`lal-worker.service` is running, and it is the service that manages the `lal-worker` container."
+  - "The container runs `localhost/lal-worker:1` with the settings it was started with: its site and its data directory."
+  - "The worker stays SELinux-confined and keeps `/srv/worker-data/heartbeat` fresh."
+  - "All of this comes back by itself after node2 reboots."
+hints:
+  - "Look before you replace anything. `podman ps -a` lists stopped containers too, and `podman inspect lal-worker` shows what it was created with; its `Config.CreateCommand` is the exact command line your colleague ran."
+  - "Podman has no daemon: a restart policy of `always` only restarts a container while the machine runs. On Rocky 10 the systemd-native way to run a container is a Quadlet file in `/etc/containers/systemd/`, documented in `podman-systemd.unit(5)`."
+  - "Quadlet turns `lal-worker.container` into `lal-worker.service` at every `systemctl daemon-reload`. It names the container `systemd-lal-worker` unless you set `ContainerName=`, and `systemctl enable` refuses generated units: the file's own `[Install]` section decides what happens at boot."
+debrief: |
+  ## What was wrong
+
+  Your colleague ran:
+
+  ```bash
+  podman run --detach --name lal-worker --restart=always \
+    --env WORKER_SITE=amman --volume /srv/worker-data:/data:Z localhost/lal-worker:1
+  ```
+
+  `--restart=always` sounds like "forever", but Podman has no daemon. While the machine
+  runs, the container's monitor process (`conmon`) restarts it; at boot, only
+  `podman-restart.service` starts such containers, and that service is disabled. Nothing
+  on node2 was responsible for the worker, so the reboot ended it.
+
+  ## A clean fix
+
+  ```bash
+  sudo podman inspect lal-worker --format '{{.Config.CreateCommand}}'
+  sudo tee /etc/containers/systemd/lal-worker.container <<'EOF'
+  [Unit]
+  Description=Report worker
+
+  [Container]
+  Image=localhost/lal-worker:1
+  ContainerName=lal-worker
+  Environment=WORKER_SITE=amman
+  Volume=/srv/worker-data:/data:Z
+
+  [Install]
+  WantedBy=multi-user.target
+  EOF
+  sudo systemctl daemon-reload
+  sudo systemctl start lal-worker.service
+  ```
+
+  At `daemon-reload`, Quadlet's generator writes `lal-worker.service` from the file, with a
+  `podman run --replace --rm ...` that replaces the old container. The unit is "generated",
+  so `systemctl enable` has nothing to link: the `[Install]` section is what hooks it into
+  boot. `/usr/libexec/podman/quadlet -dryrun` prints the unit it would generate.
+
+  `:Z` matters. Every container gets its own pair of SELinux categories, and `:Z` relabels
+  the directory for the container that mounts it. The directory still carried the old
+  container's categories, so a new container without `:Z` is denied, and the worker says so:
+
+  ```text
+  lal-worker: cannot write /data/heartbeat: Permission denied
+  ```
+
+  `podman generate systemd --new --name lal-worker` produces an equivalent classic unit from
+  the existing container. It still works, but Podman has deprecated it in favor of Quadlet.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl status lal-worker
+  sudo podman ps --format '{{.Names}} {{.Image}} {{.Status}}'
+  sudo ls -dZ /srv/worker-data
+  sudo cat /srv/worker-data/heartbeat
+  ```
+
+  ## Tempting but wrong
+
+  - **`podman start lal-worker` and enabling `podman-restart.service`.** It survives the
+    next reboot, but there is still no `lal-worker.service`: systemd starts the container
+    and forgets it, so nothing supervises it or shows its state by name.
+  - **A Quadlet file without `[Install]`.** It starts now, `systemctl enable` refuses it,
+    and the next reboot ends it again.
+  - **`SecurityLabelDisable=true` (or `--privileged`) to get past "Permission denied".** The
+    worker writes again because it now runs unconfined as `spc_t`; `:Z` fixes the label
+    instead of switching off the protection.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,56 +105,72 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: Podman systemd Quadlet documentation
-    url: https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html
-  - kind: upstream
-    title: Podman run documentation
-    url: https://docs.podman.io/en/latest/markdown/podman-run.1.html
+  - kind: man-page
+    title: Quadlet .container files
+    man_page: podman-systemd.unit(5)
+  - kind: man-page
+    title: Inspect a container's configuration
+    man_page: podman-inspect(1)
+  - kind: man-page
+    title: Volume options, including :Z
+    man_page: podman-run(1)
+  - kind: man-page
+    title: SELinux and containers
+    man_page: container_selinux(8)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1536
-      vcpus: 2
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1536, vcpus: 2}
 checks:
-  - check_id: worker-container-running
+  - check_id: managed-by-systemd
     kind: command
     target: node2
-    description: The named Podman container is running.
+    description: lal-worker.service is running and manages the lal-worker container.
     parameters:
       sudo: true
-      arguments: [podman, inspect, --format, '{{.State.Running}}', lal-worker]
-      stdout_equals: "true"
-  - check_id: worker-container-state
+      script: |
+        [[ $(unit_value lal-worker.service LoadState) == loaded ]] || fail "systemd has no lal-worker.service"
+        state=$(unit_value lal-worker.service ActiveState)
+        [[ $state == active ]] || fail "lal-worker.service is $state"
+        if [[ $(podman inspect --format '{{.State.Running}}' lal-worker 2>/dev/null) != true ]]; then
+          running=$(podman ps --format '{{.Names}}' | paste -sd, -)
+          fail "the lal-worker container is not running (running containers: ${running:-none})"
+        fi
+        unit=$(ps -o unit= -p "$(podman inspect --format '{{.State.ConmonPid}}' lal-worker)")
+        [[ $unit == lal-worker.service ]] || fail "the lal-worker container runs under ${unit:-no unit}, not lal-worker.service"
+  - check_id: original-settings
     kind: command
     target: node2
-    description: The container has the required environment and data mount.
+    description: The container runs localhost/lal-worker:1 with its site and data directory.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          podman inspect --format '{{range .Config.Env}}{{println .}}{{end}}' lal-worker | grep -qx WORKER_SITE=amman &&
-          podman inspect --format '{{range .Mounts}}{{println .Source .Destination}}{{end}}' lal-worker |
-          grep -qx '/srv/worker-data /data'
-  - check_id: worker-systemd-persistent
-    kind: service
+      script: |
+        podman container exists lal-worker || fail "there is no container named lal-worker"
+        expect_eq "$(podman inspect --format '{{.ImageName}}' lal-worker)" localhost/lal-worker:1 "the image"
+        site=$(podman inspect --format '{{range .Config.Env}}{{println .}}{{end}}' lal-worker | sed -n 's/^WORKER_SITE=//p')
+        expect_eq "$site" amman "WORKER_SITE"
+        data=$(podman inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' lal-worker)
+        expect_eq "$data" /srv/worker-data "the host directory mounted at /data"
+  - check_id: confined-and-writing
+    kind: command
     target: node2
-    description: systemd manages the worker and starts it at boot.
-    parameters: {name: lal-worker.service, active: true, enabled: true}
-  - check_id: worker-produced-state
-    kind: file
-    target: node2
-    description: The container wrote the required persistent result.
+    description: The worker stays SELinux-confined and keeps its heartbeat fresh.
     parameters:
-      path: /srv/worker-data/ready
-      kind: file
-      contains: amman
+      sudo: true
+      script: |
+        expect_eq "$(getenforce)" Enforcing "the SELinux mode"
+        pid=$(podman inspect --format '{{.State.Pid}}' lal-worker 2>/dev/null)
+        (( pid > 0 )) || fail "the lal-worker container is not running"
+        expect_eq "$(ps -o label= -p "$pid" | cut -d: -f3)" container_t "the worker's SELinux domain"
+        fresh() { [[ -f /srv/worker-data/heartbeat ]] && (( $(date +%s) - $(stat -c %Y /srv/worker-data/heartbeat) <= 30 )); }
+        retry 5 fresh || fail "/srv/worker-data/heartbeat is not being updated: $(journalctl -u lal-worker.service -o cat --no-pager | grep '^lal-worker:' | tail -n 1)"
+        grep -qx site=amman /srv/worker-data/heartbeat || fail "the heartbeat is not for site amman"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/persistent-container-service.setup.yaml
 reference_solution: actions/persistent-container-service.solution.yaml
 alternate_solutions: [actions/persistent-container-service.alternate.yaml]
+rejected_solutions:
+  - actions/persistent-container-service.rejected-restart-policy.yaml
+  - actions/persistent-container-service.rejected-no-install.yaml
+  - actions/persistent-container-service.rejected-label-disable.yaml

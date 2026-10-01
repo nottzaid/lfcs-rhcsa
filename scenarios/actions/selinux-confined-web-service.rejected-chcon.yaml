@@ -3,12 +3,9 @@ actions:
   - action_id: label-the-port-for-web-servers
     target: node2
     arguments: [sudo, --, semanage, port, -a, -t, http_port_t, -p, tcp, "8088"]
-  - action_id: label-like-the-standard-web-root
+  - action_id: relabel-by-hand
     target: node2
-    arguments: [sudo, --, semanage, fcontext, -a, -e, /var/www, /srv/lal-web]
-  - action_id: apply-the-policy-labels
-    target: node2
-    arguments: [sudo, --, restorecon, -RFv, /srv/lal-web]
+    arguments: [sudo, --, chcon, -R, -t, httpd_sys_content_t, /srv/lal-web]
   - action_id: restart-nginx
     target: node2
     arguments: [sudo, --, systemctl, restart, nginx.service]

@@ -1,0 +1,12 @@
+schema_version: 1
+actions:
+  - action_id: keep-amman-time-and-convert
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        printf '%s\n' 'CRON_TZ=Asia/Amman' 'PATH=/opt/lal/bin:/usr/bin:/bin' \
+          '40 9 * * 1-5 generate-usage-report --format compact' | crontab -u reportbot -

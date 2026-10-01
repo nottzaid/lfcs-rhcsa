@@ -1,85 +1,117 @@
 schema_version: 1
 scenario_id: persistent-kernel-tuning
-version: 1
+version: 2
 status: verified
-title: The gateway tuning disappears after maintenance
-summary: Apply required kernel settings immediately and make them survive a reboot.
+title: The sync agent runs out of watches after every reboot
+summary: A file-sync agent fails on a kernel limit that someone raised once but never made stick.
 estimated_minutes: 20
-task_type: configure
+task_type: fix
 difficulty: foundation
-task: >-
-  The application gateway on node2 must forward IPv4 traffic and support a larger number of
-  inotify watches. Set net.ipv4.ip_forward to 1 and fs.inotify.max_user_watches to 524288 in
-  the running kernel. Make both settings persistent in /etc/sysctl.d/90-lal-gateway.conf so
-  they are restored after node2 reboots. Do not reboot node1; it is not part of this scenario.
+task: |
+  `lal-sync.service` on **node2** mirrors the tree under `/srv/sync`, which holds about
+  twelve thousand directories. It needs one inotify watch per directory, and it keeps
+  failing:
+
+  ```text
+  lal-sync: watch limit reached after 8192 directories: No space left on device
+  ```
+
+  The agent's documentation says to give its account 524288 watches. A colleague says they
+  "already fixed this with sysctl last month", yet here we are after a reboot. Fix it for
+  good.
+requirements:
+  - "The running kernel allows at least 524288 inotify watches per user."
+  - "`lal-sync.service` is running and watching the whole tree."
+  - "Both still hold after node2 reboots."
+hints:
+  - "`sysctl fs.inotify.max_user_watches` shows the live value. `sysctl -w` changes only the running kernel; at boot, `systemd-sysctl` applies the files in `/etc/sysctl.d/`, `/run/sysctl.d/`, and `/usr/lib/sysctl.d/`."
+  - "Files are applied in name order across those directories, and when two set the same key, the later one wins. `systemd-analyze cat-config sysctl.d` prints them in that order; `grep -r inotify /etc/sysctl.d` finds what sets this key now."
+  - "`sysctl --system` applies the whole configuration exactly as boot would, which tells you what you will get after a reboot without rebooting."
+debrief: |
+  ## What was wrong
+
+  The colleague had used `sysctl -w`, which lasts until the next boot. Worse, an old file,
+  `/etc/sysctl.d/99-legacy-limits.conf`, sets `fs.inotify.max_user_watches = 8192`. Every
+  boot, `systemd-sysctl` applied it, so the limit came back to 8192 however it was raised by
+  hand.
+
+  ## A clean fix
+
+  ```bash
+  sudo sed -i 's/^fs.inotify.max_user_watches.*/fs.inotify.max_user_watches = 524288/' \
+    /etc/sysctl.d/99-legacy-limits.conf
+  sudo sysctl --system
+  sudo systemctl restart lal-sync
+  ```
+
+  Fixing the value where it is set keeps a single source of truth. Putting the new value in
+  a file whose name sorts after `99-legacy-limits.conf` works too, but a new file named
+  `90-sync.conf` loses: `99-legacy-limits.conf` is applied after it.
+
+  sysctl.d files have one setting per line and no trailing comments:
+  `fs.inotify.max_user_watches = 524288  # sync` sets the value to the whole string after the
+  `=`, which the kernel rejects.
+
+  ## Check it yourself
+
+  ```bash
+  systemd-analyze cat-config sysctl.d | grep -n inotify
+  sudo sysctl --system | grep inotify
+  systemctl status lal-sync
+  ```
+
+  ## Tempting but wrong
+
+  - **`sysctl -w fs.inotify.max_user_watches=524288`.** Correct until the reboot, exactly as
+    the colleague found out.
+  - **A new `/etc/sysctl.d/90-sync.conf`.** It is applied, and then overridden at boot by
+    `99-legacy-limits.conf`.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: operations.kernel-parameters
     title: Configure kernel parameters, persistent and non-persistent
-  - track: professional
-    version: v1
-    objective_id: apply-runtime-and-persistent-kernel-tuning
-    title: Distinguish live kernel state from boot-time configuration
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: Linux kernel IP sysctl documentation
-    url: https://docs.kernel.org/networking/ip-sysctl.html
-  - kind: upstream
-    title: Linux kernel filesystem sysctl documentation
-    url: https://docs.kernel.org/admin-guide/sysctl/fs.html
   - kind: man-page
-    title: sysctl manual
+    title: Configure kernel parameters at runtime
     man_page: sysctl(8)
   - kind: man-page
-    title: sysctl.d manual
+    title: sysctl.d directories, ordering, and syntax
     man_page: sysctl.d(5)
+  - kind: man-page
+    title: inotify limits
+    man_page: inotify(7)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: forwarding-live
+  - check_id: watch-limit-raised
     kind: command
     target: node2
-    description: IPv4 forwarding is enabled in the running kernel.
+    description: The running kernel allows at least 524288 inotify watches per user.
     parameters:
-      arguments: [sysctl, --values, net.ipv4.ip_forward]
-      stdout_equals: "1"
-  - check_id: watches-live
+      script: |
+        limit=$(sysctl -n fs.inotify.max_user_watches)
+        (( limit >= 524288 )) || fail "fs.inotify.max_user_watches is $limit"
+  - check_id: agent-watches-the-tree
     kind: command
     target: node2
-    description: The running kernel has the required inotify watch limit.
+    description: lal-sync.service is running and watching the whole tree.
     parameters:
-      arguments: [sysctl, --values, fs.inotify.max_user_watches]
-      stdout_equals: "524288"
-  - check_id: forwarding-persistent
-    kind: file
-    target: node2
-    description: The persistent sysctl file enables IPv4 forwarding.
-    parameters:
-      path: /etc/sysctl.d/90-lal-gateway.conf
-      kind: file
-      owner: root
-      group: root
-      mode: "0644"
-      contains: net.ipv4.ip_forward = 1
-  - check_id: watches-persistent
-    kind: file
-    target: node2
-    description: The persistent sysctl file records the required inotify limit.
-    parameters:
-      path: /etc/sysctl.d/90-lal-gateway.conf
-      kind: file
-      contains: fs.inotify.max_user_watches = 524288
+      timeout_seconds: 60
+      script: |
+        watching() { systemctl is-active --quiet lal-sync.service && grep -qx complete /run/lal-sync/status 2>/dev/null; }
+        retry 40 watching ||
+          fail "$(journalctl -u lal-sync.service -o cat --no-pager | grep '^lal-sync:' | tail -n 1)"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/persistent-kernel-tuning.setup.yaml
 reference_solution: actions/persistent-kernel-tuning.solution.yaml
 alternate_solutions: [actions/persistent-kernel-tuning.alternate.yaml]
+rejected_solutions:
+  - actions/persistent-kernel-tuning.rejected-runtime-only.yaml
+  - actions/persistent-kernel-tuning.rejected-overridden-drop-in.yaml

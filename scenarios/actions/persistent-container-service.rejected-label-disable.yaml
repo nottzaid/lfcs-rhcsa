@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: define-the-worker-quadlet
+  - action_id: define-an-unconfined-quadlet
     target: node2
     arguments:
       - sudo
@@ -17,7 +17,8 @@ actions:
         Image=localhost/lal-worker:1
         ContainerName=lal-worker
         Environment=WORKER_SITE=amman
-        Volume=/srv/worker-data:/data:Z
+        Volume=/srv/worker-data:/data
+        SecurityLabelDisable=true
 
         [Install]
         WantedBy=multi-user.target

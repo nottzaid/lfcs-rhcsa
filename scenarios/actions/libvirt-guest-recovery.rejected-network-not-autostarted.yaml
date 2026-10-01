@@ -1,8 +1,8 @@
 schema_version: 1
 actions:
-  - action_id: start-the-network-now-and-at-boot
+  - action_id: start-the-network-for-now
     target: node2
-    arguments: [sudo, --, bash, -c, "virsh net-start appliances && virsh net-autostart appliances"]
+    arguments: [sudo, --, virsh, net-start, appliances]
   - action_id: point-the-guest-at-its-moved-disk
     target: node2
     arguments: [sudo, --, virt-xml, lal-utility, --edit, target=vda, --disk, path=/var/lib/libvirt/images/archive/lal-utility-data.img]

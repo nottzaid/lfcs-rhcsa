@@ -1,6 +1,45 @@
 schema_version: 1
 actions:
-  - action_id: build-local-training-repository
+  - action_id: publish-a-signed-internal-repository
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        export GNUPGHOME=$(mktemp -d)
+        gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
+          --quick-gen-key 'Lab Release Team <release@lab.invalid>' rsa3072 sign never
+        top=$(mktemp -d)
+        install -d "$top"/{SPECS,RPMS,BUILD,SOURCES,SRPMS}
+        cat > "$top/SPECS/lal-release-notes.spec" <<'EOF'
+        Name: lal-release-notes
+        Version: 2026.09
+        Release: 1
+        Summary: Release notes for the current platform release
+        License: MIT
+        BuildArch: noarch
+        %description
+        Release notes for operators.
+        %install
+        mkdir -p %{buildroot}/usr/share/doc/lal-release-notes
+        printf 'Platform release 2026.09\n' > %{buildroot}/usr/share/doc/lal-release-notes/NOTES
+        %files
+        /usr/share/doc/lal-release-notes/NOTES
+        EOF
+        rpmbuild -bb --quiet --define "_topdir $top" "$top/SPECS/lal-release-notes.spec" 2>/dev/null
+        install -d -m 0755 /srv/lal-repo /usr/share/lal-repo
+        cp "$top"/RPMS/noarch/*.rpm /srv/lal-repo/
+        rpmsign --addsign --define '_gpg_name Lab Release Team' --define "_gpg_path $GNUPGHOME" \
+          /srv/lal-repo/*.rpm >/dev/null
+        createrepo_c --quiet /srv/lal-repo
+        gpg --export --armor > /srv/lal-repo/RPM-GPG-KEY-lal-release
+        gpg --list-keys --with-colons | awk -F: '/^pub/ {print tolower($5); exit}' > /usr/share/lal-repo/key-id
+        rm -rf "$GNUPGHOME" "$top"
+  - action_id: point-dnf-at-the-wrong-place-without-verification
     target: node2
     arguments:
       - sudo
@@ -9,40 +48,7 @@ actions:
       - -c
       - |
         set -euo pipefail
-        rm -rf /tmp/lal-rpmbuild /srv/lal-repo
-        install -d /tmp/lal-rpmbuild/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} /srv/lal-repo
-        cat > /tmp/lal-rpmbuild/SPECS/lal-release-notes.spec <<'EOF'
-        Name: lal-release-notes
-        Version: 1.0
-        Release: 1
-        Summary: Linux Admin Lab repository exercise
-        License: MIT
-        BuildArch: noarch
-
-        %description
-        Local package used by the Linux Admin Lab repository exercise.
-
-        %install
-        mkdir -p %{buildroot}/usr/share/doc/lal-release-notes
-        printf 'approved repository package\n' > %{buildroot}/usr/share/doc/lal-release-notes/README
-
-        %files
-        /usr/share/doc/lal-release-notes/README
-        EOF
-        rpmbuild -bb --define '_topdir /tmp/lal-rpmbuild' /tmp/lal-rpmbuild/SPECS/lal-release-notes.spec
-        cp /tmp/lal-rpmbuild/RPMS/noarch/lal-release-notes-1.0-1.noarch.rpm /srv/lal-repo/
-        createrepo_c /srv/lal-repo
-        rpm --erase lal-release-notes >/dev/null 2>&1 || true
-  - action_id: install-broken-repository-definition
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - >-
-        rm -f /etc/yum.repos.d/lal-*.repo;
-        printf '%s\n' '[lal-training]' 'name=Linux Admin Lab training repository'
-        'baseurl=file:///srv/missing-repo' 'enabled=0' 'gpgcheck=1'
-        > /etc/yum.repos.d/lal-training.repo;
+        dnf config-manager --set-disabled baseos appstream extras >/dev/null
+        printf '%s\n' '[lal-training]' 'name=Internal release packages' \
+          'baseurl=file:///srv/lal-repository' 'enabled=1' 'gpgcheck=0' > /etc/yum.repos.d/lal-training.repo
         dnf clean all >/dev/null

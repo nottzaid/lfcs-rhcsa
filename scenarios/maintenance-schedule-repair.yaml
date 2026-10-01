@@ -1,116 +1,145 @@
 schema_version: 1
 scenario_id: maintenance-schedule-repair
-version: 1
+version: 2
 status: verified
 title: The overnight maintenance window is being missed
-summary: Repair and validate a persistent systemd timer for an operational housekeeping job.
+summary: A housekeeping timer runs at the wrong time, keeps the wrong retention, and skips runs after downtime.
 estimated_minutes: 25
 task_type: fix
 difficulty: intermediate
-task: >-
-  On node2, the supplied lal-maintenance.service housekeeping job has the wrong retention
-  setting, and lal-maintenance.timer is neither correctly scheduled nor enabled. Configure
-  RETENTION_DAYS=14 in /etc/sysconfig/lal-maintenance. Make the timer activate
-  lal-maintenance.service every day at 02:15 UTC, catch up a missed calendar run after downtime,
-  and start automatically at boot. Activate the timer now and run the service once to prove the
-  supplied job works. Do not reboot node1; it is not part of this scenario.
+task: |
+  **node2** runs its housekeeping job, `lal-maintenance.service`, from a systemd timer. The
+  operations handbook says it runs **every night at 02:15 UTC** with a retention of **14
+  days**. In practice it runs once a week, keeps 90 days of data, and, because this host is
+  often powered off at night, it simply skips the nights it misses.
+
+  Put the schedule and the retention right. Runs missed while node2 was off must happen as
+  soon as it boots. Run the job once now to prove the fix.
+requirements:
+  - "`lal-maintenance.timer` activates `lal-maintenance.service` every night at 02:15 UTC."
+  - "The timer catches up on runs missed while node2 was down."
+  - "The timer is active now and starts at every boot."
+  - "The job has run with a retention of 14 days."
+hints:
+  - "`systemctl cat lal-maintenance.timer lal-maintenance.service` shows both units; `systemctl list-timers --all` shows when each timer fires next."
+  - "`OnCalendar=` takes calendar expressions; `systemd-analyze calendar '...'` prints the next times one matches. Missed runs are the `Persistent=` setting in `systemd.timer(5)`."
+  - "The service reads its settings from an `EnvironmentFile=`. Starting the service directly runs the job once without waiting for the timer."
+debrief: |
+  ## What was wrong
+
+  ```ini
+  [Timer]
+  OnCalendar=weekly
+  Persistent=false
+  ```
+
+  `weekly` means Mondays at 00:00. `Persistent=false` (the default) means a run that falls
+  while the machine is off is simply skipped. The timer was also not enabled, and
+  `/etc/sysconfig/lal-maintenance` said `RETENTION_DAYS=90`.
+
+  ## A clean fix
+
+  ```bash
+  sudo sed -i 's/^RETENTION_DAYS=.*/RETENTION_DAYS=14/' /etc/sysconfig/lal-maintenance
+  sudo systemctl edit lal-maintenance.timer
+  #   [Timer]
+  #   OnCalendar=
+  #   OnCalendar=*-*-* 02:15:00 UTC
+  #   Persistent=true
+  sudo systemctl enable --now lal-maintenance.timer
+  sudo systemctl start lal-maintenance.service
+  systemctl list-timers lal-maintenance.timer
+  ```
+
+  `OnCalendar=` can be listed several times and the entries add up, so a drop-in first
+  resets the list with an empty `OnCalendar=`. Without that line, the timer would fire both
+  weekly and nightly. `Persistent=true` stores the last trigger time on disk; at boot,
+  systemd starts the service once if an activation was missed. The `UTC` suffix pins the
+  schedule to UTC whatever the host's time zone.
+
+  ## Check it yourself
+
+  ```bash
+  systemd-analyze calendar '*-*-* 02:15:00 UTC'
+  systemctl show lal-maintenance.timer -p NextElapseUSecRealtime -p Persistent
+  cat /var/lib/lal-maintenance/last-run
+  ```
+
+  ## Tempting but wrong
+
+  - **Adding a nightly `OnCalendar=` in a drop-in without resetting.** The weekly run stays.
+  - **`OnBootSec=` or `OnUnitActiveSec=24h`.** A monotonic timer drifts away from 02:15 and
+    forgets its schedule across reboots.
+  - **`systemctl start` without `enable`.** The timer runs until the next reboot.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: operations.scheduled-jobs
     title: Manage or schedule jobs for executing commands
-  - track: professional
-    version: v1
-    objective_id: repair-persistent-maintenance-timer
-    title: Recover and validate a persistent system maintenance schedule
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: systemd timer unit documentation
-    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html
-  - kind: upstream
-    title: systemd time and calendar event documentation
-    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.time.html
   - kind: man-page
-    title: systemctl manual
-    man_page: systemctl(1)
+    title: OnCalendar=, Persistent=, and timer semantics
+    man_page: systemd.timer(5)
+  - kind: man-page
+    title: Calendar event syntax
+    man_page: systemd.time(7)
+  - kind: man-page
+    title: Evaluate calendar expressions
+    man_page: systemd-analyze(1)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: retention-policy
-    kind: file
+  - check_id: nightly-at-0215-utc
+    kind: command
     target: node2
-    description: The housekeeping job uses the required retention policy.
+    description: The timer activates lal-maintenance.service every night at 02:15 UTC.
     parameters:
-      path: /etc/sysconfig/lal-maintenance
-      kind: file
-      owner: root
-      group: root
-      mode: "0644"
-      contains: RETENTION_DAYS=14
-  - check_id: timer-running
+      script: |
+        expect_eq "$(unit_value lal-maintenance.timer Triggers)" lal-maintenance.service "the unit the timer triggers"
+        spec=$(unit_value lal-maintenance.timer TimersCalendar)
+        [[ -n "$spec" ]] || fail "the timer has no calendar schedule"
+        mapfile -t upcoming < <(systemctl show --property=TimersCalendar --value lal-maintenance.timer |
+          grep -o 'OnCalendar=[^;]*' | sed 's/^OnCalendar=//; s/ *$//' |
+          while IFS= read -r expression; do
+            systemd-analyze calendar --iterations=7 "$expression" 2>/dev/null |
+              sed -n 's/^ *\(Next elapse\|Iteration #[0-9]*\): *//p'
+          done | while IFS= read -r moment; do date -u -d "$moment" +%s; done | sort -n -u | head -n 7)
+        (( ${#upcoming[@]} == 7 )) || fail "the timer's schedule is not a nightly one: $spec"
+        previous=
+        for when in "${upcoming[@]}"; do
+          expect_eq "$(date -u -d "@$when" +%H:%M)" 02:15 "the time of a scheduled run (UTC)"
+          [[ -z "$previous" ]] || expect_eq $((when - previous)) 86400 "the interval between runs in seconds"
+          previous=$when
+        done
+  - check_id: catches-up-after-downtime
+    kind: command
+    target: node2
+    description: The timer catches up on runs missed while node2 was down.
+    parameters:
+      script: expect_eq "$(unit_value lal-maintenance.timer Persistent)" yes "Persistent"
+  - check_id: timer-persistent
     kind: service
     target: node2
-    description: The maintenance timer is loaded, active, and enabled at boot.
-    parameters:
-      name: lal-maintenance.timer
-      active: true
-      enabled: true
-  - check_id: timer-target
+    description: The timer is active now and starts at every boot.
+    parameters: {name: lal-maintenance.timer, active: true, enabled: true}
+  - check_id: job-ran-with-14-days
     kind: command
     target: node2
-    description: The timer activates the supplied maintenance service.
+    description: The job has run with a retention of 14 days.
     parameters:
-      arguments:
-        - sh
-        - -c
-        - >-
-          test "$(systemctl show --property=Triggers --value -- lal-maintenance.timer)"
-          = lal-maintenance.service
-  - check_id: timer-calendar
-    kind: command
-    target: node2
-    description: The next daily activation is at 02:15 UTC.
-    parameters:
-      arguments:
-        - sh
-        - -c
-        - >-
-          next=$(systemctl show --property=NextElapseUSecRealtime --value --
-          lal-maintenance.timer) && test -n "$next" &&
-          test "$(date --utc --date="$next" +%H:%M)" = 02:15 &&
-          delta=$(($(date --date="$next" +%s) - $(date +%s))) &&
-          test "$delta" -gt 0 && test "$delta" -le 86400
-  - check_id: missed-run-policy
-    kind: command
-    target: node2
-    description: Missed calendar activations are caught after downtime.
-    parameters:
-      arguments:
-        - sh
-        - -c
-        - >-
-          test "$(systemctl show --property=Persistent --value -- lal-maintenance.timer)" = yes
-  - check_id: maintenance-proven
-    kind: file
-    target: node2
-    description: The supplied service has completed with the required policy at least once.
-    parameters:
-      path: /var/lib/lal-maintenance/last-run
-      kind: file
-      owner: root
-      group: root
-      mode: "0644"
-      contains: retention_days=14
+      script: |
+        [[ -f /var/lib/lal-maintenance/last-run ]] || fail "the job has not completed a run"
+        expect_eq "$(sed -n 's/^retention_days=//p' /var/lib/lal-maintenance/last-run)" 14 "the retention of the last run"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/maintenance-schedule-repair.setup.yaml
 reference_solution: actions/maintenance-schedule-repair.solution.yaml
 alternate_solutions: [actions/maintenance-schedule-repair.alternate.yaml]
+rejected_solutions:
+  - actions/maintenance-schedule-repair.rejected-additive-drop-in.yaml
+  - actions/maintenance-schedule-repair.rejected-started-not-enabled.yaml

@@ -1,17 +1,16 @@
 schema_version: 1
 actions:
-  - action_id: replace-repository-file
+  - action_id: import-the-key-then-enable-checking
     target: node2
+    timeout_seconds: 120
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        rm -f /etc/yum.repos.d/lal-training.repo;
-        printf '%s\n' '[lal-training]' 'name=Approved offline packages'
-        'enabled=1' 'baseurl=file:///srv/lal-repo/' 'gpgcheck=0'
-        > /etc/yum.repos.d/lal-offline.repo
-  - action_id: install-package-by-path-independent-repository
-    target: node2
-    arguments: [sudo, --, dnf, --repo=lal-training, install, -y, lal-release-notes]
+      - |
+        set -euo pipefail
+        rpm --import /srv/lal-repo/RPM-GPG-KEY-lal-release
+        dnf config-manager --save --setopt=lal-training.baseurl=file:///srv/lal-repo \
+          --setopt=lal-training.gpgcheck=1
+        dnf -y --repo lal-training install lal-release-notes

@@ -1,18 +1,23 @@
 schema_version: 1
 actions:
-  - action_id: enable-atd
+  - action_id: allow-and-start-the-scheduler
     target: node2
-    arguments: [sudo, --, systemctl, enable, --now, atd.service]
-  - action_id: queue-handoff
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i '/^handoff$/d' /etc/at.deny
+        systemctl enable --now atd.service
+  - action_id: queue-the-handoff-as-handoff
     target: node2
     arguments:
       - sudo
       - --
       - runuser
-      - --user
+      - --login
       - handoff
-      - --
-      - bash
-      - -c
-      - >-
-        printf "%s\n" "/usr/bin/printf 'approved\\n' > /var/lib/handoff/ready" | at now + 1 hour
+      - --command
+      - echo 'echo approved > /var/lib/handoff/ready' | at 06:00

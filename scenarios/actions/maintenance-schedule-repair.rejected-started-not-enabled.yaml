@@ -1,0 +1,16 @@
+schema_version: 1
+actions:
+  - action_id: fix-everything-but-start-only
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i 's/^RETENTION_DAYS=.*/RETENTION_DAYS=14/' /etc/sysconfig/lal-maintenance
+        sed -i 's/^OnCalendar=.*/OnCalendar=*-*-* 02:15:00 UTC/; s/^Persistent=.*/Persistent=true/' /etc/systemd/system/lal-maintenance.timer
+        systemctl daemon-reload
+        systemctl start lal-maintenance.timer
+        systemctl start lal-maintenance.service

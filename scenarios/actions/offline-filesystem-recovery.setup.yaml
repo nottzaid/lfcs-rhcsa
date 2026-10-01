@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-and-damage-records-filesystem
+  - action_id: write-the-records
     target: node2
     arguments:
       - sudo
@@ -10,14 +10,32 @@ actions:
       - |
         set -euo pipefail
         disk=/dev/disk/by-id/virtio-lal-records
-        umount /srv/records >/dev/null 2>&1 || true
-        sed -i '\#/srv/records#d' /etc/fstab
-        wipefs -a "$disk"
         mkfs.ext4 -q -F -L LAL_RECORDS "$disk"
-        rm -rf /srv/records
-        install -d /srv/records
-        mount "$disk" /srv/records
-        printf 'preserve after recovery\n' > /srv/records/important.record
+        install -d /mnt/lal-setup
+        mount "$disk" /mnt/lal-setup
+        install -d /mnt/lal-setup/2026
+        for month in 07 08 09; do
+          printf 'ledger 2026-%s closed\n' "$month" > "/mnt/lal-setup/2026/ledger-$month.csv"
+        done
+        printf 'customer 1042 approved\n' > /mnt/lal-setup/2026/important.record
+        install -d -m 0755 /usr/share/lal-records
+        (cd /mnt/lal-setup && sha256sum 2026/important.record > /usr/share/lal-records/record.sha256 &&
+          sha256sum 2026/ledger-*.csv > /usr/share/lal-records/ledgers.sha256)
         sync
-        umount /srv/records
-        debugfs -w -R 'set_super_value state 2' "$disk"
+        umount /mnt/lal-setup
+        rmdir /mnt/lal-setup
+        blkid -s UUID -o value "$disk" > /usr/share/lal-records/filesystem-uuid
+  - action_id: orphan-the-record-and-flag-errors
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-records
+        debugfs -w -R 'unlink /2026/important.record' "$disk" 2>/dev/null
+        debugfs -w -R 'ssv state 2' "$disk" 2>/dev/null
+        sleep 1
+        date +%s > /usr/share/lal-records/damaged-at
