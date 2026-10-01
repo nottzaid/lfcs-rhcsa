@@ -118,8 +118,9 @@ content-security policy, and no-store responses protect local mutation and crede
 pages. VM start, check, reset, and destroy requests return background job identifiers; the
 browser polls terminal state without keeping an HTTP request open during guest boot.
 
-Scenario and mock-exam durations are descriptive metadata only. Nothing expires a learner
-session, and the released local UI does not enforce a countdown.
+Scenario durations are descriptive metadata only, and nothing expires a learner session. A
+mock rehearsal can be started as timed: checks after its deadline stop counting toward its
+score, and nothing is torn down when time is up.
 
 Fast tests run on every change. Live verification can run locally or on a dedicated KVM-capable
 CI runner. `labctl scenario verify` exposes the same replay system outside pytest.

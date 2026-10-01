@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: create-the-user-and-the-report
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        useradd --create-home reports
+        printf '#!/usr/bin/bash\necho "report $(date +%%F)" >> "$HOME/report.log"\n' > /usr/local/bin/lal-report
+        chmod 0755 /usr/local/bin/lal-report

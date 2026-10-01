@@ -1,0 +1,132 @@
+schema_version: 1
+scenario_id: exam-iscsi-volume
+version: 1
+status: verified
+collection: exam
+title: Attach an iSCSI volume and mount it at boot
+summary: Log in to an iSCSI target with an allowed initiator name, format the disk, and mount it persistently.
+estimated_minutes: 8
+task_type: configure
+difficulty: advanced
+task: |
+  `node1` (10.72.0.10) offers the iSCSI target `iqn.2026-10.internal.lab:vault`. It only
+  accepts the initiator name `iqn.2026-10.internal.lab:node2`.
+
+  On `node2`:
+
+  - use that initiator name, discover the target, and log in to it so that it logs in again
+    at every boot;
+  - create an XFS filesystem on the new disk and mount it at `/srv/vault`, now and after
+    every reboot. Identify it in `/etc/fstab` by its UUID, and make sure the mount waits for
+    the network.
+requirements:
+  - "node2's initiator name is `iqn.2026-10.internal.lab:node2`, and it is logged in to the target, also after a reboot."
+  - "The iSCSI disk holds XFS, mounted at `/srv/vault`."
+  - "`/etc/fstab` mounts it by UUID with `_netdev`."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  echo 'InitiatorName=iqn.2026-10.internal.lab:node2' | sudo tee /etc/iscsi/initiatorname.iscsi
+  sudo systemctl restart iscsid
+  sudo iscsiadm -m discovery -t sendtargets -p 10.72.0.10
+  sudo iscsiadm -m node -T iqn.2026-10.internal.lab:vault -p 10.72.0.10 --login
+  lsblk                                  # the new disk, for example sda
+  sudo mkfs.xfs /dev/sda
+  echo "UUID=$(sudo blkid -s UUID -o value /dev/sda) /srv/vault xfs _netdev 0 0" | sudo tee -a /etc/fstab
+  sudo mkdir -p /srv/vault && sudo systemctl daemon-reload && sudo mount /srv/vault
+  ```
+
+  The target allows initiators by name, so the name must match before logging in; restart
+  `iscsid` after changing it. Discovered node records log in at boot (`node.startup =
+  automatic` is the default). `_netdev` marks the mount as needing the network, so systemd
+  mounts it after the network and the iSCSI login, not before.
+
+  ## Check it yourself
+
+  ```bash
+  sudo iscsiadm -m session
+  findmnt /srv/vault
+  ```
+
+  ## Tempting but wrong
+
+  - **Mounting by hand without fstab.** Gone after the reboot.
+  - **`/dev/sda` in fstab.** iSCSI disks get kernel names in login order, which can change.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.remote-storage
+    title: Use remote filesystems and network block devices
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Discover targets and log in
+    man_page: iscsiadm(8)
+  - kind: man-page
+    title: The iSCSI daemon and initiator name
+    man_page: iscsid(8)
+  - kind: man-page
+    title: _netdev and persistent mounts
+    man_page: fstab(5)
+topology:
+  networks:
+    - {name: san, cidr: 10.72.0.0/24}
+  hosts:
+    - name: node1
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: san, name: san0}]
+      disks:
+        - {name: target, size_mib: 1024, role: iSCSI backing store}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: san, name: san0}]}
+checks:
+  - check_id: logged-in
+    kind: command
+    target: node2
+    description: node2 uses the allowed initiator name and is logged in to the target.
+    parameters:
+      sudo: true
+      timeout_seconds: 40
+      script: |
+        expect_eq "$(sed -n 's/^InitiatorName=//p' /etc/iscsi/initiatorname.iscsi)" iqn.2026-10.internal.lab:node2 "node2's initiator name"
+        session() { iscsiadm -m session 2>/dev/null | grep -q 'iqn.2026-10.internal.lab:vault'; }
+        retry 20 session || fail "node2 is not logged in to iqn.2026-10.internal.lab:vault"
+  - check_id: mounted-xfs
+    kind: command
+    target: node2
+    description: The iSCSI disk holds XFS, mounted at /srv/vault.
+    parameters:
+      sudo: true
+      timeout_seconds: 40
+      script: |
+        mounted() { findmnt -n --mountpoint /srv/vault >/dev/null; }
+        retry 20 mounted || fail "nothing is mounted at /srv/vault"
+        source=$(readlink -f "$(findmnt -n -o SOURCE --mountpoint /srv/vault)")
+        disk=$(readlink -f /dev/disk/by-path/*iqn.2026-10.internal.lab:vault-lun-0 2>/dev/null | head -n 1)
+        [[ -n "$disk" ]] || fail "the iSCSI disk is not present"
+        [[ "$source" == "$disk" || "$source" == "$disk"[0-9]* ]] || fail "/srv/vault is mounted from $source, not the iSCSI disk"
+        expect_eq "$(findmnt -n -o FSTYPE --mountpoint /srv/vault)" xfs "the filesystem at /srv/vault"
+  - check_id: fstab-entry
+    kind: command
+    target: node2
+    description: /etc/fstab mounts it by UUID with _netdev.
+    parameters:
+      script: |
+        case "$(fstab_field /srv/vault SOURCE)" in
+          UUID=*) ;;
+          "") fail "/etc/fstab has no entry for /srv/vault" ;;
+          *) fail "/etc/fstab mounts /srv/vault by $(fstab_field /srv/vault SOURCE); use UUID=" ;;
+        esac
+        has_option "$(fstab_field /srv/vault OPTIONS)" _netdev || fail "the fstab entry for /srv/vault lacks _netdev"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-iscsi-volume.setup.yaml
+reference_solution: actions/exam-iscsi-volume.solution.yaml
+rejected_solutions:
+  - actions/exam-iscsi-volume.rejected-no-fstab.yaml
+  - actions/exam-iscsi-volume.rejected-kernel-name.yaml

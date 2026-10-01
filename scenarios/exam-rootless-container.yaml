@@ -1,0 +1,128 @@
+schema_version: 1
+scenario_id: exam-rootless-container
+version: 1
+status: verified
+collection: exam
+title: Run a rootless container that starts at boot
+summary: Run a user's container with a named volume, started by systemd even when the user is not logged in.
+estimated_minutes: 8
+task_type: configure
+difficulty: advanced
+task: |
+  On `node2`, as the user `app` (rootless podman), run a container:
+
+  - named `cache`, from the image `localhost/lal-cache:1`, which is already in `app`'s image
+    store;
+  - with a named volume `cachedata` mounted at `/data`;
+  - started automatically when node2 boots, even if `app` never logs in.
+requirements:
+  - "`app`'s container `cache` runs `localhost/lal-cache:1` with the volume `cachedata` at `/data`."
+  - "The container writes its heartbeat into the volume."
+  - "It runs again after node2 reboots, with nobody logged in."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo loginctl enable-linger app
+  sudo -iu app
+  mkdir -p ~/.config/containers/systemd
+  cat > ~/.config/containers/systemd/cache.container <<'UNIT'
+  [Container]
+  ContainerName=cache
+  Image=localhost/lal-cache:1
+  Volume=cachedata:/data
+
+  [Install]
+  WantedBy=default.target
+  UNIT
+  systemctl --user daemon-reload
+  systemctl --user start cache.service
+  ```
+
+  A rootless container runs under the user's own systemd instance, which normally exists
+  only while the user is logged in. `loginctl enable-linger` starts that instance at boot
+  and keeps it running. Quadlet files in `~/.config/containers/systemd` become user
+  services; `WantedBy=default.target` starts them with the user's instance.
+
+  If `systemctl --user` complains about the bus, log in as `app` over SSH or with
+  `machinectl shell app@`; `sudo -iu` does not set up a user session everywhere.
+
+  ## Check it yourself
+
+  ```bash
+  loginctl show-user app -p Linger
+  podman ps                      # as app
+  podman volume inspect cachedata --format '{{.Mountpoint}}'
+  ```
+
+  ## Tempting but wrong
+
+  - **`podman run --restart=always`.** Nothing starts the container after a reboot.
+  - **No linger.** The user service starts when `app` logs in, and not before.
+  - **A container run by root.** It is not `app`'s, and runs with root's privileges.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.containers
+    title: Configure container engines, create and manage containers
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Quadlet units, including for users
+    man_page: podman-systemd.unit(5)
+  - kind: man-page
+    title: Lingering users
+    man_page: loginctl(1)
+  - kind: man-page
+    title: Named volumes
+    man_page: podman-volume(1)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1536, vcpus: 1}
+checks:
+  - check_id: cache-container
+    kind: command
+    target: node2
+    description: app's container cache runs localhost/lal-cache:1 with the volume cachedata at /data.
+    parameters:
+      sudo: true
+      timeout_seconds: 90
+      script: |
+        cd /  # rootless podman returns to the caller's directory, which app cannot enter
+        uid=$(id -u app)
+        as_app() { runuser -u app -- env XDG_RUNTIME_DIR=/run/user/$uid podman "$@"; }
+        [[ -d /run/user/$uid ]] || fail "app has no running user session, so no rootless container can be running"
+        running() { state=$(as_app inspect --format '{{.State.Status}} {{.ImageName}}' cache 2>/dev/null); [[ "$state" == "running localhost/lal-cache:1" ]]; }
+        retry 40 running || fail "app's container cache is not running localhost/lal-cache:1 (${state:-no such container})"
+        mounts=$(as_app inspect --format '{{range .Mounts}}{{.Name}}:{{.Destination}} {{end}}' cache)
+        [[ " $mounts " == *" cachedata:/data "* ]] || fail "the volume cachedata is not mounted at /data (${mounts:-no mounts})"
+  - check_id: heartbeat-in-volume
+    kind: command
+    target: node2
+    description: The container writes its heartbeat into the volume.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        cd /  # rootless podman returns to the caller's directory, which app cannot enter
+        uid=$(id -u app)
+        volume=$(runuser -u app -- env XDG_RUNTIME_DIR=/run/user/$uid podman volume inspect cachedata --format '{{.Mountpoint}}' 2>/dev/null) \
+          || fail "app has no volume cachedata"
+        fresh() { [[ -n "$(find "$volume/heartbeat" -newermt '-30 seconds' 2>/dev/null)" ]]; }
+        retry 30 fresh || fail "nothing has written $volume/heartbeat in the last 30 seconds"
+  - check_id: lingering
+    kind: command
+    target: node2
+    description: app's user instance runs without a login.
+    parameters:
+      script: expect_eq "$(loginctl show-user app --property=Linger --value 2>/dev/null)" yes "linger for app"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-rootless-container.setup.yaml
+reference_solution: actions/exam-rootless-container.solution.yaml
+rejected_solutions:
+  - actions/exam-rootless-container.rejected-restart-policy.yaml
+  - actions/exam-rootless-container.rejected-rootful.yaml

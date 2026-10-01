@@ -1,0 +1,105 @@
+schema_version: 1
+scenario_id: exam-storage-performance
+version: 1
+status: verified
+collection: exam
+title: Find what is hammering a disk
+summary: Identify the process and disk behind constant writes, report them, and stop the service for good.
+estimated_minutes: 7
+task_type: troubleshoot
+difficulty: intermediate
+task: |
+  On `node2`, something writes to disk continuously.
+
+  1. Find the process responsible and the disk it writes to. Write its PID and the disk's
+     kernel name to `/root/io-report.txt` as `PID DISK`, for example `1234 vdb`.
+  2. Stop the service that runs it, and make sure it does not start again at boot.
+requirements:
+  - "`/root/io-report.txt` holds the writing process's PID and the disk it writes to."
+  - "The service that ran it is stopped and does not start at boot."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  iostat -dx 2 3                      # vdb is busy: high w/s and %util
+  sudo pidstat -d 2 3                 # kB_wr/s per process: lal-ingest
+  findmnt -T /proc/<PID>/cwd          # or lsof -p PID: it writes under /srv/bulk on vdb
+  echo "<PID> vdb" | sudo tee /root/io-report.txt
+  systemctl status <PID>              # lal-ingest.service
+  sudo systemctl disable --now lal-ingest.service
+  ```
+
+  `iostat` shows which device is busy, `pidstat -d` (or `iotop`) which process is writing,
+  and the process's open files show where. `systemctl status PID` names the unit. Killing
+  the process is not enough when the unit restarts it.
+
+  ## Check it yourself
+
+  ```bash
+  iostat -dx 2 2
+  systemctl is-active lal-ingest.service; systemctl is-enabled lal-ingest.service
+  ```
+
+  ## Tempting but wrong
+
+  - **`kill PID`.** The unit has `Restart=always`, so a new process takes over.
+  - **Reporting `vda`.** The root disk is busy too, but not with this writer.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.performance
+    title: Monitor storage performance
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Per-device statistics
+    man_page: iostat(1)
+  - kind: man-page
+    title: Per-process I/O
+    man_page: pidstat(1)
+  - kind: man-page
+    title: Live I/O by process
+    man_page: iotop(8)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - {name: bulk, size_mib: 1024, role: bulk data disk}
+checks:
+  - check_id: report
+    kind: command
+    target: node2
+    description: /root/io-report.txt holds the writing process's PID and the disk it writes to.
+    parameters:
+      sudo: true
+      script: |
+        [[ -f /root/io-report.txt ]] || fail "/root/io-report.txt does not exist"
+        read -r pid disk _ < /root/io-report.txt
+        expect_eq "${pid:-nothing} ${disk:-nothing}" "$(cat /usr/share/lal-exam/writer-pid) $(basename "$(readlink -f /dev/disk/by-id/virtio-lal-bulk)")" \
+          "the PID and disk in /root/io-report.txt"
+  - check_id: writer-stopped
+    kind: command
+    target: node2
+    description: lal-ingest.service is stopped and does not start at boot.
+    parameters:
+      timeout_seconds: 20
+      script: |
+        stopped() { ! systemctl is-active --quiet lal-ingest.service; }
+        retry 10 stopped || fail "lal-ingest.service is running"
+        case "$(systemctl is-enabled lal-ingest.service 2>/dev/null)" in
+          disabled|masked) ;;
+          *) fail "lal-ingest.service still starts at boot" ;;
+        esac
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-storage-performance.setup.yaml
+reference_solution: actions/exam-storage-performance.solution.yaml
+rejected_solutions:
+  - actions/exam-storage-performance.rejected-kill.yaml
+  - actions/exam-storage-performance.rejected-wrong-disk.yaml

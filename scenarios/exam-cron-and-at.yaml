@@ -1,0 +1,117 @@
+schema_version: 1
+scenario_id: exam-cron-and-at
+version: 1
+status: verified
+collection: exam
+title: Schedule a recurring job and a one-time job
+summary: Add a weekday cron job to a user's crontab and a one-time at job for a fixed moment.
+estimated_minutes: 5
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`:
+
+  - In the crontab of the user `reports`, schedule `/usr/local/bin/lal-report` to run at
+    02:30 every Monday to Friday.
+  - As root, schedule a one-time job with `at` that runs `touch /var/tmp/cutover-done` at
+    23:45 on 15 January 2027.
+requirements:
+  - "`reports`'s own crontab runs `/usr/local/bin/lal-report` at 02:30, Monday to Friday, and at no other time."
+  - "root has one `at` job for 23:45 on 15 January 2027 that runs `touch /var/tmp/cutover-done`."
+  - "Both survive a reboot, and the services that run them start at boot."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo crontab -u reports -e     # add:  30 2 * * 1-5 /usr/local/bin/lal-report
+  echo 'touch /var/tmp/cutover-done' | sudo at 23:45 2027-01-15
+  sudo atq
+  ```
+
+  The five cron fields are minute, hour, day of month, month, and day of week; `1-5` (or
+  `mon-fri`) is Monday to Friday, and `0` or `7` is Sunday. `crontab -u USER` edits that
+  user's own crontab, which runs as them. `at` reads the commands from standard input and
+  accepts many time formats; `atq` lists pending jobs and `at -c N` shows one.
+
+  ## Check it yourself
+
+  ```bash
+  sudo crontab -l -u reports
+  sudo atq && sudo at -c "$(sudo atq | awk '{print $1; exit}')" | tail -n 2
+  ```
+
+  ## Tempting but wrong
+
+  - **The line in `/etc/crontab` with a `reports` user field.** It runs as `reports`, but
+    it is the system crontab, not `reports`'s own.
+  - **A cron entry `45 23 15 1 *` instead of `at`.** It runs every 15 January, not once.
+  - **`0-5` for the weekdays.** `0` is Sunday.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.scheduled-jobs
+    title: Manage or schedule jobs for executing commands
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Crontab fields
+    man_page: crontab(5)
+  - kind: man-page
+    title: Edit a user's crontab
+    man_page: crontab(1)
+  - kind: man-page
+    title: One-time jobs
+    man_page: at(1)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: weekday-report
+    kind: command
+    target: node2
+    description: reports's crontab runs lal-report at 02:30, Monday to Friday.
+    parameters:
+      sudo: true
+      script: |
+        table=$(crontab -l -u reports 2>/dev/null) || fail "reports has no crontab"
+        line=$(awk '!/^[[:space:]]*(#|$)/ && $6 == "/usr/local/bin/lal-report"' <<<"$table")
+        [[ -n "$line" ]] || fail "reports's crontab does not run /usr/local/bin/lal-report"
+        expect_eq "$(wc -l <<<"$line" | tr -d ' ')" 1 "the number of lal-report entries"
+        read -r minute hour day month weekday _ <<<"$line"
+        expect_eq "$((10#$minute)) $((10#$hour)) $day $month" "30 2 * *" "the time fields of the lal-report entry"
+        case "${weekday,,}" in
+          1-5|mon-fri|1,2,3,4,5|mon,tue,wed,thu,fri) ;;
+          *) fail "the lal-report entry runs on weekdays '$weekday'; expected Monday to Friday" ;;
+        esac
+  - check_id: one-time-cutover
+    kind: command
+    target: node2
+    description: root has one at job for 23:45 on 15 January 2027 that touches /var/tmp/cutover-done.
+    parameters:
+      sudo: true
+      script: |
+        jobs=$(atq | awk '$2 " " $3 " " $4 " " $5 " " $6 == "Fri Jan 15 23:45:00 2027" && $8 == "root" {print $1}')
+        [[ -n "$jobs" ]] || fail "root has no at job for 23:45 on 15 January 2027 (atq: $(atq | tr '\n' ';'))"
+        for job in $jobs; do
+          at -c "$job" | grep -qE '^touch /var/tmp/cutover-done$' && exit 0
+        done
+        fail "the at job for 15 January 2027 does not run touch /var/tmp/cutover-done"
+  - check_id: schedulers-at-boot
+    kind: command
+    target: node2
+    description: crond and atd start at boot.
+    parameters:
+      script: |
+        for unit in crond atd; do
+          expect_eq "$(systemctl is-enabled "$unit.service")" enabled "$unit at boot"
+        done
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-cron-and-at.setup.yaml
+reference_solution: actions/exam-cron-and-at.solution.yaml
+rejected_solutions:
+  - actions/exam-cron-and-at.rejected-system-crontab.yaml
+  - actions/exam-cron-and-at.rejected-cron-instead-of-at.yaml

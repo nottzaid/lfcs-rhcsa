@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: lower-the-privileged-port-range
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf 'net.ipv4.ip_unprivileged_port_start = 443\n' > /etc/sysctl.d/90-ports.conf
+        sysctl -q -p /etc/sysctl.d/90-ports.conf
+        systemctl enable lal-api.service
+        systemctl restart lal-api.service

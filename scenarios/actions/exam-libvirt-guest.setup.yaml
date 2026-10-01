@@ -1,0 +1,57 @@
+schema_version: 1
+actions:
+  - action_id: build-a-tiny-guest-and-its-network
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        root=$(mktemp -d)
+        install -d "$root/dev" "$root/proc" "$root/sys"
+        for program in /usr/bin/bash /usr/bin/sleep /usr/bin/mount; do
+          cp --parents "$program" "$root"
+          ldd "$program" | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
+            while read -r library; do cp --parents --dereference "$library" "$root"; done
+        done
+        ln -s usr/bin "$root/bin"
+        printf '#!/usr/bin/bash\nmount -t devtmpfs devtmpfs /dev\nexec </dev/console >/dev/console 2>&1\necho "tiny: booted"\nwhile :; do sleep 3600; done\n' > "$root/init"
+        chmod 0755 "$root/init"
+        install -d /var/lib/libvirt/boot
+        cp "/boot/vmlinuz-$(uname -r)" /var/lib/libvirt/boot/tiny-vmlinuz
+        (cd "$root" && find . | cpio --quiet -o -H newc | gzip -1) > /var/lib/libvirt/boot/tiny-initrd.img
+        rm -rf "$root"
+        truncate -s 64M /var/lib/libvirt/images/tiny-data.img
+        restorecon -R /var/lib/libvirt
+        printf '%s\n' '<network>' '  <name>lab</name>' "  <bridge name='virbr-lab'/>" \
+          "  <ip address='10.78.0.1' netmask='255.255.255.0'/>" '</network>' > /tmp/lab.xml
+        virsh -q net-define /tmp/lab.xml >/dev/null
+        virsh -q net-autostart lab >/dev/null
+        virsh -q net-start lab >/dev/null
+        virtualization=qemu
+        [[ -c /dev/kvm ]] && virtualization=kvm
+        cat > /tmp/tiny.xml <<XML
+        <domain type='$virtualization'>
+          <name>tiny</name>
+          <memory unit='MiB'>192</memory>
+          <vcpu>1</vcpu>
+          <os>
+            <type arch='x86_64' machine='q35'>hvm</type>
+            <kernel>/var/lib/libvirt/boot/tiny-vmlinuz</kernel>
+            <initrd>/var/lib/libvirt/boot/tiny-initrd.img</initrd>
+            <cmdline>console=ttyS0 quiet</cmdline>
+          </os>
+          <features><acpi/></features>
+          <cpu mode='maximum'/>
+          <devices>
+            <interface type='network'><source network='lab'/><model type='virtio'/></interface>
+            <serial type='pty'/>
+            <console type='pty'/>
+          </devices>
+        </domain>
+        XML
+        virsh -q define /tmp/tiny.xml >/dev/null
+        rm -f /tmp/lab.xml /tmp/tiny.xml

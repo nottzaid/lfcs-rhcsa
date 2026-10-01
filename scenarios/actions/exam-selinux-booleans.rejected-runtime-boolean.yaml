@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: boolean-until-reboot
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        setsebool httpd_can_network_connect on
+        semanage fcontext -a -t httpd_sys_rw_content_t '/srv/uploads(/.*)?'
+        restorecon -R /srv/uploads

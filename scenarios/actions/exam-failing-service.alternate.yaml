@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: state-directory-and-exec-type
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i 's/^Type=forking$/Type=exec/; s/^WorkingDirectory=.*/StateDirectory=lal-collector\nWorkingDirectory=%S\/lal-collector/' \
+          /etc/systemd/system/lal-collector.service
+        systemctl daemon-reload
+        systemctl restart lal-collector.service

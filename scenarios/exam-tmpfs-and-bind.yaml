@@ -1,0 +1,112 @@
+schema_version: 1
+scenario_id: exam-tmpfs-and-bind
+version: 1
+status: verified
+collection: exam
+title: A sized tmpfs and a read-only bind mount
+summary: Mount a size-limited tmpfs and publish a directory read-only elsewhere, persistently.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, persistently:
+
+  - mount a tmpfs of 64 MiB at `/srv/scratch`, whose root has the mode `1777`;
+  - make `/srv/data/shared` also available at `/srv/export/shared` with a bind mount,
+    read-only there, while it stays writable at `/srv/data/shared`.
+requirements:
+  - "`/srv/scratch` is a 64 MiB tmpfs with mode 1777, also after a reboot."
+  - "`/srv/export/shared` shows `/srv/data/shared` and is read-only, also after a reboot."
+  - "`/srv/data/shared` itself stays writable."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo mkdir -p /srv/scratch /srv/export/shared
+  sudo tee -a /etc/fstab <<'FSTAB'
+  tmpfs /srv/scratch tmpfs size=64M,mode=1777 0 0
+  /srv/data/shared /srv/export/shared none bind,ro 0 0
+  FSTAB
+  sudo systemctl daemon-reload
+  sudo mount -a
+  ```
+
+  A tmpfs lives in memory and takes up to half the RAM unless `size=` limits it; `mode=`
+  sets its root directory's permissions at every mount. A bind mount shows the same
+  directory in a second place; `bind,ro` makes that second view read-only without
+  touching the original.
+
+  ## Check it yourself
+
+  ```bash
+  findmnt /srv/scratch /srv/export/shared
+  touch /srv/export/shared/x      # Read-only file system
+  ```
+
+  ## Tempting but wrong
+
+  - **A tmpfs without `size=`.** It may grow to half of node2's memory.
+  - **`bind` without `ro`.** Writes through `/srv/export/shared` change the original.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.virtual-filesystem
+    title: Manage and configure the virtual file system
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: tmpfs size and mode options
+    man_page: tmpfs(5)
+  - kind: man-page
+    title: Bind mounts and read-only binds
+    man_page: mount(8)
+  - kind: man-page
+    title: Persistent mounts
+    man_page: fstab(5)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: sized-tmpfs
+    kind: command
+    target: node2
+    description: /srv/scratch is a 64 MiB tmpfs with mode 1777.
+    parameters:
+      script: |
+        mount=$(findmnt -n -o FSTYPE,OPTIONS --mountpoint /srv/scratch) || fail "nothing is mounted at /srv/scratch"
+        read -r fstype options <<<"$mount"
+        expect_eq "$fstype" tmpfs "the filesystem at /srv/scratch"
+        expect_eq "$(option_value "$options" size)" 65536k "the size of the tmpfs"
+        expect_eq "$(stat -c %a /srv/scratch)" 1777 "the mode of /srv/scratch"
+  - check_id: read-only-view
+    kind: command
+    target: node2
+    description: /srv/export/shared shows /srv/data/shared and is read-only.
+    parameters:
+      sudo: true
+      script: |
+        mount=$(findmnt -n -o SOURCE,OPTIONS --mountpoint /srv/export/shared) || fail "nothing is mounted at /srv/export/shared"
+        read -r source options <<<"$mount"
+        [[ "$source" == *"[/srv/data/shared]" ]] || fail "/srv/export/shared shows $source, not /srv/data/shared"
+        has_option "$options" ro || fail "/srv/export/shared is mounted read-write"
+        [[ -f /srv/export/shared/catalog.txt ]] || fail "/srv/export/shared does not show the shared files"
+        ! touch /srv/export/shared/.probe 2>/dev/null || { rm -f /srv/export/shared/.probe; fail "root can write through /srv/export/shared"; }
+  - check_id: original-writable
+    kind: command
+    target: node2
+    description: /srv/data/shared itself stays writable.
+    parameters:
+      sudo: true
+      script: |
+        touch /srv/data/shared/.probe 2>/dev/null || fail "/srv/data/shared is no longer writable"
+        rm -f /srv/data/shared/.probe
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-tmpfs-and-bind.setup.yaml
+reference_solution: actions/exam-tmpfs-and-bind.solution.yaml
+rejected_solutions:
+  - actions/exam-tmpfs-and-bind.rejected-unsized.yaml
+  - actions/exam-tmpfs-and-bind.rejected-writable-bind.yaml

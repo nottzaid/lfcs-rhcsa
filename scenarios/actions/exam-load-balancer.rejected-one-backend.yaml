@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: proxy-to-the-first-backend-only
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '%s\n' 'server {' '    listen 80 default_server;' \
+          '    location / { proxy_pass http://10.69.0.10:8081; }' '}' > /etc/nginx/conf.d/pool.conf
+        setsebool -P httpd_can_network_connect on
+        systemctl enable nginx.service
+        systemctl restart nginx.service

@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: extend-the-group-and-grow-online
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        pvcreate -q /dev/disk/by-id/virtio-lal-extra
+        vgextend -q vgapp /dev/disk/by-id/virtio-lal-extra
+        lvextend -q -r -L 900M vgapp/lvdb >/dev/null

@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: persistent-quota
+    target: node2
+    arguments: [sudo, --, systemctl, set-property, lal-reindex.service, CPUQuota=20%]

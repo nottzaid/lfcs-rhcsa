@@ -1,0 +1,78 @@
+schema_version: 1
+actions:
+  - action_id: address-the-gateway
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname int0 con-name inside ipv4.method manual \
+          ipv4.addresses 10.70.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection add type ethernet ifname ext0 con-name outside ipv4.method manual \
+          ipv4.addresses 10.71.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection up inside >/dev/null
+        nmcli connection up outside >/dev/null
+  - action_id: run-the-inner-web-server
+    target: inner
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname in0 con-name inside ipv4.method manual \
+          ipv4.addresses 10.70.0.50/24 ipv4.routes '10.71.0.0/24 10.70.0.1' ipv6.method disabled >/dev/null
+        nmcli connection up inside >/dev/null
+        install -d -m 0755 /srv/inner
+        printf '<h1>inner page</h1>\n' > /srv/inner/index.html
+        printf '%s\n' '[Unit]' 'Description=Inner web server' '' '[Service]' \
+          'ExecStart=/usr/bin/python3 -m http.server 80 --directory /srv/inner' '' \
+          '[Install]' 'WantedBy=multi-user.target' > /etc/systemd/system/lal-inner.service
+        systemctl daemon-reload
+        systemctl enable --now lal-inner.service
+        firewall-cmd --quiet --permanent --add-service=http
+        firewall-cmd --quiet --reload
+  - action_id: run-the-outside-web-server
+    target: outer
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname out0 con-name outside ipv4.method manual \
+          ipv4.addresses 10.71.0.99/24 ipv6.method disabled >/dev/null
+        nmcli connection up outside >/dev/null
+        cat > /usr/local/bin/lal-echo <<'PY'
+        #!/usr/bin/python3
+        """Outside web server: answers with the address the request came from."""
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = f"client {self.client_address[0]}".encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+
+        HTTPServer(("0.0.0.0", 80), Handler).serve_forever()
+        PY
+        chmod 0755 /usr/local/bin/lal-echo
+        printf '%s\n' '[Unit]' 'Description=Outside web server' '' '[Service]' \
+          'ExecStart=/usr/local/bin/lal-echo' '' '[Install]' 'WantedBy=multi-user.target' \
+          > /etc/systemd/system/lal-echo.service
+        systemctl daemon-reload
+        systemctl enable --now lal-echo.service
+        firewall-cmd --quiet --permanent --add-service=http
+        firewall-cmd --quiet --reload

@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: key-request-certificate-and-trust
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        openssl req -new -newkey rsa:2048 -nodes -keyout /etc/pki/tls/private/api.key \
+          -subj /CN=api.lab.internal -out /tmp/api.csr 2>/dev/null
+        chmod 600 /etc/pki/tls/private/api.key
+        printf 'subjectAltName=DNS:api.lab.internal\nextendedKeyUsage=serverAuth\n' > /tmp/api.ext
+        openssl x509 -req -in /tmp/api.csr -CA /etc/pki/lab-ca/ca.crt -CAkey /etc/pki/lab-ca/ca.key -CAcreateserial -days 180 -extfile /tmp/api.ext -out /etc/pki/tls/certs/api.crt 2>/dev/null
+        cp /etc/pki/lab-ca/ca.crt /etc/pki/ca-trust/source/anchors/lab-ca.crt && update-ca-trust

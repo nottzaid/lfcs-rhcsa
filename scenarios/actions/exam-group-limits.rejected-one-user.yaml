@@ -1,0 +1,12 @@
+schema_version: 1
+actions:
+  - action_id: limits-for-ci-only
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '%s\n' 'ci - nofile 2048' 'ci - nproc 200' > /etc/security/limits.d/90-builders.conf

@@ -1,0 +1,32 @@
+schema_version: 1
+actions:
+  - action_id: build-the-image-into-apps-store
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /  # rootless podman returns to the caller's directory, which app cannot enter
+        useradd --create-home app
+        root=$(mktemp -d)
+        install -d "$root/usr/local/bin" "$root/data"
+        for program in /usr/bin/bash /usr/bin/sleep /usr/bin/date; do
+          cp --parents "$program" "$root"
+          ldd "$program" | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
+            while read -r library; do cp --parents --dereference "$library" "$root"; done
+        done
+        ln -s usr/bin "$root/bin"
+        printf '#!/usr/bin/bash\ntrap "exit 0" TERM INT\nwhile :; do date +%%s > /data/heartbeat; sleep 5 & wait $!; done\n' \
+          > "$root/usr/local/bin/lal-cache"
+        chmod 0755 "$root/usr/local/bin/lal-cache"
+        tar -C "$root" -cf /tmp/lal-cache-root.tar .
+        rm -rf "$root"
+        chown app /tmp/lal-cache-root.tar
+        runuser -u app -- bash -c 'cd ~ && podman import --quiet \
+          --change "CMD=[\"/usr/local/bin/lal-cache\"]" /tmp/lal-cache-root.tar localhost/lal-cache:1 >/dev/null' 2>/dev/null
+        rm -f /tmp/lal-cache-root.tar
+        runuser -u app -- podman image exists localhost/lal-cache:1 2>/dev/null

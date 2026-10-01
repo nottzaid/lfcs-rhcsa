@@ -21,6 +21,7 @@ from sysadmin_lab.application.lab_workspace import (
     ScenarioSessionSnapshot,
     WorkspacePaths,
 )
+from sysadmin_lab.domain.models import ScenarioCollection
 from sysadmin_lab.domain.progress import CheckAttempt, ScenarioProgress
 from sysadmin_lab.domain.rehearsals import Rehearsal, RehearsalScore, score_rehearsal
 from sysadmin_lab.web import create_app, render_markdown
@@ -61,12 +62,27 @@ def test_every_released_scenario_page_renders_its_brief(site: TestClient) -> Non
         assert "Launch scenario" in page.text
 
 
-def test_the_catalog_lists_every_scenario_on_the_practice_path(site: TestClient) -> None:
+def test_the_practice_path_lists_practice_scenarios_and_keeps_exam_tasks_off_it(
+    site: TestClient,
+) -> None:
     page = site.get("/scenarios/topic/lfcs")
     assert page.status_code == 200
     workspace = CatalogOnlyWorkspace(WorkspacePaths.under(ROOT))
     for scenario in workspace.scenarios():
-        assert scenario.title.replace("'", "&#39;") in page.text, scenario.scenario_id
+        listed = f'href="/scenarios/{scenario.scenario_id}"' in page.text
+        assert listed is (scenario.collection is ScenarioCollection.PRACTICE), scenario.scenario_id
+
+
+def test_an_exam_task_page_names_its_rehearsal_and_offers_no_hints(site: TestClient) -> None:
+    workspace = CatalogOnlyWorkspace(WorkspacePaths.under(ROOT))
+    exam_mocks = {mock.mock_id: mock for mock in workspace.mock_exams() if mock.kind == "exam"}
+    assert set(exam_mocks) == {"lfcs-exam-d", "lfcs-exam-e"}
+    for mock in exam_mocks.values():
+        for task in mock.tasks:
+            page = site.get(f"/scenarios/{task}").text
+            assert f'An exam task in <a href="/mocks/{mock.mock_id}">' in page, task
+            assert "no hints" in page, task
+        assert "Exam rehearsal" in site.get(f"/mocks/{mock.mock_id}").text
 
 
 def test_every_mock_exam_page_lists_its_tasks(site: TestClient) -> None:

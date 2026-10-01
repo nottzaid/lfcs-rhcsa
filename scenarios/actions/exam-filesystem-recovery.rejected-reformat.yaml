@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: reformat-and-recreate
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-vault
+        uuid=$(sed -n 's/^UUID=\([^ ]*\) \/srv\/vault .*/\1/p' /etc/fstab)
+        mkfs.ext4 -q -F -b 4096 -L VAULT -U "$uuid" "$disk"
+        mount /srv/vault
+        install -d /srv/vault/reports
+        printf 'report\n' > /srv/vault/reports/report.txt

@@ -1,0 +1,26 @@
+schema_version: 1
+actions:
+  - action_id: build-the-vault-then-damage-it
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-vault
+        mkfs.ext4 -q -b 4096 -L VAULT "$disk"
+        install -d /srv/vault
+        printf 'UUID=%s /srv/vault ext4 defaults,nofail 0 2\n' "$(blkid -s UUID -o value "$disk")" >> /etc/fstab
+        systemctl daemon-reload
+        mount /srv/vault
+        install -d /srv/vault/reports /srv/vault/archive
+        head -c 64K /dev/urandom | base64 > /srv/vault/reports/report.txt
+        printf 'archive index\n' > /srv/vault/archive/index.txt
+        install -d -m 0755 /usr/share/lal-exam
+        sha256sum < /srv/vault/reports/report.txt | cut -d' ' -f1 > /usr/share/lal-exam/report.sha256
+        umount /srv/vault
+        debugfs -w -R 'unlink /reports' "$disk" >/dev/null 2>&1
+        dd if=/dev/zero of="$disk" bs=1024 seek=1 count=1 conv=notrunc status=none
+        ! mount /srv/vault 2>/dev/null

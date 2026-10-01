@@ -7,6 +7,7 @@ from sysadmin_lab.catalog import (
     load_action_manifest,
     load_catalog,
     load_curriculum_manifest,
+    load_mock_catalog,
     validate_objective_references,
 )
 
@@ -69,3 +70,19 @@ def test_every_competency_has_a_focused_verified_scenario() -> None:
     }
     missing = sorted(curriculum.objective_ids - covered)
     assert not missing, f"competencies without a focused verified scenario: {missing}"
+
+
+def test_the_exam_rehearsals_together_cover_every_competency() -> None:
+    root = Path(__file__).parents[2]
+    curriculum = load_curriculum_manifest(root / "curricula" / "lfcs-2026-08.yaml")
+    scenarios = {scenario.scenario_id: scenario for scenario in load_catalog(root / "scenarios")}
+    covered = {
+        objective.objective_id
+        for mock in load_mock_catalog(root / "mock-exams")
+        if mock.kind == "exam"
+        for task in mock.tasks
+        for objective in scenarios[task].objectives
+        if objective.track.value == curriculum.track.value
+    }
+    missing = sorted(curriculum.objective_ids - covered)
+    assert not missing, f"competencies no exam rehearsal asks for: {missing}"

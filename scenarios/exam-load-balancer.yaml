@@ -1,0 +1,129 @@
+schema_version: 1
+scenario_id: exam-load-balancer
+version: 1
+status: verified
+collection: exam
+title: Balance requests across two backends
+summary: Put a reverse proxy in front of two backends, round robin, with one path pinned.
+estimated_minutes: 8
+task_type: configure
+difficulty: advanced
+task: |
+  On `node2`, set up a reverse proxy listening on port 80 that sends requests to the two
+  backends `http://10.69.0.10:8081` and `http://10.69.0.10:8082` (on node1) in turn, round
+  robin. Requests for `/status` must always go to the first backend, `8081`.
+
+  Use nginx or HAProxy, both installed. It must keep working after a reboot, with SELinux
+  enforcing.
+requirements:
+  - "Requests to `http://127.0.0.1/` on node2 are answered by both backends, in turn."
+  - "Requests to `http://127.0.0.1/status` are always answered by the 8081 backend."
+  - "It works after a reboot, with SELinux enforcing."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo tee /etc/nginx/conf.d/pool.conf <<'CONF'
+  upstream pool {
+      server 10.69.0.10:8081;
+      server 10.69.0.10:8082;
+  }
+  server {
+      listen 80 default_server;
+      listen [::]:80 default_server;
+      location / { proxy_pass http://pool; }
+      location /status { proxy_pass http://10.69.0.10:8081; }
+  }
+  CONF
+  sudo setsebool -P httpd_can_network_connect on
+  sudo nginx -t && sudo systemctl enable --now nginx
+  ```
+
+  An `upstream` block is a pool, and nginx sends requests to its servers round robin. A
+  more specific `location` overrides the pool for its path. nginx's own configuration
+  already has a server on port 80 for IPv4 and IPv6; `default_server` on both makes yours
+  answer requests that name no other server, including `localhost`, which resolves to `::1`
+  first. SELinux only lets the web
+  server connect to ports labeled for it; the boolean allows outgoing connections to any
+  port, and `semanage port -a -t http_port_t` per port is the narrower choice.
+
+  ## Check it yourself
+
+  ```bash
+  for i in 1 2 3 4; do curl -s http://127.0.0.1/; done
+  curl -s http://127.0.0.1/status
+  ```
+
+  ## Tempting but wrong
+
+  - **One backend in `proxy_pass`.** Every request reaches 8081.
+  - **`setenforce 0`.** The proxy works because SELinux is off.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.proxies-load-balancers
+    title: Implement reverse proxies and load balancers
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: nginx upstream pools
+    url: https://nginx.org/en/docs/http/ngx_http_upstream_module.html
+  - kind: upstream
+    title: nginx proxy_pass
+    url: https://nginx.org/en/docs/http/ngx_http_proxy_module.html
+  - kind: man-page
+    title: Let a confined web server connect out
+    man_page: setsebool(8)
+topology:
+  networks:
+    - {name: lan, cidr: 10.69.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+checks:
+  - check_id: round-robin
+    kind: command
+    target: node2
+    description: Requests to http://127.0.0.1/ are answered by both backends, in turn.
+    parameters:
+      timeout_seconds: 40
+      script: |
+        answers=
+        for _ in 1 2 3 4 5 6; do
+          answer=$(curl --silent --max-time 3 http://127.0.0.1/ 2>/dev/null)
+          answers+="${answer:-error} "
+        done
+        [[ "$answers" == *backend-8081* && "$answers" == *backend-8082* ]] \
+          || fail "six requests were answered by: $answers"
+  - check_id: status-pinned
+    kind: command
+    target: node2
+    description: Requests to /status always reach the 8081 backend.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        for _ in 1 2 3 4; do
+          answer=$(curl --silent --max-time 3 http://127.0.0.1/status 2>/dev/null)
+          expect_eq "${answer:-no answer}" "status of backend-8081" "the answer to /status"
+        done
+  - check_id: selinux-enforcing
+    kind: command
+    target: node2
+    description: SELinux is enforcing, and the web server domains are not permissive.
+    parameters:
+      script: |
+        expect_eq "$(getenforce)" Enforcing "SELinux"
+        for domain in httpd_t haproxy_t; do
+          ! permissive_domain "$domain" || fail "$domain is permissive"
+        done
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-load-balancer.setup.yaml
+reference_solution: actions/exam-load-balancer.solution.yaml
+alternate_solutions: [actions/exam-load-balancer.alternate.yaml]
+rejected_solutions:
+  - actions/exam-load-balancer.rejected-one-backend.yaml
+  - actions/exam-load-balancer.rejected-permissive.yaml

@@ -1,0 +1,38 @@
+schema_version: 1
+actions:
+  - action_id: install-the-api-and-its-failing-unit
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        useradd --system --shell /usr/sbin/nologin api
+        cat > /usr/local/bin/lal-api <<'PY'
+        #!/usr/bin/python3
+        """API server: answers on the port in $PORT."""
+        import os
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = b"api ok"
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+
+        HTTPServer(("0.0.0.0", int(os.environ.get("PORT", "443"))), Handler).serve_forever()
+        PY
+        chmod 0755 /usr/local/bin/lal-api
+        printf '%s\n' '[Unit]' 'Description=API server' '' '[Service]' 'User=api' 'Environment=PORT=443' \
+          'ExecStart=/usr/local/bin/lal-api' '' '[Install]' 'WantedBy=multi-user.target' > /etc/systemd/system/lal-api.service
+        systemctl daemon-reload
+        systemctl start lal-api.service || true
