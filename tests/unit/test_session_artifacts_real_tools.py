@@ -81,6 +81,11 @@ def test_a_session_gets_an_overlay_disks_and_a_seed_that_name_its_host(tmp_path:
     with pytest.raises(FileExistsError, match="session artifacts already exist"):
         builder.create(session_id=SESSION, role="node2", hostname="node2", base_image=base)
 
+    _other, again = builder.create(
+        session_id=SESSION, role="node1", hostname="node1", base_image=base
+    )
+    assert again.public_key.read_text().strip() == public_key  # one lab key, reused
+
 
 def test_a_session_is_refused_before_anything_is_written(tmp_path: Path) -> None:
     base = tmp_path / "base.qcow2"

@@ -302,3 +302,18 @@ def test_command_and_file_failures_name_the_unmet_requirement(tmp_path: Path) ->
         spec(CheckKind.COMMAND, {"arguments": ["false"]}), endpoint(tmp_path)
     )
     assert len(clipped.message) == 240 and clipped.message.endswith("…")
+
+
+def test_a_guest_that_answers_stat_with_garbage_gets_a_checker_error(tmp_path: Path) -> None:
+    """Learners have root: a replaced stat must not make a file check pass or crash."""
+    flooded = GuestCommandResult(0, "x" * 64, "", stdout_truncated=True)
+    garbage = GuestCommandResult(0, "regular file|root\n", "")
+    for answer, message in (
+        (flooded, "stat output exceeded limit"),
+        (garbage, "unexpected stat output"),
+    ):
+        observation = FileCheckProvider(Executor([answer])).evaluate(
+            spec(CheckKind.FILE, {"path": "/srv/ready", "kind": "file"}), endpoint(tmp_path)
+        )
+        assert not observation.passed and observation.error
+        assert observation.message == message

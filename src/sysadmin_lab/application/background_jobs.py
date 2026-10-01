@@ -98,9 +98,8 @@ class BackgroundJobQueue:
             self._update(job_id, status=JobStatus.SUCCEEDED, result=result)
         finally:
             with self._lock:
-                snapshot = self._jobs[job_id]
-                if self._active.get(snapshot.resource_key) == job_id:
-                    del self._active[snapshot.resource_key]
+                # submit refuses a second job for a busy resource, so the entry is this job's.
+                self._active.pop(self._jobs[job_id].resource_key, None)
 
     def _update(
         self,

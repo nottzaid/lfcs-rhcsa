@@ -21,6 +21,7 @@ from sysadmin_lab.application.doctor import (
     runtime_access_finding,
     session_finding,
     tool_findings,
+    unit_is_active,
 )
 
 QEMU_UID = 65534  # nobody: some other user, as QEMU is
@@ -166,3 +167,46 @@ def test_image_and_session_findings() -> None:
     assert (
         left.detail == "2 sessions were not destroyed: nfs-client-recovery (ready), lvm-x (failed)"
     )
+
+
+def test_edge_cases_of_users_acls_and_capabilities(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    usable = tmp_path / "kvm"
+    usable.touch()
+    assert kvm_finding(usable).severity is Severity.OK
+
+    no_kvm_label = CAPABILITIES.replace("type='kvm'>+952", "type='other'>+952")
+    assert qemu_identity(no_kvm_label) is None
+
+    closed = tmp_path / "closed"
+    closed.mkdir()
+    closed.chmod(0o700)
+    assert can_traverse(closed, 0, set())  # root needs no permission
+
+    monkeypatch.setattr("sysadmin_lab.application.doctor.shutil.which", lambda _name: None)
+    assert not can_traverse(closed, QEMU_UID, {QEMU_UID})  # mode bits alone, without getfacl
+    monkeypatch.undo()
+
+    unknown_uid = 3_999_999_999  # no such user: only the uid's own group counts
+    assert runtime_access_finding(tmp_path, unknown_uid, unknown_uid).subject == "QEMU access"
+
+    assert unit_is_active("lal-no-such-unit.service") is False
+    if Path("/run/systemd/system").is_dir():
+        assert unit_is_active("systemd-journald.service") is True
+
+
+def test_libvirt_that_hides_the_qemu_user_is_reported_as_a_warning(tmp_path: Path) -> None:
+    class Connection:
+        def networkLookupByName(self, _name: str) -> object:
+            return type("Network", (), {"isActive": lambda self: 1})()
+
+        def getCapabilities(self) -> str:
+            return "<capabilities><host/></capabilities>"
+
+        def close(self) -> None:
+            pass
+
+    findings = libvirt_findings(Connection, tmp_path)
+    assert findings[-1].severity is Severity.WARN
+    assert findings[-1].detail == "libvirt does not say which user runs QEMU"

@@ -277,3 +277,32 @@ def test_session_page_offers_hints_and_gates_the_debrief_until_solved(tmp_path: 
         solved = client.get(f"/sessions/{SESSION_ID}").text
         assert 'id="debrief" hidden' not in solved
         assert "Show the debrief" not in solved
+
+
+def test_a_second_check_while_one_runs_joins_the_running_job(tmp_path: Path) -> None:
+    import threading
+
+    from sysadmin_lab.application.background_jobs import BackgroundJobQueue
+
+    release = threading.Event()
+
+    class SlowWorkspace(FakeWorkspace):
+        def check(self, session_id: UUID) -> LearnerCheckReport:
+            release.wait(timeout=10)
+            return super().check(session_id)
+
+    jobs = BackgroundJobQueue()  # supplied by the caller, so the app must not close it
+    try:
+        with TestClient(create_app(workspace=SlowWorkspace(tmp_path), jobs=jobs)) as client:  # type: ignore[arg-type]
+            headers = {"X-Lab-Request": "browser"}
+            first = client.post(f"/api/sessions/{SESSION_ID}/check", headers=headers)
+            assert first.status_code == 202
+            second = client.post(f"/api/sessions/{SESSION_ID}/check", headers=headers)
+            assert second.status_code == 409
+            assert second.json()["job_id"] == first.json()["job_id"]
+            release.set()
+            assert wait_for_job(client, first.json()["job_id"])["status"] == "succeeded"
+        assert jobs.submit(kind="later", resource_key="other", operation=dict).status.value
+    finally:
+        release.set()
+        jobs.close()

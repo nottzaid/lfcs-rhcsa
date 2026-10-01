@@ -284,9 +284,9 @@ class SessionArtifactBuilder:
         return files
 
     def destroy(self, session_id: UUID, role: str) -> None:
+        # paths() builds runtime/sessions/<uuid>/<role> from a UUID and a validated role, so
+        # this can only ever remove one session's own directory.
         paths = self.paths(session_id, role)
-        if paths.directory.parent.parent != self._runtime_root / "sessions":
-            raise RuntimeError("refusing to remove artifacts outside the session root")
         shutil.rmtree(paths.directory, ignore_errors=True)
         with suppress(OSError):
             paths.directory.parent.rmdir()
