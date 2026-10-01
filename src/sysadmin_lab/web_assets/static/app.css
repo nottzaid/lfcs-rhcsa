@@ -151,7 +151,7 @@ tbody tr:hover { background: #e8f4fc; }
 .detail-header { align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 20px; }
 .detail-header > div { max-width: 800px; }
 .detail-grid { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(280px, .75fr); gap: 20px; }
-.task-card, .machine-card, .objective-section, .connection-card, .check-card {
+.task-card, .machine-card, .objective-section, .connection-card, .check-card, .rehearsal-card {
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -265,4 +265,15 @@ dd { margin: 0; text-align: right; }
   .detail-grid, .session-layout { grid-template-columns: 1fr; }
   .topic-count { display: none; }
   .host-state { display: none; }
+}
+
+.rehearsal-card { margin: 0 0 22px; padding: 20px; }
+.rehearsal-card .section-heading { padding-bottom: 0; align-items: center; }
+.rehearsal-card .section-heading p + p { margin-top: 8px; }
+.rehearsal-score { padding: 10px 12px; border-radius: 4px; margin: 8px 0 0; }
+.result-solved { color: var(--green-dark); font-weight: 700; }
+.result-partial { color: #8a5a00; }
+.result-untouched { color: var(--muted); }
+@media (max-width: 640px) {
+  .rehearsal-card .section-heading { flex-direction: column; align-items: stretch; gap: 14px; }
 }

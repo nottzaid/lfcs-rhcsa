@@ -13,6 +13,7 @@ from sysadmin_lab.adapters.libvirt_gateway import LibvirtGateway
 from sysadmin_lab.adapters.sqlite_machines import SqliteSessionMachineRepository
 from sysadmin_lab.adapters.sqlite_progress import SqliteCheckAttemptRepository
 from sysadmin_lab.adapters.sqlite_registry import SqliteResourceRegistry
+from sysadmin_lab.adapters.sqlite_rehearsals import SqliteMockRehearsalRepository
 from sysadmin_lab.adapters.sqlite_sessions import SqliteSessionRepository
 from sysadmin_lab.adapters.ssh_guest import BoundedSubprocessRunner, SshGuestExecutor
 from sysadmin_lab.application.actions import ActionRunner
@@ -37,6 +38,7 @@ class VmRuntime:
     checks: SessionCheckService
     scenarios: ScenarioSessionService
     progress: ProgressService
+    rehearsals: SqliteMockRehearsalRepository
     actions: ActionRunner
 
     def __init__(self, runtime_root: Path) -> None:
@@ -52,6 +54,7 @@ class VmRuntime:
         self.machines = self._stack.enter_context(SqliteSessionMachineRepository(state_path))
         attempts = self._stack.enter_context(SqliteCheckAttemptRepository(state_path))
         self.progress = ProgressService(attempts)
+        self.rehearsals = self._stack.enter_context(SqliteMockRehearsalRepository(state_path))
         self.sessions = SessionCoordinator(session_repository)
         executor = SshGuestExecutor(BoundedSubprocessRunner())
         self.actions = ActionRunner(executor)

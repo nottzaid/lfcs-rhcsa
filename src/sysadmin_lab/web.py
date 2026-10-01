@@ -309,10 +309,12 @@ def create_app(
         mock = mock_or_404(mock_id)
         scenarios = {scenario.scenario_id: scenario for scenario in active_workspace.scenarios()}
         tasks = tuple(scenarios[scenario_id] for scenario_id in mock.tasks)
+        rehearsal = active_workspace.rehearsal(mock_id)
+        results = {task.scenario_id: task for task in rehearsal.tasks} if rehearsal else {}
         return templates.TemplateResponse(
             request=request,
             name="mock.html",
-            context={"mock": mock, "tasks": tasks},
+            context={"mock": mock, "tasks": tasks, "rehearsal": rehearsal, "results": results},
         )
 
     @app.get("/scenarios/{scenario_id}", response_class=HTMLResponse)
@@ -380,6 +382,19 @@ def create_app(
             resource_key=f"scenario:{scenario_id}",
             operation=lambda: _started_result(active_workspace.start(scenario_id)),
         )
+
+    @app.post(
+        "/api/mocks/{mock_id}/rehearsal",
+        dependencies=[Depends(require_local_action)],
+    )
+    def start_rehearsal(mock_id: str) -> JSONResponse:
+        mock_or_404(mock_id)
+
+        def start() -> dict[str, Any]:
+            active_workspace.start_rehearsal(mock_id)
+            return {"redirect_url": f"/mocks/{mock_id}"}
+
+        return submit_job(kind="rehearsal", resource_key=f"mock:{mock_id}", operation=start)
 
     @app.post(
         "/api/sessions/{session_id}/check",

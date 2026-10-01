@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import shutil
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -20,7 +21,8 @@ from sysadmin_lab.application.lab_workspace import (
     ScenarioSessionSnapshot,
     WorkspacePaths,
 )
-from sysadmin_lab.domain.progress import ScenarioProgress
+from sysadmin_lab.domain.progress import CheckAttempt, ScenarioProgress
+from sysadmin_lab.domain.rehearsals import RehearsalScore, score_rehearsal
 from sysadmin_lab.web import create_app, render_markdown
 
 ROOT = Path(__file__).parents[2]
@@ -35,6 +37,10 @@ class CatalogOnlyWorkspace(LabWorkspace):
 
     def progress(self) -> tuple[ScenarioProgress, ...]:
         return ()
+
+    def rehearsal(self, mock_id: str) -> RehearsalScore | None:
+        self.mock_exam(mock_id)
+        return None
 
 
 @pytest.fixture(scope="module")
@@ -105,3 +111,56 @@ def test_draft_scenarios_and_mocks_are_not_published(tmp_path: Path) -> None:
         assert client.get("/scenarios/local-account-repair").status_code == 404
         assert client.get(f"/mocks/{mock['mock_id']}").status_code == 404
         assert "lfcs-mock-a" not in client.get("/scenarios/topic/lfcs").text
+
+
+class RehearsingWorkspace(CatalogOnlyWorkspace):
+    """A rehearsal of mock A in which one task was solved and one half done."""
+
+    def __init__(self, paths: WorkspacePaths) -> None:
+        super().__init__(paths)
+        self.started: list[str] = []
+
+    def rehearsal(self, mock_id: str) -> RehearsalScore | None:
+        mock = self.mock_exam(mock_id)
+        start = datetime(2026, 10, 1, 9, 0, tzinfo=UTC)
+        versions = {scenario.scenario_id: scenario.version for scenario in self.scenarios()}
+        attempts = [
+            CheckAttempt(uuid4(), uuid4(), task, versions[task], start, earned, 2, solved, False)
+            for task, earned, solved in ((mock.tasks[0], 2, True), (mock.tasks[1], 1, False))
+        ]
+        return score_rehearsal(mock.tasks, versions, attempts, start, 67)
+
+    def start_rehearsal(self, mock_id: str) -> datetime:
+        self.started.append(mock_id)
+        return datetime.now(UTC)
+
+
+def test_a_mock_page_shows_the_rehearsal_score_against_the_pass_mark() -> None:
+    workspace = RehearsingWorkspace(WorkspacePaths.under(ROOT))
+    with TestClient(create_app(ROOT, workspace=workspace)) as client:
+        page = client.get("/mocks/lfcs-mock-a").text
+        assert "<strong>8%</strong>: 1 of 20 tasks solved" in page
+        assert "The LFCS passes at 67%." in page
+        assert page.count('class="nowrap result-solved"') == 1
+        assert page.count('class="nowrap result-partial"') == 1
+        assert page.count('class="nowrap result-untouched"') == 18
+        assert "50% of requirements" in page
+        assert "Start over" in page
+
+        assert client.post("/api/mocks/lfcs-mock-a/rehearsal").status_code == 403
+        started = client.post(
+            "/api/mocks/lfcs-mock-a/rehearsal", headers={"X-Lab-Request": "browser"}
+        )
+        assert started.status_code == 202
+        job_id = started.json()["job_id"]
+        for _ in range(100):
+            job = client.get(f"/api/jobs/{job_id}").json()
+            if job["status"] != "queued" and job["status"] != "running":
+                break
+        assert job["result"] == {"redirect_url": "/mocks/lfcs-mock-a"}
+        assert workspace.started == ["lfcs-mock-a"]
+
+
+def test_a_mock_without_a_rehearsal_offers_to_start_one(site: TestClient) -> None:
+    page = site.get("/mocks/lfcs-mock-b").text
+    assert "Start rehearsal" in page and "Result</th>" not in page

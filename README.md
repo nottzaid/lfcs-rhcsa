@@ -32,7 +32,8 @@ checksum. The equivalent development command is `uv run labctl up`.
 
 - 38 focused scenarios, with at least one for every published LFCS competency, and 7
   capstones: single incidents whose causes cross several domains.
-- 3 balanced 20-task mock rehearsals following the published domain weights.
+- 3 balanced 20-task mock rehearsals following the published domain weights, scored against
+  the exam's 67% pass mark with partial credit per task, as the exam awards it.
 - A practice path that orders scenarios by LFCS domain and difficulty, capstones last.
 - Fresh disposable Rocky Linux 10.2 VMs, including multi-machine labs on their own isolated
   networks (routers, partners, clients, directory, file, and time servers), extra disks,

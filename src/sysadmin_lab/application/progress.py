@@ -18,6 +18,9 @@ class ProgressService:
     def record(self, attempt: CheckAttempt) -> None:
         self._repository.add(attempt)
 
+    def attempts(self) -> tuple[CheckAttempt, ...]:
+        return self._repository.list_all()
+
     def list_all(self) -> tuple[ScenarioProgress, ...]:
         grouped: dict[tuple[str, int], list[CheckAttempt]] = {}
         for attempt in self._repository.list_all():

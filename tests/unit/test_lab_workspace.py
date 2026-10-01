@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from types import SimpleNamespace
 from uuid import UUID
@@ -143,3 +144,55 @@ def test_the_catalog_is_reused_until_a_manifest_changes(tmp_path: Path) -> None:
     (scenarios / "local-account-repair.yaml").unlink()
     with pytest.raises(CatalogError, match="scenario does not exist: local-account-repair"):
         workspace.scenario("local-account-repair")
+
+
+def test_a_rehearsal_scores_checks_made_after_it_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from datetime import timedelta
+    from uuid import uuid4
+
+    from sysadmin_lab.adapters.sqlite_rehearsals import SqliteMockRehearsalRepository
+    from sysadmin_lab.domain.progress import CheckAttempt
+
+    root = Path(__file__).parents[2]
+    workspace = LabWorkspace(WorkspacePaths.under(root))
+    mock = workspace.mock_exam("lfcs-mock-a")
+    first, second = mock.tasks[:2]
+    versions = {scenario.scenario_id: scenario.version for scenario in workspace.scenarios()}
+    attempts: list[CheckAttempt] = []
+
+    with SqliteMockRehearsalRepository(tmp_path / "state.db") as rehearsals:
+        runtime = SimpleNamespace(
+            rehearsals=rehearsals, progress=SimpleNamespace(attempts=lambda: tuple(attempts))
+        )
+        monkeypatch.setattr(
+            "sysadmin_lab.application.lab_workspace.open_vm_runtime",
+            lambda _root: nullcontext(runtime),
+        )
+        assert workspace.rehearsal("lfcs-mock-a") is None
+        started = workspace.start_rehearsal("lfcs-mock-a")
+
+        def check(scenario_id: str, minutes: int, earned: int, solved: bool) -> CheckAttempt:
+            return CheckAttempt(
+                uuid4(),
+                uuid4(),
+                scenario_id,
+                versions[scenario_id],
+                started + timedelta(minutes=minutes),
+                earned,
+                2,
+                solved,
+                False,
+            )
+
+        attempts += [
+            check(first, -5, 2, True),
+            check(first, 3, 2, True),
+            check(second, 9, 1, False),
+        ]
+        score = workspace.rehearsal("lfcs-mock-a")
+        assert score is not None
+        assert (score.solved, score.percent, score.passing_percent) == (1, 8, 67)  # 1.5 of 20
+        with pytest.raises(LookupError, match="mock exam does not exist"):
+            workspace.start_rehearsal("lfcs-mock-z")
