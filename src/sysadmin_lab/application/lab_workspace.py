@@ -8,7 +8,7 @@ from sysadmin_lab.application.image_acquisition import HttpsDownloader, ImageAcq
 from sysadmin_lab.application.image_building import resolve_built_image
 from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
 from sysadmin_lab.catalog import (
-    find_scenario,
+    CatalogError,
     load_action_manifest,
     load_catalog,
     load_curriculum_manifest,
@@ -54,23 +54,44 @@ class ScenarioSessionSnapshot:
     machines: tuple[SessionMachine, ...]
 
 
+def _manifest_signature(directory: Path) -> tuple[tuple[str, int, int], ...]:
+    """What changes when any manifest in a directory is added, removed, or edited."""
+    stats = (
+        (path.name, path.stat()) for path in (*directory.glob("*.yaml"), *directory.glob("*.yml"))
+    )
+    return tuple(sorted((name, stat.st_mtime_ns, stat.st_size) for name, stat in stats))
+
+
 class LabWorkspace:
     """High-level learner operations shared by local user interfaces."""
 
     def __init__(self, paths: WorkspacePaths) -> None:
         self.paths = paths
+        # Validating every manifest takes about 0.4 s, so pages reuse the last result until
+        # a manifest file changes; authors still see their edits on the next request.
+        self._scenarios: tuple[object, tuple[ScenarioManifest, ...]] | None = None
+        self._mock_exams: tuple[object, tuple[MockExamManifest, ...]] | None = None
 
     def scenarios(self) -> tuple[ScenarioManifest, ...]:
-        return load_catalog(self.paths.scenario_directory)
+        signature = _manifest_signature(self.paths.scenario_directory)
+        if self._scenarios is None or self._scenarios[0] != signature:
+            self._scenarios = (signature, load_catalog(self.paths.scenario_directory))
+        return self._scenarios[1]
 
     def scenario(self, scenario_id: str) -> ScenarioManifest:
-        return find_scenario(self.paths.scenario_directory, scenario_id)
+        try:
+            return next(s for s in self.scenarios() if s.scenario_id == scenario_id)
+        except StopIteration as exc:
+            raise CatalogError(f"scenario does not exist: {scenario_id}") from exc
 
     def curriculum(self) -> CurriculumManifest:
         return load_curriculum_manifest(self.paths.curriculum)
 
     def mock_exams(self) -> tuple[MockExamManifest, ...]:
-        return load_mock_catalog(self.paths.mock_exam_directory)
+        signature = _manifest_signature(self.paths.mock_exam_directory)
+        if self._mock_exams is None or self._mock_exams[0] != signature:
+            self._mock_exams = (signature, load_mock_catalog(self.paths.mock_exam_directory))
+        return self._mock_exams[1]
 
     def mock_exam(self, mock_id: str) -> MockExamManifest:
         try:

@@ -7,7 +7,7 @@ from uuid import UUID
 import pytest
 
 from sysadmin_lab.application.lab_workspace import LabWorkspace, WorkspacePaths
-from sysadmin_lab.catalog import load_catalog, load_image_manifest
+from sysadmin_lab.catalog import CatalogError, load_catalog, load_image_manifest
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
@@ -117,3 +117,29 @@ def test_workspace_delegates_complete_learner_lifecycle(
     assert runtime.reset_args is not None
     assert runtime.reset_args[0] == SESSION_ID
     assert workspace.destroy(SESSION_ID).status is SessionStatus.DESTROYED
+
+
+def test_the_catalog_is_reused_until_a_manifest_changes(tmp_path: Path) -> None:
+    import dataclasses
+    import shutil
+
+    root = Path(__file__).parents[2]
+    scenarios = tmp_path / "scenarios"
+    shutil.copytree(root / "scenarios", scenarios)
+    workspace = LabWorkspace(
+        dataclasses.replace(WorkspacePaths.under(root), scenario_directory=scenarios)
+    )
+    first = workspace.scenarios()
+    assert workspace.scenarios() is first  # nothing changed: no second parse
+
+    manifest = scenarios / "local-account-repair.yaml"
+    manifest.write_text(
+        manifest.read_text().replace("\ntitle: ", "\ntitle: Edited ", 1), encoding="utf-8"
+    )
+    edited = workspace.scenario("local-account-repair")
+    assert edited.title.startswith("Edited ")
+    assert workspace.scenarios() is not first
+
+    (scenarios / "local-account-repair.yaml").unlink()
+    with pytest.raises(CatalogError, match="scenario does not exist: local-account-repair"):
+        workspace.scenario("local-account-repair")
