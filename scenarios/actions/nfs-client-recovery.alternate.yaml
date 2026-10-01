@@ -2,7 +2,7 @@ schema_version: 1
 actions:
   - action_id: automount-on-first-access-and-renumber
     target: node2
-    timeout_seconds: 90
+    timeout_seconds: 120
     arguments:
       - sudo
       - --
@@ -10,10 +10,10 @@ actions:
       - -c
       - |
         set -euo pipefail
-        sed -i 's#^192\.0\.2\.99:/srv/teamshare .*#{{host.node1.address}}:/srv/teamshare /mnt/teamshare nfs vers=4.2,_netdev,x-systemd.automount 0 0#' /etc/fstab
-        systemctl daemon-reload
-        systemctl restart remote-fs.target
         usermod -u 2200 appshare
         groupmod -g 2200 appshare
         find / -xdev -gid 2201 -exec chgrp -h appshare {} +
+        sed -i 's#^192\.0\.2\.99:/srv/teamshare .*#{{host.node1.address}}:/srv/teamshare /mnt/teamshare nfs vers=4.2,_netdev,x-systemd.automount 0 0#' /etc/fstab
+        systemctl daemon-reload
+        systemctl restart remote-fs.target
         runuser -u appshare -- ls /mnt/teamshare >/dev/null   # root is squashed; the owner may list it
