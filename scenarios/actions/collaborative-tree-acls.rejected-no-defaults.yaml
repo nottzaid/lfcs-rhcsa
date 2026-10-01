@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: share-existing-tree-with-named-entries
+  - action_id: fix-only-what-exists-today
     target: node2
     arguments:
       - sudo
@@ -14,11 +14,3 @@ actions:
         find /srv/project -type d -exec chmod 2770 {} +
         find /srv/project -type f -exec chmod 0660 {} +
         setfacl -R -m g:project:rwX,u:auditor:rX /srv/project
-  - action_id: make-future-content-inherit-the-policy
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - find /srv/project -type d -exec setfacl -d -m g:project:rwx,u:auditor:rx,o::- {} +

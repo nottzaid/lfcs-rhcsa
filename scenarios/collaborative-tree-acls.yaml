@@ -1,98 +1,186 @@
 schema_version: 1
 scenario_id: collaborative-tree-acls
-version: 1
+version: 2
 status: verified
-title: The project tree has contradictory access rules
-summary: Repair current and inherited ACLs for collaborators and a read-only auditor.
-estimated_minutes: 25
+title: The project tree keeps locking collaborators out
+summary: Collaborators cannot edit each other's work, and the auditor can edit what they should only read.
+estimated_minutes: 30
 task_type: fix
 difficulty: intermediate
-task: >-
-  Repair /srv/project on node2. The devone and devtwo users are members of project and
-  must be able to read and modify all existing project content. Auditor must be able to
-  traverse directories and read files but never modify them. Outsider and other users get
-  no access. All directories must be owned by group project and setgid, and their default
-  ACLs must make new content group-writable and auditor-readable/traversable. Apply the
-  policy throughout the existing tree without making regular files executable.
+task: |
+  The project team on **node2** shares `/srv/project`. `devone` and `devtwo`, both members
+  of the `project` group, get `Permission denied` when they edit each other's files, and
+  every new file one of them creates is locked away from the other. Meanwhile someone gave
+  the external `auditor` account write access to the approved plan.
+
+  Fix the access policy for the whole tree, including everything created in it from now
+  on.
+requirements:
+  - "`devone` and `devtwo` can read and modify everything under `/srv/project`, including files and directories either of them creates later."
+  - "`auditor` can enter every directory and read every file, now and in the future, but can modify nothing."
+  - "Accounts outside the policy, such as `outsider`, cannot enter `/srv/project` at all."
+  - "Every directory in the tree belongs to group `project` and has the setgid bit, so new content joins the group."
+  - "No regular file becomes executable."
+hints:
+  - "Look at the tree as the kernel sees it: `ls -l` for owners and modes, and `getfacl -R /srv/project` for ACL entries. Try the access yourself with `sudo -u devtwo touch /srv/project/specs/plan.txt`."
+  - "Existing files need access ACL entries. Files created *later* only get the policy if their directory carries **default** ACL entries (`setfacl -d`, or `d:` in the entry list). Read the EXAMPLES in `setfacl(1)`."
+  - "The capital `X` permission adds execute only to directories and files that are already executable, which keeps regular files non-executable. Watch the `mask` entry too: it limits every named user and group."
+debrief: |
+  ## What was wrong
+
+  The tree was `root:root` with mode `0755` directories and `0644` files, so the two
+  developers could read but not write. `devone`'s own notes were mode `0600`. The plan
+  carried a stray `user:auditor:rwx` entry. Nothing had default ACLs, so every new file
+  took its permissions from the creator's umask: readable by the group, never writable.
+
+  ## A clean fix
+
+  ```bash
+  sudo setfacl -R -b /srv/project
+  sudo chgrp -R project /srv/project
+  sudo find /srv/project -type d -exec chmod 2770 {} +
+  sudo find /srv/project -type f -exec chmod 0660 {} +
+  sudo setfacl -R -m g:project:rwX,u:auditor:rX /srv/project
+  sudo find /srv/project -type d -exec setfacl -d -m g:project:rwx,u:auditor:rx,o::- {} +
+  ```
+
+  The access entries fix what exists. The default entries on each directory are copied
+  into every file and directory created inside it, so a file `devone` creates is
+  immediately `group:project:rw-` and `user:auditor:r--`. When a directory has a default
+  ACL, the creator's umask is not applied; the default ACL decides instead. The setgid bit
+  makes new content belong to `project`, so the owning group grants access too.
+
+  `setfacl -b` strips the old extended entries first. That matters here: capital `X`
+  grants execute to a file that any entry already marks executable, so applying `u:auditor:rX`
+  over the stray `u:auditor:rwx` would keep `x` and make the plan executable. On a clean
+  file, `X` grants search on directories only.
+
+  ## Check it yourself
+
+  ```bash
+  sudo -u devone sh -c 'echo draft > /srv/project/specs/new.txt'
+  sudo -u devtwo sh -c 'echo edit >> /srv/project/specs/new.txt'
+  sudo -u auditor cat /srv/project/specs/new.txt
+  sudo -u auditor sh -c 'echo x >> /srv/project/specs/new.txt'   # must fail
+  getfacl /srv/project/specs/new.txt
+  ```
+
+  ## Tempting but wrong
+
+  - **`chmod -R 777`.** Everyone, including `outsider`, can now change the project.
+  - **Access ACLs without default ACLs.** Today's files look right, but tomorrow's are
+    created with the umask again and the lockouts return.
+  - **`chmod -R g+rwx`.** Every regular file becomes executable.
+  - **`chmod g+w` on a file that has an ACL.** Once a file carries extended entries, the
+    group bits that `chmod` and `ls -l` show are the ACL *mask*, not the owning group's
+    entry. `chmod g+w` raises the mask, but the `group::r--` entry still denies writing.
+    `getfacl` shows both.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: users-groups.acls
-    title: Manage access control lists
+    title: Configure and manage ACLs
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: setfacl manual
+    title: Set file access control lists
     man_page: setfacl(1)
   - kind: man-page
-    title: acl manual
+    title: POSIX access control lists, masks, and default ACLs
     man_page: acl(5)
+  - kind: man-page
+    title: Mode bits including setgid on directories
+    man_page: chmod(1)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
-  - check_id: existing-collaborator-access
+  - check_id: collaborators-edit-existing-work
     kind: command
     target: node2
-    description: Both collaborators can modify existing content.
+    description: devone and devtwo can modify every existing project file.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          runuser -u devone -- test -w /srv/project/specs/plan.txt &&
-          runuser -u devtwo -- test -w /srv/project/specs/plan.txt
-  - check_id: existing-auditor-access
+      script: |
+        while IFS= read -r -d '' file; do
+          for user in devone devtwo; do
+            runuser -u "$user" -- test -w "$file" || fail "$user cannot modify $file"
+          done
+        done < <(find /srv/project -type f -print0)
+  - check_id: auditor-reads-only
     kind: command
     target: node2
-    description: Auditor can read but cannot modify existing content.
+    description: auditor can enter every directory and read every file but modify none.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          runuser -u auditor -- test -r /srv/project/specs/plan.txt &&
-          ! runuser -u auditor -- test -w /srv/project/specs/plan.txt
-  - check_id: outsiders-denied
+      script: |
+        while IFS= read -r -d '' path; do
+          if [[ -d "$path" ]]; then
+            runuser -u auditor -- test -x "$path" || fail "auditor cannot enter $path"
+          else
+            runuser -u auditor -- test -r "$path" || fail "auditor cannot read $path"
+          fi
+          ! runuser -u auditor -- test -w "$path" || fail "auditor can modify $path"
+        done < <(find /srv/project -print0)
+  - check_id: outsiders-kept-out
     kind: command
     target: node2
-    description: An unrelated account cannot traverse the project tree.
+    description: An account outside the policy cannot enter /srv/project.
     parameters:
       sudo: true
-      arguments: [runuser, -u, outsider, --, test, '!', -x, /srv/project]
-  - check_id: directory-inheritance-policy
+      script: |
+        ! runuser -u outsider -- test -x /srv/project || fail "outsider can enter /srv/project"
+        ! runuser -u outsider -- ls /srv/project >/dev/null 2>&1 || fail "outsider can list /srv/project"
+  - check_id: directories-join-project
     kind: command
     target: node2
-    description: Every directory is setgid and carries the required default ACL.
+    description: Every directory belongs to group project and has the setgid bit.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          while IFS= read -r -d '' dir; do
-            test "$(stat -c %G "$dir")" = project || exit 1;
-            test $((8#$(stat -c %a "$dir") & 8#2000)) -ne 0 || exit 1;
-            getfacl -cp "$dir" | grep -qx 'default:group:project:rwx' || exit 1;
-            getfacl -cp "$dir" | grep -qx 'default:user:auditor:r-x' || exit 1;
-            getfacl -cp "$dir" | grep -qx 'default:other::---' || exit 1;
-          done < <(find /srv/project -type d -print0)
+      script: |
+        while IFS= read -r -d '' dir; do
+          expect_eq "$(stat -c %G "$dir")" project "the group of $dir"
+          [[ -g "$dir" ]] || fail "$dir does not have the setgid bit"
+        done < <(find /srv/project -type d -print0)
+  - check_id: new-work-is-shared
+    kind: command
+    target: node2
+    description: Content devone creates later is editable by devtwo, readable by auditor, and closed to outsider.
+    parameters:
+      sudo: true
+      script: |
+        probe=/srv/project/specs/.check-$$
+        trap 'rm -rf "$probe"' EXIT
+        runuser -u devone -- sh -c "umask 077; mkdir '$probe' && echo draft > '$probe/new.txt'" ||
+          fail "devone cannot create new work in /srv/project/specs"
+        runuser -u devtwo -- sh -c "echo edit >> '$probe/new.txt'" ||
+          fail "devtwo cannot modify a file devone just created"
+        runuser -u devtwo -- sh -c "echo more > '$probe/second.txt'" ||
+          fail "devtwo cannot create files in a directory devone just created"
+        runuser -u auditor -- cat "$probe/new.txt" >/dev/null ||
+          fail "auditor cannot read a file devone just created"
+        ! runuser -u auditor -- sh -c "echo x >> '$probe/new.txt'" 2>/dev/null ||
+          fail "auditor can modify a file devone just created"
+        expect_eq "$(stat -c %G "$probe/new.txt")" project "the group of a newly created file"
   - check_id: regular-files-not-executable
     kind: command
     target: node2
-    description: ACL repair did not grant execute permission to regular files.
+    description: No regular file in the tree is executable.
     parameters:
       sudo: true
-      arguments: [bash, -c, '! find /srv/project -type f -perm /111 -print -quit | grep -q .']
+      script: |
+        executable=$(find /srv/project -type f -perm /111 -printf '%p ' | head -c 200)
+        [[ -z "$executable" ]] || fail "executable regular files: $executable"
 persistence:
   reboot: false
 setup: actions/collaborative-tree-acls.setup.yaml
 reference_solution: actions/collaborative-tree-acls.solution.yaml
 alternate_solutions: [actions/collaborative-tree-acls.alternate.yaml]
+rejected_solutions:
+  - actions/collaborative-tree-acls.rejected-world-writable.yaml
+  - actions/collaborative-tree-acls.rejected-no-defaults.yaml

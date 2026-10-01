@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: repair-tree-by-object-type
+  - action_id: share-through-the-owning-group
     target: node2
     arguments:
       - sudo
@@ -8,17 +8,10 @@ actions:
       - bash
       - -c
       - |
-        find /srv/project -type d -exec chgrp project {} + -exec chmod 2770 {} +
-        find /srv/project -type d -exec setfacl -b -m g:project:rwx,u:auditor:r-x,m::rwx,o::--- {} +
-        find /srv/project -type f -exec chgrp project {} + -exec chmod 0660 {} +
-        find /srv/project -type f -exec setfacl -b -m g:project:rw-,u:auditor:r--,m::rw-,o::--- {} +
-  - action_id: install-default-directory-acls
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - >-
-        find /srv/project -type d -exec setfacl -m
-        d:u::rwx,d:g::rwx,d:g:project:rwx,d:u:auditor:r-x,d:m::rwx,d:o::--- {} +
+        set -euo pipefail
+        find /srv/project -exec setfacl --remove-all {} +
+        find /srv/project -exec chgrp project {} +
+        chmod -R u=rwX,g=rwX,o= /srv/project
+        find /srv/project -type d -exec chmod g+s {} +
+        find /srv/project -type d -exec setfacl -m u:auditor:r-x,d:u:auditor:r-x,d:g::rwx,d:o::--- {} +
+        find /srv/project -type f -exec setfacl -m u:auditor:r-- {} +

@@ -1,38 +1,44 @@
 schema_version: 1
 actions:
-  - action_id: create-operations-users
+  - action_id: create-operations-accounts
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        set -eu;
-        id opsanalyst >/dev/null 2>&1 || useradd --create-home --shell /bin/bash opsanalyst;
-        id opsviewer >/dev/null 2>&1 || useradd --create-home --shell /bin/bash opsviewer
+      - |
+        set -euo pipefail
+        useradd --create-home --shell /bin/bash opsanalyst
+        useradd --create-home --shell /bin/bash opsviewer
+        printf '%s\n' "alias rep='lal-report --format \"\$REPORT_FORMAT\"'" >> /home/opsanalyst/.bashrc
+        printf '%s\n' 'export REPORT_FORMAT=verbose' >> /home/opsanalyst/.bash_profile
+  - action_id: install-current-and-retired-tools
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -m 0755 /opt/lal/bin
+        printf '%s\n' '#!/bin/sh' \
+          'if [ "$1" = --version ]; then echo "lal-report 2.0"; exit 0; fi' \
+          'echo "report (format ${REPORT_FORMAT:-default})"' > /opt/lal/bin/lal-report
+        printf '%s\n' '#!/bin/sh' \
+          'if [ "$1" = --version ]; then echo "lal-report 1.4 (retired)"; exit 0; fi' \
+          'echo "lal-report 1.4 is retired; use /opt/lal/bin/lal-report" >&2; exit 1' \
+          > /usr/local/bin/lal-report
+        chmod 0755 /opt/lal/bin/lal-report /usr/local/bin/lal-report
   - action_id: install-drifting-shared-profile
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        install -d -m 0755 /opt/lal/bin &&
-        printf '%s\n' 'export EDITOR=/usr/bin/nano' 'export PATH=/opt/lal/bin:$PATH'
-        > /etc/profile.d/lal-operations.sh &&
-        chmod 0644 /etc/profile.d/lal-operations.sh &&
-        rm -f /etc/profile.d/zz-lal-operations.sh
-  - action_id: install-wrong-personal-profile
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - sh
-      - -c
-      - >-
-        printf '%s\n' 'if [ -f ~/.bashrc ]; then' '    . ~/.bashrc' 'fi' ''
-        'export REPORT_FORMAT=verbose' > /home/opsanalyst/.bash_profile &&
-        chown opsanalyst:opsanalyst /home/opsanalyst/.bash_profile &&
-        chmod 0644 /home/opsanalyst/.bash_profile
+      - |
+        printf '%s\n' 'export EDITOR=/usr/bin/nano' 'export PATH=$PATH:/opt/lal/bin' \
+          > /etc/profile.d/lal-operations.sh
+        chmod 0644 /etc/profile.d/lal-operations.sh

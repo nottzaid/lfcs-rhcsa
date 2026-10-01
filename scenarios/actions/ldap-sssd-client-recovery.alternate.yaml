@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: replace-sssd-domain-configuration
+  - action_id: override-the-server-in-a-drop-in
     target: node2
     timeout_seconds: 120
     arguments:
@@ -9,23 +9,13 @@ actions:
       - bash
       - -c
       - |
-        cat > /etc/sssd/sssd.conf <<'EOF'
-        [sssd]
-        config_file_version = 2
-        services = nss, pam
-        domains = lab
-
-        [domain/lab]
-        id_provider = ldap
-        auth_provider = ldap
-        ldap_uri = ldap://{{host.node1.address}}
-        ldap_search_base = dc=lab,dc=internal
-        ldap_id_use_start_tls = false
-        cache_credentials = true
-        enumerate = true
-        EOF
-        chmod 0600 /etc/sssd/sssd.conf
-        systemctl enable sssd.service
+        set -euo pipefail
+        chmod o-rwx /etc/sssd/sssd.conf
+        install -d -m 0711 /etc/sssd/conf.d
+        printf '[domain/lab]\nldap_uri = ldap://%s\n' '{{host.node1.address}}' > /etc/sssd/conf.d/50-directory.conf
+        chmod 0600 /etc/sssd/conf.d/50-directory.conf
+        systemctl enable --now sssd.service || true
         systemctl restart sssd.service
-        for attempt in $(seq 1 30); do getent group ldapops >/dev/null && exit 0; sleep 1; done
+        sss_cache -E
+        for attempt in $(seq 1 30); do id ldapdev >/dev/null 2>&1 && exit 0; sleep 1; done
         exit 1

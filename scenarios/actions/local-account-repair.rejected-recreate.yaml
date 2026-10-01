@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: delete-and-recreate-the-account
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        userdel --remove deploysvc
+        groupdel releaseops 2>/dev/null || true
+        groupadd --gid 4200 releaseops
+        useradd --uid 4201 --gid releaseops --home-dir /srv/deploysvc --create-home \
+          --shell /bin/bash deploysvc
+        chmod 0750 /srv/deploysvc
