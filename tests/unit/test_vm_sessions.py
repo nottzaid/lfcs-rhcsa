@@ -8,12 +8,14 @@ import pytest
 
 from sysadmin_lab.application.guest_execution import (
     GuestCommandResult,
+    GuestCommandTimeout,
     GuestEndpoint,
     GuestReadinessError,
 )
 from sysadmin_lab.application.session_artifacts import GuestAccess, SessionPaths
 from sysadmin_lab.application.sessions import SessionConflictError, SessionCoordinator
 from sysadmin_lab.application.vm_sessions import (
+    RELEASE_MANAGEMENT_LEASE,
     MachineUnreachableError,
     VmHostRequest,
     VmProvisioningError,
@@ -158,9 +160,14 @@ class FakeResources:
 @dataclass
 class FakeLeases:
     address: str = "192.0.2.10"
+    released: list[str] = field(default_factory=list)
 
     def wait(self, domain_name: str) -> str:
         return self.address
+
+    def wait_released(self, domain_name: str) -> bool:
+        self.released.append(domain_name)
+        return True
 
 
 @dataclass
@@ -194,19 +201,26 @@ class FakeExecutor:
         return self.result
 
 
-def dependencies(tmp_path: Path, *, cloud_exit: int = 0, artifact_failure: bool = False) -> tuple:
+def dependencies(
+    tmp_path: Path,
+    *,
+    cloud_exit: int = 0,
+    artifact_failure: bool = False,
+    leases: FakeLeases | None = None,
+) -> tuple:
     session_repository = MemorySessions()
     machines = MemoryMachines()
     artifacts = FakeArtifacts(tmp_path / "artifacts", fail=artifact_failure)
     resources = FakeResources()
     readiness = FakeReadiness()
     executor = FakeExecutor(GuestCommandResult(cloud_exit, "", "cloud error"))
+    leases = leases or FakeLeases()
     service = VmSessionService(
         sessions=SessionCoordinator(session_repository),
         machines=machines,  # type: ignore[arg-type]
         resources=resources,  # type: ignore[arg-type]
         artifacts=artifacts,  # type: ignore[arg-type]
-        leases=FakeLeases(),  # type: ignore[arg-type]
+        leases=leases,  # type: ignore[arg-type]
         guest_readiness=readiness,  # type: ignore[arg-type]
         guest_executor=executor,
     )
@@ -477,7 +491,7 @@ def test_only_a_ready_session_is_rebooted(tmp_path: Path) -> None:
 
     with pytest.raises(VmProvisioningError, match="only a ready scenario can be rebooted"):
         service.reboot(provisioned.state.session_id, ("node1",))
-    assert executor.calls[-1][1] == ("sudo", "cloud-init", "status", "--wait")  # no reboot sent
+    assert ("sudo", "--", "systemctl", "reboot") not in [call[1] for call in executor.calls]
 
 
 def test_a_reboot_touches_only_the_requested_hosts(tmp_path: Path) -> None:
@@ -575,3 +589,78 @@ def test_scenario_nics_are_plugged_in_only_once_cloud_init_has_configured_them(
         ("router", macs["router"], waited),
         ("client", macs["client"], waited),
     ]
+
+
+def test_a_destroyed_guest_hands_back_its_management_lease_first(tmp_path: Path) -> None:
+    removed_when_released: list[list[str]] = []
+
+    class WatchingLeases(FakeLeases):
+        def wait_released(self, domain_name: str) -> bool:
+            removed_when_released.append(list(resources.removed))
+            return True
+
+    service, _sessions, _machines, _artifacts, resources, _readiness, executor = dependencies(
+        tmp_path, leases=WatchingLeases()
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision_many(
+        scenario_id="peer-lab",
+        requests=(VmHostRequest("node1", base), VmHostRequest("node2", base)),
+    )
+
+    service.destroy(provisioned.state.session_id)
+
+    releases = [call for call in executor.calls if call[1][:3] == ("sudo", "sh", "-c")]
+    assert [call[1][3] for call in releases] == [RELEASE_MANAGEMENT_LEASE] * 2
+    assert "ipv4.dhcp-send-release=1" in RELEASE_MANAGEMENT_LEASE
+    names = [machine.identity.name for machine in provisioned.machines]
+    assert removed_when_released == [[], names[:1]]  # each released before its domain goes
+    assert resources.removed == names
+
+
+@pytest.mark.parametrize(
+    "unreachable",
+    [GuestCommandResult(255, "", "Connection refused"), GuestCommandTimeout("ssh timed out")],
+)
+def test_a_guest_that_cannot_release_its_lease_is_destroyed_anyway(
+    unreachable: GuestCommandResult | GuestCommandTimeout, tmp_path: Path
+) -> None:
+    leases = FakeLeases()
+    service, _sessions, _machines, _artifacts, resources, _readiness, executor = dependencies(
+        tmp_path, leases=leases
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    provisioned = service.provision(scenario_id="base-smoke", host_name="node1", base_image=base)
+
+    def broken(*_args: object, **_kwargs: object) -> GuestCommandResult:
+        if isinstance(unreachable, Exception):
+            raise unreachable
+        return unreachable
+
+    executor.run = broken  # type: ignore[method-assign]
+    assert service.destroy(provisioned.state.session_id).status is SessionStatus.DESTROYED
+    assert resources.removed == [provisioned.machine.identity.name]
+    assert leases.released == []  # nothing was released, so nothing to wait for
+
+
+def test_a_failed_provision_releases_the_leases_its_guests_took(tmp_path: Path) -> None:
+    service, _sessions, _machines, _artifacts, _resources, _readiness, executor = dependencies(
+        tmp_path, cloud_exit=1
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    released: list[str] = []
+    original = executor.run
+
+    def run(endpoint: GuestEndpoint, arguments: tuple[str, ...], **options: float) -> object:
+        if arguments[:3] == ("sudo", "sh", "-c"):
+            released.append(endpoint.host)
+            return GuestCommandResult(0, "", "")
+        return original(endpoint, arguments, **options)
+
+    executor.run = run  # type: ignore[method-assign]
+    with pytest.raises(VmProvisioningError, match="cloud-init failed"):
+        service.provision(scenario_id="base-smoke", host_name="node1", base_image=base)
+    assert released == ["192.0.2.10"]

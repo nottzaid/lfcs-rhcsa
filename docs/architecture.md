@@ -97,7 +97,8 @@ create automatic profiles for them. Both take effect late in first boot, so scen
 start with their virtual cable unplugged and the platform plugs them in once cloud-init has
 finished; otherwise NetworkManager would try DHCP on them, and boot would wait a minute for
 it. The management NIC stays on libvirt's default network for SSH and is never part of a
-task.
+task. Before a machine is destroyed it hands that network's DHCP lease back; libvirt would
+otherwise hold it for an hour, and frequent resets would exhaust the network's addresses.
 
 ## Test layers
 

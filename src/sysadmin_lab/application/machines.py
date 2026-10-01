@@ -62,3 +62,14 @@ class DomainLeaseReadiness:
         raise DomainLeaseTimeout(
             f"domain received no IPv4 DHCP lease after {attempts} attempts: {domain_name}"
         )
+
+    def wait_released(
+        self, domain_name: str, *, attempts: int = 10, interval_seconds: float = 0.3
+    ) -> bool:
+        """Whether the domain's DHCP leases are gone within the attempts."""
+        for attempt in range(attempts):
+            if not self._source.domain_ipv4_addresses(domain_name):
+                return True
+            if attempt + 1 < attempts:
+                self._sleep(interval_seconds)
+        return False

@@ -5,6 +5,7 @@ from pathlib import Path
 from uuid import UUID
 
 from sysadmin_lab.application.guest_execution import (
+    GuestCommandTimeout,
     GuestEndpoint,
     GuestExecutor,
     GuestReadiness,
@@ -30,6 +31,16 @@ from sysadmin_lab.domain.virtual_machines import (
     render_domain_xml,
     render_network_xml,
 )
+
+# NetworkManager sends a DHCP RELEASE when it takes a connection down, if configured to;
+# the setting lives under /run, so it disappears with the machine. Taking the NIC down
+# ends the SSH session that runs this, so it happens in the background.
+RELEASE_MANAGEMENT_LEASE = """set -eu
+mkdir -p /run/NetworkManager/conf.d
+printf '[connection]\\nipv4.dhcp-send-release=1\\n' > /run/NetworkManager/conf.d/90-lal-release.conf
+nmcli general reload conf
+nohup sh -c 'sleep 0.5; nmcli device down enp1s0' >/dev/null 2>&1 &
+"""
 
 
 class VmProvisioningError(RuntimeError):
@@ -208,6 +219,7 @@ class VmSessionService:
         try:
             for machine in self._machines.list(session_id):
                 if self._resources.is_registered(machine.identity):
+                    self._release_address(machine)
                     self._resources.remove(machine.identity)
                 self._artifacts.destroy(session_id, machine.host_name)
                 self._machines.remove(machine)
@@ -271,6 +283,7 @@ class VmSessionService:
         cleaned: set[str] = set()
         for machine in self._machines.list(state.session_id):
             if self._resources.is_registered(machine.identity):
+                self._release_address(machine)
                 self._resources.remove(machine.identity)
             self._artifacts.destroy(state.session_id, machine.host_name)
             cleaned.add(machine.host_name)
@@ -279,6 +292,26 @@ class VmSessionService:
             if role not in cleaned:
                 self._artifacts.destroy(state.session_id, role)
         self._remove_networks(state.session_id)
+
+    def _release_address(self, machine: SessionMachine) -> None:
+        """Have the guest hand back its management lease before it is destroyed.
+
+        libvirt's default network holds a lease for an hour after its machine is gone,
+        and every launch and reset makes machines with new MAC addresses, so an hour of
+        resets would exhaust its 253 addresses. A guest that cannot be reached keeps its
+        lease until it expires.
+        """
+        if machine.address is None:
+            return
+        endpoint = GuestEndpoint(machine.address, machine.username, machine.private_key)
+        try:
+            result = self._guest_executor.run(
+                endpoint, ("sudo", "sh", "-c", RELEASE_MANAGEMENT_LEASE), timeout_seconds=10
+            )
+        except GuestCommandTimeout:
+            return
+        if result.succeeded:
+            self._leases.wait_released(machine.identity.name)
 
     def owned_networks(self, session_id: UUID) -> tuple[ResourceIdentity, ...]:
         return self._resources.owned(session_id, ResourceKind.NETWORK)
