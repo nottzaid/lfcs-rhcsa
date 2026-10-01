@@ -1,60 +1,75 @@
 schema_version: 1
 actions:
-  - action_id: install-metrics-worker
+  - action_id: install-the-v1-collector-with-its-boot-hook
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        printf '%s\n' '#!/bin/bash' 'if [[ ${BATCH_SIZE:-0} != 50 ]]; then'
-        '  echo "invalid BATCH_SIZE" >&2' '  exit 64' 'fi'
-        'exec -a lal-metrics-worker sleep infinity' > /usr/local/sbin/lal-metrics-worker
-  - action_id: make-metrics-worker-executable
-    target: node2
-    arguments: [sudo, --, chmod, "0755", /usr/local/sbin/lal-metrics-worker]
-  - action_id: install-broken-environment
+      - |
+        set -euo pipefail
+        install -d -m 0755 /opt/legacy/bin
+        cat > /opt/legacy/bin/collect-v1 <<'EOF'
+        #!/usr/bin/python3
+        """Metrics collector v1. Polls in a tight loop; retired by the lal-metrics migration."""
+        samples = 0
+        while True:
+            samples += 1
+        EOF
+        chmod 0755 /opt/legacy/bin/collect-v1
+        cat > /usr/lib/systemd/system/lal-collector-v1.service <<'EOF'
+        [Unit]
+        Description=Metrics collector v1
+
+        [Service]
+        ExecStart=/opt/legacy/bin/collect-v1
+        Restart=always
+        RestartSec=1
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        printf '%s\n' '# Added during the 2023 outage: make sure the collector is up after boot.' \
+          '@reboot root /usr/bin/systemctl start lal-collector-v1.service' > /etc/cron.d/legacy-collector
+        chmod 0644 /etc/cron.d/legacy-collector
+        systemctl daemon-reload
+        systemctl enable --now lal-collector-v1.service
+  - action_id: install-the-new-metrics-service
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - "printf '%s\n' 'BATCH_SIZE=5' > /etc/sysconfig/lal-metrics"
-  - action_id: install-metrics-unit
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - sh
-      - -c
-      - >-
-        printf '%s\n' '[Unit]' 'Description=LAL metrics rollup worker'
-        'After=network.target' '' '[Service]' 'Type=simple'
-        'EnvironmentFile=/etc/sysconfig/lal-metrics'
-        'ExecStart=/usr/local/sbin/lal-metrics-worker' 'Restart=on-failure'
-        'RestartSec=1' 'Nice=10' '' '[Install]' 'WantedBy=multi-user.target'
-        > /etc/systemd/system/lal-metrics.service
-  - action_id: load-metrics-unit
-    target: node2
-    arguments: [sudo, --, systemctl, daemon-reload]
-  - action_id: enable-metrics-unit
-    target: node2
-    arguments: [sudo, --, systemctl, enable, lal-metrics.service]
-  - action_id: expose-failing-metrics-unit
-    target: node2
-    arguments: [sudo, --, systemctl, start, lal-metrics.service]
-    expected_exit_codes: [0, 1]
-  - action_id: launch-retired-workload
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - systemd-run
-      - --unit=lal-legacy-spin.service
-      - --property=Nice=19
-      - --
-      - /bin/bash
-      - -c
-      - exec -a lal-legacy-spin yes >/dev/null
+      - |
+        set -euo pipefail
+        cat > /usr/local/sbin/lal-metrics <<'EOF'
+        #!/bin/bash
+        if ! [[ "${BATCH_SIZE:-}" =~ ^[0-9]+$ ]] || (( BATCH_SIZE < 10 || BATCH_SIZE > 100 )); then
+          echo "lal-metrics: BATCH_SIZE must be between 10 and 100 (got ${BATCH_SIZE:-nothing})" >&2
+          exit 64
+        fi
+        echo "batch_size=$BATCH_SIZE" > /run/lal-metrics/last
+        echo "lal-metrics: rolling up metrics in batches of $BATCH_SIZE"
+        exec sleep infinity
+        EOF
+        chmod 0755 /usr/local/sbin/lal-metrics
+        printf 'BATCH_SIZE=5\n' > /etc/sysconfig/lal-metrics
+        cat > /etc/systemd/system/lal-metrics.service <<'EOF'
+        [Unit]
+        Description=Metrics rollup (replaces collector v1)
+
+        [Service]
+        EnvironmentFile=/etc/sysconfig/lal-metrics
+        ExecStart=/usr/local/sbin/lal-metrics
+        RuntimeDirectory=lal-metrics
+        Restart=on-failure
+        RestartSec=1
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable lal-metrics.service
+        systemctl start lal-metrics.service || true

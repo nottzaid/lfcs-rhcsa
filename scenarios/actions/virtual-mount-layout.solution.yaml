@@ -1,14 +1,19 @@
 schema_version: 1
 actions:
-  - action_id: configure-virtual-mounts
+  - action_id: declare-both-mounts-in-fstab
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        printf '%s\n' 'tmpfs /run/lal-cache tmpfs size=64M,mode=0750 0 0'
-        '/srv/releases/current /opt/app/current none bind 0 0' >> /etc/fstab;
-        mount /run/lal-cache;
+      - |
+        set -euo pipefail
+        printf '%s\n' \
+          'tmpfs /run/lal-cache tmpfs size=64M,mode=0750,uid=lalapp,gid=lalapp 0 0' \
+          '/srv/releases/current /opt/app/current none bind,ro 0 0' >> /etc/fstab
+        systemctl daemon-reload
+        mkdir -p /run/lal-cache
+        mount /run/lal-cache
         mount /opt/app/current
+        systemctl restart lal-webapp.service

@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: configure-time-and-file-server
+  - action_id: run-the-file-and-time-server
     target: node1
     arguments:
       - sudo
@@ -9,29 +9,32 @@ actions:
       - -c
       - |
         set -euo pipefail
-        install -d /srv/lal-data/projects
-        printf 'remote-data-ready\n' > /srv/lal-data/projects/status.txt
-        printf '/srv/lal-data/projects *(ro,sync,no_subtree_check)\n' > /etc/exports.d/lal-data.exports
-        setsebool -P nfs_export_all_ro 1
+        nmcli connection add type ethernet ifname data0 con-name data ipv4.method manual \
+          ipv4.addresses 10.80.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection up data >/dev/null
+        groupadd --gid 3000 analyst
+        useradd --uid 3000 --gid 3000 --create-home analyst
+        install -d -m 0755 /srv/lal-data/projects
+        install -d -o analyst -g analyst -m 0775 /srv/lal-data/projects/alpha /srv/lal-data/projects/alpha/output
+        python3 -c 'import random; random.seed(7); print("\n".join(str(random.randint(1, 999)) for _ in range(1000)))' \
+          > /srv/lal-data/projects/alpha/input.csv
+        chown analyst:analyst /srv/lal-data/projects/alpha/input.csv
+        echo '/srv/lal-data/projects 10.80.0.0/24(rw,sync,root_squash)' > /etc/exports.d/lal-data.exports
         systemctl enable --now nfs-server.service
-        exportfs -rav
-        firewall-cmd --quiet --permanent --add-service=nfs
-        firewall-cmd --quiet --permanent --add-service=rpc-bind
-        firewall-cmd --quiet --permanent --add-service=mountd
-        firewall-cmd --quiet --reload
-        cat > /etc/chrony.conf <<'EOF'
-        local stratum 8 distance 0.0
-        allow {{host.node2.address}}/32
+        exportfs -ra
+        cat > /etc/chrony.conf <<'CONF'
+        # Site time server for the data network.
+        local stratum 8
+        allow 10.80.0.0/24
         driftfile /var/lib/chrony/drift
         makestep 1.0 3
         rtcsync
-        logdir /var/log/chrony
-        EOF
+        CONF
         systemctl enable chronyd.service
         systemctl restart chronyd.service
-        firewall-cmd --quiet --permanent --add-service=ntp
+        firewall-cmd --quiet --permanent --add-service=nfs --add-service=ntp
         firewall-cmd --quiet --reload
-  - action_id: install-broken-remote-data-client
+  - action_id: rebuild-node2-from-last-years-configuration
     target: node2
     arguments:
       - sudo
@@ -40,20 +43,70 @@ actions:
       - -c
       - |
         set -euo pipefail
-        swapoff /dev/disk/by-id/virtio-lal-remoteswap >/dev/null 2>&1 || true
-        wipefs -a /dev/disk/by-id/virtio-lal-remoteswap
-        umount /run/lal-data-cache >/dev/null 2>&1 || true
-        umount -l /data/projects >/dev/null 2>&1 || true
-        sed -i '\#/run/lal-data-cache#d;\#LAL_REMOTE_SWAP#d;\#virtio-lal-remoteswap#d' /etc/fstab
-        rm -rf /run/lal-data-cache /data/projects
-        install -d /run/lal-data-cache /data
-        cat > /etc/chrony.conf <<'EOF'
-        server 192.0.2.99 iburst
-        driftfile /var/lib/chrony/drift
-        makestep 1.0 3
-        rtcsync
-        logdir /var/log/chrony
-        EOF
-        systemctl restart chronyd.service || true
-        systemctl disable --now autofs.service >/dev/null 2>&1 || true
-        rm -f /etc/auto.master.d/lal-data.autofs /etc/auto.lal-data
+        nmcli connection add type ethernet ifname data0 con-name data ipv4.method manual \
+          ipv4.addresses 10.80.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up data >/dev/null
+        groupadd --gid 3000 analyst
+        useradd --uid 3000 --gid 3000 --create-home analyst
+        cat > /usr/local/bin/lal-crunch <<'PY'
+        #!/usr/bin/python3
+        """lal-crunch PROJECT: summarize a project's input into output/report.txt."""
+        import os
+        import sys
+        import time
+
+        project = sys.argv[1] if len(sys.argv) > 1 else "alpha"
+        base = f"/data/projects/{project}"
+        scratch = f"/run/lal-data-cache/{project}.scratch"
+
+
+        def stop(message):
+            sys.exit(f"lal-crunch: {message}")
+
+
+        try:
+            with open(f"{base}/input.csv") as source:
+                values = [int(line) for line in source if line.strip()]
+        except OSError as error:
+            stop(f"cannot read {base}/input.csv: {error.strerror}")
+        try:
+            with open(scratch, "wb") as cache:  # the real job stages 32 MiB here
+                cache.write(os.urandom(32 * 1024 * 1024))
+        except OSError as error:
+            stop(f"cannot stage data in /run/lal-data-cache: {error.strerror}")
+        finally:
+            if os.path.exists(scratch):
+                os.remove(scratch)
+        marker = f"{base}/output/.clock-check"
+        try:
+            with open(marker, "w"):
+                pass
+            skew = time.time() - os.stat(marker).st_mtime
+            os.remove(marker)
+        except OSError as error:
+            stop(f"cannot write to {base}/output: {error.strerror}")
+        if abs(skew) > 5:
+            direction = "ahead of" if skew > 0 else "behind"
+            stop(f"this clock is {abs(skew):.0f} s {direction} the file server; refusing to stamp results")
+        with open(f"{base}/output/report.txt", "w") as report:
+            report.write(f"{project}: {len(values)} rows, total {sum(values)}\n")
+        print(f"lal-crunch: {project}: {len(values)} rows, total {sum(values)}")
+        PY
+        chmod 0755 /usr/local/bin/lal-crunch
+        # The restored configuration, from before the file server and the swap disk were replaced.
+        cat > /etc/auto.master.d/data.autofs <<'MAP'
+        /data /etc/auto.data --timeout=300
+        MAP
+        cat > /etc/auto.data <<'MAP'
+        projects -rw,vers=4.2 files.old.invalid:/srv/lal-data/projects
+        MAP
+        cat >> /etc/fstab <<'FSTAB'
+        tmpfs /run/lal-data-cache tmpfs size=96,uid=3000,gid=3000,mode=0750 0 0
+        UUID=5d1b7c1e-0f3a-4c55-9a0e-2f6c1b7a9e44 none swap pri=50 0 0
+        FSTAB
+        systemctl daemon-reload
+        mkdir -p /run/lal-data-cache   # systemd creates it at boot; mount(8) does not
+        mount /run/lal-data-cache
+        sed -i 's/^pool .*/server ntp.old.invalid iburst/' /etc/chrony.conf
+        systemctl restart chronyd.service
+        date --set "$(date --date '+3 hours' '+%F %T')" >/dev/null

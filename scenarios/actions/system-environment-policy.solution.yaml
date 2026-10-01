@@ -1,25 +1,27 @@
 schema_version: 1
 actions:
-  - action_id: repair-shared-profile
+  - action_id: make-the-shared-profile-idempotent
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        printf '%s\n' 'export EDITOR=/usr/bin/vi' 'case ":$PATH:" in'
-        '    *:/opt/lal/bin:*) ;;' '    *) PATH="$PATH:/opt/lal/bin" ;;' 'esac'
-        'export PATH' > /etc/profile.d/lal-operations.sh
-  - action_id: repair-analyst-profile
+      - |
+        cat > /etc/profile.d/lal-operations.sh <<'EOF'
+        export EDITOR=/usr/bin/vi
+        case ":$PATH:" in
+            *:/opt/lal/bin:*) ;;
+            *) PATH=/opt/lal/bin:$PATH ;;
+        esac
+        export PATH
+        EOF
+  - action_id: set-the-analyst-preference
     target: node2
     arguments:
       - sudo
       - --
-      - sh
-      - -c
-      - >-
-        printf '%s\n' 'if [ -f ~/.bashrc ]; then' '    . ~/.bashrc' 'fi' ''
-        'export REPORT_FORMAT=compact' > /home/opsanalyst/.bash_profile &&
-        chown opsanalyst:opsanalyst /home/opsanalyst/.bash_profile &&
-        chmod 0644 /home/opsanalyst/.bash_profile
+      - sed
+      - -i
+      - s/^export REPORT_FORMAT=.*/export REPORT_FORMAT=compact/
+      - /home/opsanalyst/.bash_profile

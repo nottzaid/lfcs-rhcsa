@@ -1,17 +1,15 @@
 schema_version: 1
 actions:
-  - action_id: create-handoff-account
+  - action_id: prepare-the-account-and-a-hardened-scheduler
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        id handoff >/dev/null 2>&1 || useradd --create-home handoff;
-        install -d -o handoff -g handoff -m 0750 /var/lib/handoff;
-        rm -f /var/lib/handoff/ready;
-        for job in $(atq | awk '$NF == "handoff" {print $1}'); do atrm "$job"; done
-  - action_id: leave-atd-disabled
-    target: node2
-    arguments: [sudo, --, systemctl, disable, --now, atd.service]
+      - |
+        set -euo pipefail
+        useradd --create-home handoff
+        install -d -o handoff -g handoff -m 0755 /var/lib/handoff
+        printf 'handoff\n' >> /etc/at.deny
+        systemctl disable --now atd.service

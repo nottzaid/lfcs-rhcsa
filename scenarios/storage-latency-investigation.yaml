@@ -1,17 +1,76 @@
 schema_version: 1
 scenario_id: storage-latency-investigation
-version: 1
+version: 2
 status: verified
-title: A background disk exerciser dominates the data device
-summary: Identify a managed I/O workload and apply a persistent low scheduling weight.
+title: Something writes to the data disk around the clock
+summary: Find the service saturating a data disk and cap its write bandwidth persistently.
 estimated_minutes: 30
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  Diagnose the sustained writes on the filesystem mounted at /srv/io-test on node2. The
-  responsible managed workload must remain running and enabled, but give its systemd service
-  an I/O scheduling weight of 10 so production work wins under contention. Keep the workload
-  on the existing filesystem and do not change the global block scheduler.
+task: |
+  The storage dashboard for **node2** shows its data disk, mounted at `/srv/data`, writing
+  constantly, day and night. Database commits on that disk have become erratic.
+
+  The storage team's policy is clear: batch work may write at most **1 MB/s** to the data
+  disk, and the database is never throttled. Find the writer and apply the policy so that
+  it holds after restarts and reboots. Every service on node2 is still needed.
+requirements:
+  - "The service writing constantly to `/srv/data` keeps running and stays enabled."
+  - "Its writes to the data disk are held to at most 1 MB/s, measured while it runs, after restarts and reboots too."
+  - "`lal-db.service` is running and has no write limit."
+hints:
+  - "`sudo iotop -o` shows only processes doing I/O right now; `pidstat -d 2` gives a per-process table. Map the PID to its unit with `systemctl status PID`."
+  - "The kernel's cgroup I/O controller can limit a unit's bandwidth per device. Read `IOWriteBandwidthMax=` in `systemd.resource-control(5)`: it accepts a device node or a path on the filesystem."
+  - "`ionice` and `IOWeight=` set priorities, and priorities only matter to I/O schedulers that honour them. Check which scheduler the disk uses: `cat /sys/block/vdb/queue/scheduler`."
+debrief: |
+  ## What was wrong
+
+  `lal-archiver.service` stages archives by rewriting a file on `/srv/data` with direct I/O
+  in an endless loop, about 8 MB/s, all day. The database's own commits are small by
+  comparison: `iotop` shows the archiver's `dd` at the top every time.
+
+  ## A clean fix
+
+  ```bash
+  sudo iotop -o -b -n 3
+  sudo systemctl edit lal-archiver.service
+  #   [Service]
+  #   IOWriteBandwidthMax=/srv/data 1M
+  sudo systemctl restart lal-archiver.service
+  ```
+
+  `IOWriteBandwidthMax=` becomes an `io.max` limit on the unit's cgroup. The kernel delays
+  that cgroup's writes to the named device so they never exceed the rate, whatever the
+  scheduler. Given a path, systemd finds the block device behind it. `systemctl set-property
+  lal-archiver.service "IOWriteBandwidthMax=/dev/disk/by-id/virtio-lal-data 1M"` stores an
+  equivalent persistent setting and applies it immediately.
+
+  ## Why the priority knobs did not help
+
+  `IOWeight=` and `ionice` do not cap anything: they rank cgroups or processes against each
+  other, and only schedulers that implement weights honour them (BFQ, or the io.cost
+  controller when it is configured). This disk uses the `none` scheduler, as virtio and NVMe
+  disks usually do, so a weight changes nothing:
+
+  ```text
+  $ cat /sys/block/vdb/queue/scheduler
+  [none] mq-deadline kyber bfq
+  ```
+
+  ## Check it yourself
+
+  ```bash
+  systemctl show lal-archiver -p IOWriteBandwidthMax
+  cat "/sys/fs/cgroup$(systemctl show -p ControlGroup --value lal-archiver)/io.max"
+  sudo iotop -o -b -n 3
+  ```
+
+  ## Tempting but wrong
+
+  - **`IOWeight=10` or `ionice -c3`.** Both look right in `systemctl show` and `ionice`, and
+    the disk keeps writing at full speed.
+  - **Stopping the archiver.** The dashboard goes quiet and the archives stop.
+  - **`set-property --runtime`.** Correct until the next restart or reboot.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -21,52 +80,71 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: systemd I/O resource control
-    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html
   - kind: man-page
-    title: iostat manual
-    man_page: iostat(1)
-  - kind: man-page
-    title: systemd.resource-control manual
+    title: IOWriteBandwidthMax= and IOWeight=
     man_page: systemd.resource-control(5)
+  - kind: man-page
+    title: Per-process I/O in real time
+    man_page: iotop(8)
+  - kind: man-page
+    title: Per-process I/O statistics (-d)
+    man_page: pidstat(1)
+  - kind: upstream
+    title: The cgroup v2 io controller (io.max, io.weight)
+    url: https://docs.kernel.org/admin-guide/cgroup-v2.html#io
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
       disks:
-        - name: iotest
+        - name: data
           size_mib: 1024
-          role: storage performance workload disk
+          role: data disk
 checks:
-  - check_id: io-workload-running
+  - check_id: writer-still-running
     kind: service
     target: node2
-    description: The managed I/O workload remains running and enabled.
-    parameters: {name: lal-io-load.service, active: true, enabled: true}
-  - check_id: low-io-weight
+    description: The service writing to /srv/data keeps running and stays enabled.
+    parameters: {name: lal-archiver.service, active: true, enabled: true}
+  - check_id: write-rate-capped
     kind: command
     target: node2
-    description: systemd applies the required persistent I/O weight.
+    description: The archiver's writes to the data disk stay at or below 1 MB/s while it keeps working.
     parameters:
-      arguments: [systemctl, show, -p, IOWeight, --value, lal-io-load.service]
-      stdout_equals: "10"
-  - check_id: workload-on-designated-filesystem
+      sudo: true
+      timeout_seconds: 30
+      script: |
+        systemctl is-active --quiet lal-archiver.service || fail "lal-archiver.service is not running"
+        stats=/sys/fs/cgroup$(unit_value lal-archiver.service ControlGroup)/io.stat
+        [[ -r "$stats" ]] || fail "no I/O limit applies to lal-archiver.service"
+        device=$(lsblk -dno MAJ:MIN "$(readlink -f /dev/disk/by-id/virtio-lal-data)" | tr -d ' ')
+        written() {
+          awk -v d="$device" '$1 == d {for (i = 2; i <= NF; i++) if (sub(/^wbytes=/, "", $i)) print $i}' "$stats"
+        }
+        before=$(written); sleep 8; after=$(written)
+        rate=$(( (${after:-0} - ${before:-0}) / 8 ))
+        (( rate <= 1250000 )) || fail "the archiver wrote $((rate / 1000)) kB/s to the data disk over the last 8 seconds"
+        staged=$(stat -c %Y /srv/data/archive/.staging 2>/dev/null) || fail "the archiver has not staged anything"
+        (( $(date +%s) - staged <= 20 )) || fail "the archiver stopped writing"
+  - check_id: database-unthrottled
     kind: command
     target: node2
-    description: The workload still operates under /srv/io-test.
+    description: lal-db.service is running and has no write limit.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          mountpoint -q /srv/io-test &&
-          pid=$(systemctl show -p MainPID --value lal-io-load.service) &&
-          grep -Fq '/srv/io-test' "/proc/$pid/cmdline"
+      script: |
+        systemctl is-active --quiet lal-db.service || fail "lal-db.service is not running"
+        limit=$(unit_value lal-db.service IOWriteBandwidthMax)
+        [[ -z "$limit" ]] || fail "lal-db.service is limited: $limit"
+        limit=$(unit_value system.slice IOWriteBandwidthMax)
+        [[ -z "$limit" ]] || fail "system.slice, and with it every service, is limited: $limit"
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [node2]
 setup: actions/storage-latency-investigation.setup.yaml
 reference_solution: actions/storage-latency-investigation.solution.yaml
 alternate_solutions: [actions/storage-latency-investigation.alternate.yaml]
+rejected_solutions:
+  - actions/storage-latency-investigation.rejected-io-weight.yaml
+  - actions/storage-latency-investigation.rejected-runtime-limit.yaml

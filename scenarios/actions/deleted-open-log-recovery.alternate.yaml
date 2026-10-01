@@ -1,17 +1,18 @@
 schema_version: 1
 actions:
-  - action_id: stop-file-holder
-    target: node2
-    arguments: [sudo, --, systemctl, stop, lal-writer.service]
-  - action_id: repair-writer-mode
+  - action_id: free-the-blocks-then-have-the-daemon-reopen
     target: node2
     arguments:
       - sudo
       - --
-      - sed
-      - -i
-      - s/^KEEP_DELETED=.*/KEEP_DELETED=0/
-      - /etc/lal-writer.conf
-  - action_id: start-normal-writer
-    target: node2
-    arguments: [sudo, --, systemctl, start, lal-writer.service]
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        for pid in $(lsof -t -a +L1 /var/log/lal); do
+          for fd in /proc/"$pid"/fd/*; do
+            case "$(readlink "$fd")" in */ingest.log' (deleted)') : > "$fd" ;; esac
+          done
+        done
+        systemctl reload lal-ingest.service
+        sleep 2

@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: renice-and-throttle-until-the-next-restart
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl set-property --runtime lal-search-indexer.service CPUQuota=25%
+        renice -n 10 -p "$(systemctl show --property=MainPID --value lal-search-indexer.service)"

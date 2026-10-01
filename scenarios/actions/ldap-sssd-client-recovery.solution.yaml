@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: repair-ldap-provider-uri
+  - action_id: repair-permissions-and-server-address
     target: node2
     timeout_seconds: 120
     arguments:
@@ -8,10 +8,12 @@ actions:
       - --
       - bash
       - -c
-      - >-
-        sed -i 's#^ldap_uri *=.*#ldap_uri = ldap://{{host.node1.address}}#' /etc/sssd/sssd.conf;
-        chmod 0600 /etc/sssd/sssd.conf;
-        sss_cache -E;
-        systemctl restart sssd.service;
-        for attempt in $(seq 1 30); do getent passwd ldapdev >/dev/null && exit 0; sleep 1; done;
+      - |
+        set -euo pipefail
+        chmod 0600 /etc/sssd/sssd.conf
+        sed -i 's#^ldap_uri *=.*#ldap_uri = ldap://{{host.node1.address}}#' /etc/sssd/sssd.conf
+        sss_cache -E
+        systemctl enable sssd.service
+        systemctl restart sssd.service
+        for attempt in $(seq 1 30); do getent -s sss passwd ldapdev >/dev/null && exit 0; sleep 1; done
         exit 1

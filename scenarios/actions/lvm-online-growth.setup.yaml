@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: build-small-lvm-filesystem
+  - action_id: build-a-full-volume-group
     target: node2
     arguments:
       - sudo
@@ -10,15 +10,36 @@ actions:
       - |
         set -euo pipefail
         disk=/dev/disk/by-id/virtio-lal-data
-        umount /srv/logs >/dev/null 2>&1 || true
-        vgremove -ff -y vgdata >/dev/null 2>&1 || true
-        wipefs -a "$disk"
-        pvcreate -ff -y "$disk"
-        vgcreate vgdata "$disk"
-        lvcreate -L 256M -n lvlogs vgdata
-        mkfs.ext4 -q -L lal-logs /dev/vgdata/lvlogs
+        wipefs --all --quiet "$disk" /dev/disk/by-id/virtio-lal-spare
+        pvcreate --quiet "$disk"
+        vgcreate --quiet vgdata "$disk"
+        lvcreate --quiet --yes --extents 100%FREE --name lvlogs vgdata
+        mkfs.ext4 -q -L LAL_LOGS /dev/vgdata/lvlogs
         install -d /srv/logs
-        sed -i '\#/srv/logs#d' /etc/fstab
         printf '/dev/mapper/vgdata-lvlogs /srv/logs ext4 defaults 0 2\n' >> /etc/fstab
+        systemctl daemon-reload
         mount /srv/logs
-        printf 'preserve this record\n' > /srv/logs/retain.log
+  - action_id: fill-the-logs-to-96-percent
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /srv/logs
+        number=0
+        while (( $(df --output=pcent /srv/logs | tail -n 1 | tr -dc 0-9) < 96 )); do
+          number=$((number + 1))
+          head -c 8M < <(yes "2026-09-30T02:$(printf %02d $((number % 60))):00Z shipper batch $number accepted") \
+            > "shipper-$number.log"
+        done
+        install -d -m 0755 /usr/share/lal-logs
+        sha256sum *.log > /usr/share/lal-logs/logs.sha256
+        # The kernel reuses freed mount IDs, so a remount can get the same one back; the
+        # superblock's last mount time changes on every mount and never on an online resize.
+        tune2fs -l "$(findmnt -n -o SOURCE --mountpoint /srv/logs)" \
+          | sed -n 's/^Last mount time: *//p' > /usr/share/lal-logs/mounted-at
+        cat /proc/sys/kernel/random/boot_id > /usr/share/lal-logs/boot-id

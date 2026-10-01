@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: unmount-resize-and-remount
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        vgextend vgdata /dev/disk/by-id/virtio-lal-spare
+        umount /srv/logs
+        lvextend -L 1G vgdata/lvlogs
+        e2fsck -f -p /dev/vgdata/lvlogs
+        resize2fs /dev/vgdata/lvlogs
+        mount /srv/logs

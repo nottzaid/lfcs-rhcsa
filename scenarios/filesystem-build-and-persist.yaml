@@ -1,17 +1,64 @@
 schema_version: 1
 scenario_id: filesystem-build-and-persist
-version: 1
+version: 2
 status: verified
-title: A new archive disk has no filesystem or mount policy
-summary: Build an XFS filesystem and mount it persistently by stable identity.
-estimated_minutes: 30
+title: A new archive disk has no filesystem yet
+summary: Put a filesystem on a new disk, mount it for a team, and make it survive reboots.
+estimated_minutes: 25
 task_type: build
 difficulty: foundation
-task: >-
-  The unused disk identified as /dev/disk/by-id/virtio-lal-archive belongs at /srv/archive
-  on node2. Create an XFS filesystem labeled LAL_ARCHIVE, mount it there, and configure a
-  persistent mount using either its UUID or label rather than /dev/vdX naming. The mount
-  point must be owned by root:archivists with mode 2770. Node2 may be rebooted if you wish.
+task: |
+  A new disk was attached to **node2** for the records team's archive. It appears as
+  `/dev/disk/by-id/virtio-lal-archive` and is still blank. Put it into service at
+  `/srv/archive` as a shared, group-writable space for the `archivists` group, and make sure
+  it comes back by itself after every reboot, even if the kernel names the disks
+  differently next time.
+requirements:
+  - "The disk holds an XFS filesystem labeled `LAL_ARCHIVE`."
+  - "It is mounted at `/srv/archive`, and `/etc/fstab` mounts it there by UUID or label, never by a `/dev/vdX` name."
+  - "The root of the mounted filesystem is owned by `root:archivists` with mode `2770`: members of `archivists` can create files there and other users cannot enter."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "`lsblk -f` shows every disk, its filesystem, label, and UUID. `mkfs.xfs -L` sets a label while creating the filesystem."
+  - "`/etc/fstab` accepts `UUID=...` and `LABEL=...` in the first field. `blkid` prints both. Test a new entry with `sudo mount -a` or `sudo findmnt --verify` before you reboot."
+  - "Ownership and mode belong to whatever is mounted at the path. Set them after mounting, or you change the hidden directory underneath."
+debrief: |
+  ## A clean build
+
+  ```bash
+  sudo mkfs.xfs -L LAL_ARCHIVE /dev/disk/by-id/virtio-lal-archive
+  echo 'LABEL=LAL_ARCHIVE /srv/archive xfs defaults 0 0' | sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload
+  sudo mount /srv/archive
+  sudo chown root:archivists /srv/archive
+  sudo chmod 2770 /srv/archive
+  sudo findmnt --verify
+  ```
+
+  Kernel names such as `/dev/vdb` depend on the order devices are discovered, which can
+  change when disks are added or removed. A label or UUID is stored inside the filesystem
+  itself, so it identifies the same data on every boot. systemd turns `/etc/fstab` into mount
+  units, so `systemctl daemon-reload` after editing it keeps them in step; `findmnt --verify`
+  catches typos that would otherwise drop the next boot into emergency mode.
+
+  The setgid bit (`2` in `2770`) makes new files inherit the `archivists` group, so members
+  can work on each other's files.
+
+  ## Check it yourself
+
+  ```bash
+  lsblk -f /dev/disk/by-id/virtio-lal-archive
+  findmnt /srv/archive
+  sudo -u archive1 touch /srv/archive/test && ls -l /srv/archive
+  ```
+
+  ## Tempting but wrong
+
+  - **`chmod` and `chown` before mounting.** They change the empty directory that the new
+    filesystem then covers. The mounted filesystem's root stays `root:root 0755`.
+  - **`/dev/vdb` in `/etc/fstab`.** It works today and can mount the wrong disk, or none,
+    after the next hardware change.
+  - **Mounting by hand without an fstab entry.** Everything is right until the reboot.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,63 +69,74 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: mkfs.xfs manual
+    title: Create an XFS filesystem
     man_page: mkfs.xfs(8)
   - kind: man-page
-    title: fstab manual
+    title: The fstab file format and persistent device naming
     man_page: fstab(5)
+  - kind: man-page
+    title: Verify and inspect mounts
+    man_page: findmnt(8)
+  - kind: man-page
+    title: Filesystem labels and UUIDs
+    man_page: blkid(8)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
       disks:
         - name: archive
           size_mib: 1536
-          role: unused archive disk
+          role: new archive disk
 checks:
-  - check_id: archive-filesystem
+  - check_id: labeled-xfs
     kind: command
     target: node2
-    description: The archive disk contains the correctly labeled XFS filesystem.
+    description: The disk holds an XFS filesystem labeled LAL_ARCHIVE.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(blkid -s TYPE -o value /dev/disk/by-id/virtio-lal-archive)" = xfs &&
-          test "$(blkid -s LABEL -o value /dev/disk/by-id/virtio-lal-archive)" = LAL_ARCHIVE
-  - check_id: archive-mounted
+      script: |
+        disk=/dev/disk/by-id/virtio-lal-archive
+        expect_eq "$(blkid -s TYPE -o value "$disk")" xfs "the filesystem type on the archive disk"
+        expect_eq "$(blkid -s LABEL -o value "$disk")" LAL_ARCHIVE "the filesystem label"
+  - check_id: mounted-by-stable-identity
     kind: command
     target: node2
-    description: The filesystem is mounted at the required path.
+    description: It is mounted at /srv/archive, and fstab mounts it there by UUID or label.
     parameters:
-      arguments: [findmnt, --noheadings, --types, xfs, --mountpoint, /srv/archive]
-  - check_id: stable-fstab-identity
+      sudo: true
+      script: |
+        source=$(findmnt -n -o SOURCE --mountpoint /srv/archive) || fail "nothing is mounted at /srv/archive"
+        expect_eq "$(readlink -f "$source")" "$(readlink -f /dev/disk/by-id/virtio-lal-archive)" "the device mounted at /srv/archive"
+        entry=$(fstab_field /srv/archive SOURCE)
+        [[ -n "$entry" ]] || fail "/etc/fstab has no entry for /srv/archive"
+        case "$entry" in
+          UUID=*|LABEL=*) ;;
+          *) fail "/etc/fstab mounts /srv/archive by $entry; use UUID= or LABEL=" ;;
+        esac
+  - check_id: team-can-write
     kind: command
     target: node2
-    description: fstab uses the filesystem UUID or label, not a volatile kernel name.
+    description: The mounted root is root:archivists 2770, members can create files, others cannot enter.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          awk '$2=="/srv/archive" && $1 ~ /^(UUID=|LABEL=LAL_ARCHIVE$)/ {ok=1} END {exit !ok}' /etc/fstab
-  - check_id: archive-access-policy
-    kind: file
-    target: node2
-    description: The mounted root has the collaboration ownership and mode.
-    parameters:
-      path: /srv/archive
-      kind: directory
-      owner: root
-      group: archivists
-      mode: "2770"
+      sudo: true
+      script: |
+        mountpoint -q /srv/archive || fail "nothing is mounted at /srv/archive"
+        expect_eq "$(stat -c %U:%G /srv/archive)" root:archivists "the owner of the mounted filesystem"
+        expect_eq "$(stat -c %a /srv/archive)" 2770 "the mode of the mounted filesystem"
+        probe=/srv/archive/.check-$$
+        runuser -u archive1 -- touch "$probe" || fail "archive1, an archivists member, cannot create files"
+        expect_eq "$(stat -c %G "$probe")" archivists "the group of a new file"
+        rm -f "$probe"
+        ! runuser -u visitor -- ls /srv/archive >/dev/null 2>&1 || fail "visitor, not an archivist, can list /srv/archive"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/filesystem-build-and-persist.setup.yaml
 reference_solution: actions/filesystem-build-and-persist.solution.yaml
 alternate_solutions: [actions/filesystem-build-and-persist.alternate.yaml]
+rejected_solutions:
+  - actions/filesystem-build-and-persist.rejected-permissions-before-mount.yaml
+  - actions/filesystem-build-and-persist.rejected-kernel-name.yaml

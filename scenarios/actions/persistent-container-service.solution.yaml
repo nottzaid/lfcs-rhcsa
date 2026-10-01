@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: define-worker-quadlet
+  - action_id: define-the-worker-quadlet
     target: node2
     arguments:
       - sudo
@@ -8,22 +8,21 @@ actions:
       - bash
       - -c
       - |
-        cat > /etc/containers/systemd/lal-worker.container <<'EOF'
+        set -euo pipefail
+        cat > /etc/containers/systemd/lal-worker.container <<'QUADLET'
         [Unit]
-        Description=Persistent Linux Admin Lab worker
+        Description=Report worker
 
         [Container]
         Image=localhost/lal-worker:1
         ContainerName=lal-worker
         Environment=WORKER_SITE=amman
         Volume=/srv/worker-data:/data:Z
-        Exec=/bin/bash -c "printf '%%s\n' \"$WORKER_SITE\" > /data/ready; exec /bin/bash -c 'while :; do read -r -t 60 || true; done'"
-
-        [Service]
-        Restart=always
 
         [Install]
         WantedBy=multi-user.target
-        EOF
+        QUADLET
         systemctl daemon-reload
-        systemctl start lal-worker.service
+  - action_id: start-the-worker-service
+    target: node2
+    arguments: [sudo, --, systemctl, start, lal-worker.service]

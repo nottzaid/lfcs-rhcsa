@@ -1,17 +1,83 @@
 schema_version: 1
 scenario_id: virtual-mount-layout
-version: 1
+version: 2
 status: verified
-title: Runtime and release mounts disappear at boot
-summary: Configure persistent tmpfs and bind mounts in the virtual filesystem tree.
-estimated_minutes: 25
+title: The application breaks after every reboot
+summary: An application needs a private in-memory cache and a read-only view of its current release at boot.
+estimated_minutes: 30
 task_type: configure
 difficulty: intermediate
-task: >-
-  Configure node2 so /run/lal-cache is a 64 MiB tmpfs with mode 0750 and
-  /opt/app/current is a bind mount of /srv/releases/current. Mount both now and configure
-  them in /etc/fstab so they return after reboot. Preserve the release file already present
-  at /srv/releases/current/version.txt.
+task: |
+  `lal-webapp.service` on **node2** works only after someone logs in and mounts things by
+  hand, and fails after every reboot. According to its runbook it needs:
+
+  - `/run/lal-cache`: an in-memory scratch area of 64 MiB that belongs to the `lalapp`
+    account and that nobody outside the `lalapp` group can read;
+  - `/opt/app/current`: the release in `/srv/releases/current`, mounted there read-only so
+    the application cannot modify its own code.
+
+  node2 was just rebooted, so the application is down again. Make the layout permanent and
+  get the application running.
+requirements:
+  - "`/run/lal-cache` is a 64 MiB tmpfs owned by `lalapp:lalapp` with mode `0750`."
+  - "`/opt/app/current` shows the files of `/srv/releases/current` and is read-only there, while the release itself stays writable at its original path."
+  - "`lal-webapp.service` is running."
+  - "The layout, and the running application, come back by themselves after node2 reboots."
+hints:
+  - "`findmnt /run/lal-cache` and `findmnt /opt/app/current` show what is mounted now. `systemctl status lal-webapp` shows why the application gave up."
+  - "A tmpfs lives in memory, so it is recreated empty at every mount. Its size, owner, and mode have to be mount options: see the `size=`, `mode=`, `uid=`, and `gid=` options in `tmpfs(5)`."
+  - "A bind mount shows an existing directory at a second path. `bind,ro` makes that second view read-only. `/etc/fstab` or a systemd `.mount` unit makes either mount persistent."
+debrief: |
+  ## A clean layout
+
+  ```text
+  # /etc/fstab
+  tmpfs                 /run/lal-cache    tmpfs  size=64M,mode=0750,uid=lalapp,gid=lalapp  0 0
+  /srv/releases/current /opt/app/current  none   bind,ro                                   0 0
+  ```
+
+  ```bash
+  sudo systemctl daemon-reload
+  sudo mkdir -p /run/lal-cache
+  sudo mount /run/lal-cache
+  sudo mount /opt/app/current
+  sudo systemctl restart lal-webapp
+  ```
+
+  `/run` is itself a tmpfs, so `/run/lal-cache` does not exist after a reboot, and `mount`
+  refuses a missing mount point. At boot that is not a problem: systemd creates missing
+  mount points for the mounts it manages, and so does `systemctl start` on the mount unit.
+
+  A tmpfs has no disk behind it. Every mount creates a fresh, empty filesystem whose root
+  directory takes its owner and mode from the mount options, so a `chown` or `chmod` after
+  mounting is forgotten at the next boot. The unit declares
+  `RequiresMountsFor=/run/lal-cache /opt/app/current`, so at boot systemd mounts both before
+  it starts the application.
+
+  A bind mount is a second view of the same directory, so the application reads exactly the
+  files in `/srv/releases/current`. `ro` applies to that view only; the release can still be
+  updated through its real path.
+
+  systemd mount units are an equally valid way to do this, for example
+  `/etc/systemd/system/run-lal\x2dcache.mount`; `systemd-escape -p --suffix=mount /run/lal-cache`
+  prints the name the unit file must have.
+
+  ## Check it yourself
+
+  ```bash
+  findmnt -o TARGET,SOURCE,FSTYPE,OPTIONS /run/lal-cache /opt/app/current
+  stat -c '%U:%G %a' /run/lal-cache
+  sudo touch /opt/app/current/x    # Read-only file system
+  systemctl status lal-webapp
+  ```
+
+  ## Tempting but wrong
+
+  - **`chown` and `chmod` after mounting the tmpfs.** Right until the reboot, when the new
+    tmpfs comes up `root:root` with mode `1777` and the application cannot use it.
+  - **A plain bind mount.** The application can rewrite its own release.
+  - **Copying the release into `/opt/app/current`.** The copy goes stale with the next
+    release.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,71 +88,65 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: mount manual
+    title: tmpfs mount options
+    man_page: tmpfs(5)
+  - kind: man-page
+    title: Bind mounts and read-only views
     man_page: mount(8)
   - kind: man-page
-    title: fstab manual
+    title: The fstab file format
     man_page: fstab(5)
+  - kind: man-page
+    title: Mount units and RequiresMountsFor=
+    man_page: systemd.mount(5)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
-  - check_id: cache-tmpfs
+  - check_id: private-cache
     kind: command
     target: node2
-    description: The runtime cache is a size-limited tmpfs.
+    description: /run/lal-cache is a 64 MiB tmpfs owned by lalapp:lalapp with mode 0750.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(findmnt -n -o FSTYPE /run/lal-cache)" = tmpfs &&
-          findmnt -n -o OPTIONS /run/lal-cache | grep -qw size=65536k
-  - check_id: cache-mode
-    kind: file
-    target: node2
-    description: The runtime cache has the required access mode.
-    parameters:
-      path: /run/lal-cache
-      kind: directory
-      mode: "0750"
-  - check_id: current-release-bind
+      script: |
+        fstype=$(findmnt -n -o FSTYPE --mountpoint /run/lal-cache) || fail "nothing is mounted at /run/lal-cache"
+        expect_eq "$fstype" tmpfs "the filesystem at /run/lal-cache"
+        expect_eq "$(findmnt -n -o SIZE --bytes --mountpoint /run/lal-cache)" 67108864 "the tmpfs size in bytes"
+        expect_eq "$(stat -c %U:%G /run/lal-cache)" lalapp:lalapp "the owner of /run/lal-cache"
+        expect_eq "$(stat -c %a /run/lal-cache)" 750 "the mode of /run/lal-cache"
+  - check_id: read-only-release-view
     kind: command
     target: node2
-    description: The current release path is a bind mount of the release source.
+    description: /opt/app/current shows /srv/releases/current read-only, and the release stays writable at its own path.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          mountpoint -q /opt/app/current &&
-          test "$(stat -c %d:%i /opt/app/current/version.txt)" = "$(stat -c %d:%i /srv/releases/current/version.txt)"
-  - check_id: mount-layout-persistent
+      sudo: true
+      script: |
+        mountpoint -q /opt/app/current || fail "nothing is mounted at /opt/app/current"
+        expect_eq "$(stat -c %d:%i /opt/app/current/version.txt)" \
+          "$(stat -c %d:%i /srv/releases/current/version.txt)" "the file behind /opt/app/current/version.txt"
+        if touch /opt/app/current/.check 2>/dev/null; then
+          rm -f /opt/app/current/.check
+          fail "/opt/app/current is writable"
+        fi
+        touch /srv/releases/current/.check 2>/dev/null || fail "the release is no longer writable at /srv/releases/current"
+        rm -f /srv/releases/current/.check
+  - check_id: application-running
     kind: command
     target: node2
-    description: fstab records both virtual mounts.
+    description: lal-webapp.service is running.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          awk '$1=="tmpfs" && $2=="/run/lal-cache" && $3=="tmpfs" {cache=1}
-               $1=="/srv/releases/current" && $2=="/opt/app/current" && $4 ~ /(^|,)bind(,|$)/ {bind=1}
-               END {exit !(cache && bind)}' /etc/fstab
-  - check_id: release-content-preserved
-    kind: file
-    target: node2
-    description: The existing release remains visible through the bind mount.
-    parameters:
-      path: /opt/app/current/version.txt
-      kind: file
-      contains: release-2026.08
+      script: |
+        systemctl is-active --quiet lal-webapp.service ||
+          fail "lal-webapp.service is $(systemctl is-active lal-webapp.service): $(journalctl -u lal-webapp.service -n 1 -o cat --no-pager)"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/virtual-mount-layout.setup.yaml
 reference_solution: actions/virtual-mount-layout.solution.yaml
 alternate_solutions: [actions/virtual-mount-layout.alternate.yaml]
+rejected_solutions:
+  - actions/virtual-mount-layout.rejected-chown-after-mount.yaml
+  - actions/virtual-mount-layout.rejected-writable-bind.yaml

@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: grant-api-state-write-path
+  - action_id: declare-the-state-directory
     target: node2
     arguments:
       - sudo
@@ -8,10 +8,7 @@ actions:
       - bash
       - -c
       - |
-        install -d /etc/systemd/system/lal-api.service.d
-        cat > /etc/systemd/system/lal-api.service.d/state.conf <<'EOF'
-        [Service]
-        ReadWritePaths=/var/lib/lal-api
-        EOF
+        set -euo pipefail
+        printf '[Service]\nStateDirectory=lal-api\n' > /etc/systemd/system/lal-api.service.d/20-state.conf
         systemctl daemon-reload
         systemctl restart lal-api.service

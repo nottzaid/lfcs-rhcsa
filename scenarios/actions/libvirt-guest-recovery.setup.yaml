@@ -1,14 +1,103 @@
 schema_version: 1
 actions:
-  - action_id: prepare-nested-libvirt
+  - action_id: build-the-utility-appliance
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        # A minimal appliance: node2's kernel and an initramfs whose init reports its data disk.
+        root=$(mktemp -d)
+        install -d "$root/dev" "$root/proc" "$root/sys"
+        for program in /usr/bin/bash /usr/bin/sleep /usr/bin/mount /usr/bin/kmod; do
+          cp --parents "$program" "$root"
+          ldd "$program" | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
+            while read -r library; do cp --parents --dereference "$library" "$root"; done
+        done
+        ln -s usr/bin "$root/bin"
+        ln -s kmod "$root/usr/bin/insmod"
+        cp "/lib/modules/$(uname -r)/kernel/drivers/block/virtio_blk.ko.xz" "$root/virtio_blk.ko.xz"
+        cat > "$root/init" <<'INIT'
+        #!/usr/bin/bash
+        mount -t proc proc /proc
+        mount -t sysfs sysfs /sys
+        mount -t devtmpfs devtmpfs /dev
+        exec </dev/console >/dev/console 2>&1
+        insmod /virtio_blk.ko.xz
+        echo "lal-utility: appliance booted"
+        for _ in {1..20}; do [[ -b /dev/vda ]] && break; sleep 0.5; done
+        if [[ ! -b /dev/vda ]]; then
+          echo "lal-utility: no data disk attached"
+        elif read -r magic id < /dev/vda && [[ $magic == LAL-UTILITY-DATA ]]; then
+          echo "lal-utility: data disk $id online"
+        else
+          echo "lal-utility: /dev/vda holds no lal-utility data"
+        fi
+        while :; do sleep 3600; done
+        INIT
+        chmod 0755 "$root/init"
+        install -d /var/lib/libvirt/boot /var/lib/libvirt/images/archive /usr/share/lal-utility
+        cp "/boot/vmlinuz-$(uname -r)" /var/lib/libvirt/boot/lal-utility-vmlinuz
+        (cd "$root" && find . | cpio --quiet -o -H newc | gzip -1) > /var/lib/libvirt/boot/lal-utility-initrd.img
+        rm -rf "$root"
+        id=$(cat /proc/sys/kernel/random/uuid)
+        printf '%s\n' "$id" > /usr/share/lal-utility/data-id
+        image=/var/lib/libvirt/images/archive/lal-utility-data.img
+        printf 'LAL-UTILITY-DATA %s\n' "$id" > "$image"
+        truncate -s 64M "$image"
+        restorecon -R /var/lib/libvirt
+  - action_id: define-the-appliance-network-and-guest
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        systemctl enable --now virtqemud.socket;
-        virsh -c qemu:///system destroy lfcs-guest >/dev/null 2>&1 || true;
-        virsh -c qemu:///system undefine lfcs-guest --nvram >/dev/null 2>&1 || true;
-        rm -f /var/lib/libvirt/images/lfcs-guest.qcow2
+      - |
+        set -euo pipefail
+        cat > /tmp/appliances.xml <<'XML'
+        <network>
+          <name>appliances</name>
+          <bridge name='virbr-appl'/>
+          <ip address='10.77.0.1' netmask='255.255.255.0'/>
+        </network>
+        XML
+        virsh -q net-define /tmp/appliances.xml >/dev/null
+        virtualization=qemu
+        [[ -c /dev/kvm ]] && virtualization=kvm
+        cat > /tmp/lal-utility.xml <<XML
+        <domain type='$virtualization'>
+          <name>lal-utility</name>
+          <description>Utility appliance: reports its data disk on the serial console.</description>
+          <memory unit='MiB'>256</memory>
+          <vcpu>1</vcpu>
+          <os>
+            <type arch='x86_64' machine='q35'>hvm</type>
+            <kernel>/var/lib/libvirt/boot/lal-utility-vmlinuz</kernel>
+            <initrd>/var/lib/libvirt/boot/lal-utility-initrd.img</initrd>
+            <cmdline>console=ttyS0 quiet</cmdline>
+          </os>
+          <features><acpi/></features>
+          <cpu mode='maximum'/>
+          <on_poweroff>destroy</on_poweroff>
+          <devices>
+            <disk type='file' device='disk'>
+              <driver name='qemu' type='raw'/>
+              <source file='/var/lib/libvirt/images/lal-utility-data.img'/>
+              <target dev='vda' bus='virtio'/>
+            </disk>
+            <interface type='network'>
+              <source network='appliances'/>
+              <model type='virtio'/>
+            </interface>
+            <serial type='pty'/>
+            <console type='pty'/>
+          </devices>
+        </domain>
+        XML
+        virsh -q define /tmp/lal-utility.xml >/dev/null
+        rm -f /tmp/appliances.xml /tmp/lal-utility.xml

@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: build-active-backup-bond
+  - action_id: build-the-bridge-over-an-active-backup-bond
     target: node2
     arguments:
       - sudo
@@ -8,25 +8,16 @@ actions:
       - bash
       - -c
       - |
-        nmcli con add type bond ifname bond0 con-name lal-bond bond.options 'mode=active-backup,miimon=100' \
-          ipv4.method manual ipv4.addresses 192.0.2.20/24 ipv4.never-default yes ipv6.method disabled \
-          connection.autoconnect yes connection.autoconnect-ports 1
-        nmcli con add type dummy ifname bond-a con-name lal-bond-a controller bond0 port-type bond connection.autoconnect yes
-        nmcli con add type dummy ifname bond-b con-name lal-bond-b controller bond0 port-type bond connection.autoconnect yes
-        nmcli con up lal-bond
-        nmcli con up lal-bond-a
-        nmcli con up lal-bond-b
-  - action_id: build-software-bridge
+        set -euo pipefail
+        nmcli connection add type bridge ifname br0 con-name br0 bridge.stp no \
+          ipv4.method manual ipv4.addresses 10.90.0.20/24 ipv6.method disabled
+        nmcli connection add type bond ifname bond0 con-name bond0 \
+          bond.options mode=active-backup,miimon=100 controller br0 port-type bridge
+        nmcli connection add type ethernet ifname stor0 con-name bond0-stor0 controller bond0 port-type bond
+        nmcli connection add type ethernet ifname stor1 con-name bond0-stor1 controller bond0 port-type bond
+  - action_id: retire-the-single-link-profile
     target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - |
-        nmcli con add type bridge ifname br0 con-name lal-bridge \
-          ipv4.method manual ipv4.addresses 198.51.100.20/24 ipv4.never-default yes ipv6.method disabled \
-          connection.autoconnect yes connection.autoconnect-ports 1
-        nmcli con add type dummy ifname bridge-port con-name lal-bridge-port controller br0 port-type bridge connection.autoconnect yes
-        nmcli con up lal-bridge
-        nmcli con up lal-bridge-port
+    arguments: [sudo, --, nmcli, connection, delete, storage]
+  - action_id: bring-it-all-up
+    target: node2
+    arguments: [sudo, --, bash, -c, "nmcli connection up br0 && nmcli connection up bond0 && nmcli connection up bond0-stor0 && nmcli connection up bond0-stor1"]

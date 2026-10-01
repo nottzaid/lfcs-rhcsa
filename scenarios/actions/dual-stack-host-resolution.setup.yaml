@@ -1,14 +1,65 @@
 schema_version: 1
 actions:
-  - action_id: remove-management-profile
+  - action_id: run-the-database-host
+    target: db
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lab0 con-name lab ipv4.method manual \
+          ipv4.addresses 10.30.0.5/24 ipv6.method manual ipv6.addresses fd00:30::5/64 >/dev/null
+        nmcli connection up lab >/dev/null
+        hostnamectl set-hostname db.lab.internal
+        cat >> /etc/hosts <<'HOSTS'
+        127.0.1.1 db.lab.internal db
+        # Lab fleet
+        10.30.0.5    db.lab.internal db
+        fd00:30::5   db.lab.internal db
+        10.30.0.12   node2.lab.internal node2
+        fd00:30::12  node2.lab.internal node2
+        HOSTS
+        install -d /srv/db
+        printf 'db-service\n' > /srv/db/index.html
+        cat > /etc/systemd/system/db-api.service <<'UNIT'
+        [Unit]
+        Description=Database API (IPv4 and IPv6)
+        After=network-online.target
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -m http.server 5000 --bind :: --directory /srv/db
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now db-api.service
+        firewall-cmd --quiet --permanent --add-port=5000/tcp
+        firewall-cmd --quiet --reload
+  - action_id: clone-node2-from-db-in-a-hurry
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        nmcli connection delete lal-mgmt >/dev/null 2>&1 || true;
-        ip link delete mgmt0 >/dev/null 2>&1 || true;
-        sed -i '/[[:space:]]app\.internal\([[:space:]]\|$\)/d' /etc/hosts;
-        hostnamectl set-hostname stale-node.invalid
+      - |
+        set -euo pipefail
+        # A hurried clone: the IPv4 address was changed, the rest came along from db.
+        nmcli connection add type ethernet ifname lab0 con-name lab ipv4.method manual \
+          ipv4.addresses 10.30.0.12/24 ipv6.method manual ipv6.addresses fd00:30::5/64 >/dev/null
+        nmcli connection up lab >/dev/null || true
+        hostnamectl set-hostname db.lab.internal
+        sed -i '/^127\.0\.1\.1 /d' /etc/hosts
+        cat >> /etc/hosts <<'HOSTS'
+        127.0.1.1 db.lab.internal db
+        # Lab fleet
+        10.30.0.5    db.lab.internal db
+        fd00:30::5   db.lab.internal db
+        10.30.0.12   node2.lab.internal node2
+        fd00:30::12  node2.lab.internal node2
+        HOSTS

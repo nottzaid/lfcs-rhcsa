@@ -1,17 +1,18 @@
 schema_version: 1
 actions:
-  - action_id: format-and-label-archive
-    target: node2
-    arguments: [sudo, --, mkfs, -t, xfs, -L, LAL_ARCHIVE, /dev/disk/by-id/virtio-lal-archive]
-  - action_id: configure-label-mount
+  - action_id: create-then-mount-by-uuid
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        printf 'LABEL=LAL_ARCHIVE /srv/archive xfs defaults 0 0\n' >> /etc/fstab;
-        mount -a;
-        chgrp archivists /srv/archive;
-        chmod 2770 /srv/archive
+      - |
+        set -euo pipefail
+        mkfs -t xfs -f /dev/disk/by-id/virtio-lal-archive
+        xfs_admin -L LAL_ARCHIVE /dev/disk/by-id/virtio-lal-archive
+        uuid=$(blkid -s UUID -o value /dev/disk/by-id/virtio-lal-archive)
+        printf 'UUID=%s\t/srv/archive\txfs\tdefaults,noatime\t0 0\n' "$uuid" >> /etc/fstab
+        mount -a
+        chgrp archivists /srv/archive
+        chmod u=rwx,g=rwxs,o= /srv/archive

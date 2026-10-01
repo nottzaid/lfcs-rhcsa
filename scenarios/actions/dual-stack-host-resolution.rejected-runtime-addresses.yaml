@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: fix-the-address-in-the-kernel-only
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        ip -6 address del fd00:30::5/64 dev lab0
+        ip -6 address add fd00:30::12/64 dev lab0
+        hostnamectl set-hostname node2.lab.internal
+        sed -i '/^127\.0\.1\.1[[:space:]]\+db\.lab\.internal/d' /etc/hosts

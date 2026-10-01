@@ -1,31 +1,17 @@
 schema_version: 1
 actions:
-  - action_id: start-atd-persistently
-    target: node2
-    arguments: [sudo, --, systemctl, enable, --now, atd]
-  - action_id: write-job-file
+  - action_id: allow-list-and-queue-from-a-file
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        printf "%s\n" "/usr/bin/printf 'approved\\n' > /var/lib/handoff/ready" > /tmp/lal-handoff-job;
-        chown handoff:handoff /tmp/lal-handoff-job
-  - action_id: queue-job-file
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - runuser
-      - --user
-      - handoff
-      - --
-      - at
-      - -f
-      - /tmp/lal-handoff-job
-      - now
-      - +
-      - "60"
-      - minutes
+      - |
+        set -euo pipefail
+        printf 'handoff\n' > /etc/at.allow
+        systemctl enable atd.service
+        systemctl start atd.service
+        printf '#!/bin/sh\nprintf "approved\\n" > /var/lib/handoff/ready\n' > /home/handoff/handoff.sh
+        chown handoff:handoff /home/handoff/handoff.sh
+        runuser -l handoff -c 'at -f ~/handoff.sh 06:00'

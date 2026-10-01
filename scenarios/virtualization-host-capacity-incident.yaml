@@ -1,86 +1,175 @@
 schema_version: 1
 scenario_id: virtualization-host-capacity-incident
-version: 1
+version: 2
 status: verified
-title: Capacity pressure blocks a replacement utility guest
-summary: Constrain CPU and I/O workloads, tune the kernel, build a bridge, and recover libvirt capacity.
-estimated_minutes: 60
+title: The VM host is too busy to host its VM
+summary: A batch job starves a virtualization host, and its appliance sits on the wrong network; constrain one and move the other.
+estimated_minutes: 50
 task_type: troubleshoot
 difficulty: exam
-task: >-
-  node2 has managed CPU and storage exercisers named lal-capacity-cpu.service and
-  lal-capacity-io.service. Keep both running and enabled, but set the CPU worker to CPUQuota
-  30% and Nice 5, and set the I/O worker to IOWeight 10. Set vm.swappiness to 10 live and
-  persistently. Create an autoconnecting NetworkManager bridge br-lab with persistent dummy
-  port lab-port, address 192.0.2.50/24, and no default route. Then create and run an
-  autostarting software-emulated libvirt guest capacity-guest with one vCPU, 384 MiB RAM,
-  a 768 MiB qcow2 virtio disk at /var/lib/libvirt/images/capacity-guest.qcow2, and one NIC
-  attached to br-lab. Do not stop the exercisers or touch the lab management interface.
+task: |
+  **node2** is a small virtualization host on the lab network (`lab0`, 10.88.0.20/24). It
+  runs one guest, the `lal-utility` appliance, and since last night the appliance is
+  unusably slow. Two things changed:
+
+  - the search team scheduled their reindex batch job, `lal-reindex.service`, on node2;
+  - the appliance was created with libvirt's defaults, so it sits on libvirt's private
+    NAT network instead of the lab network, where its users are.
+
+  The host policy for VM hosts says: batch jobs keep running, but may use at most half of
+  one CPU; guests that serve the lab network attach to a host bridge called `br-lab`,
+  which carries the host's own lab address; guests start with their host.
+
+  **labpeer** (10.88.0.5) is another machine on the lab network. Fix node2.
+requirements:
+  - "`lal-reindex.service` keeps running and starts at boot, but uses at most half of one CPU."
+  - "node2 keeps 10.88.0.20/24 on the lab network, now on the bridge `br-lab`, which has `lab0` as its port; node2 still reaches labpeer."
+  - "`lal-utility` runs with its network interface on `br-lab`, and starts with node2."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "Find what is using the CPU, and which unit it belongs to: `top`, then `systemd-cgtop` or `systemctl status PID`. `systemctl set-property` changes a unit's resource controls."
+  - "Build the bridge with NetworkManager: the bridge profile gets the address, `lab0` becomes its port (`controller`, `port-type bridge`), and the old `lab` profile goes. `bridge link` shows a bridge's ports."
+  - "`virsh domiflist lal-utility` shows where the guest's NIC is attached. `virt-xml --edit --network bridge=br-lab` or `virsh edit` changes it; a running guest picks the change up at its next start."
+debrief: |
+  ## What was wrong
+
+  - **The batch job** ran one busy worker per CPU, outside any limit, so the guest got
+    almost no CPU time. `systemd-cgtop` points straight at `lal-reindex.service`.
+  - **The guest's NIC** was attached to libvirt's `default` network, a private NAT network
+    on the host that the lab network cannot reach.
+  - **The guest was not set to autostart.**
+
+  ## A clean fix
+
+  ```bash
+  sudo systemctl set-property lal-reindex.service CPUQuota=50%
+  sudo nmcli connection add type bridge ifname br-lab con-name br-lab bridge.stp no \
+    ipv4.method manual ipv4.addresses 10.88.0.20/24
+  sudo nmcli connection add type ethernet ifname lab0 con-name br-lab-port controller br-lab port-type bridge
+  sudo nmcli connection delete lab
+  sudo nmcli connection up br-lab
+  sudo virt-xml lal-utility --edit --network bridge=br-lab
+  sudo virsh destroy lal-utility && sudo virsh start lal-utility
+  sudo virsh autostart lal-utility
+  ```
+
+  - **`CPUQuota=50%`** gives the unit's cgroup 50 ms of CPU time every 100 ms, across all
+    its processes together. `systemctl set-property` applies it at once and writes a
+    drop-in so it lasts; with `--runtime` it would vanish at the next boot. `Nice=` only
+    changes priority: with an idle machine, a niced job still takes every CPU.
+  - **The address moves to the bridge.** A port of a bridge carries no address of its own;
+    the host joins the lab network through the bridge, next to its guests.
+  - **`virsh destroy`** is a hard power-off. A guest with a full OS would get a
+    `virsh shutdown` first.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl show lal-reindex -p CPUQuotaPerSecUSec; systemd-cgtop -n 1
+  bridge link; ip -br address
+  sudo virsh domiflist lal-utility; sudo virsh dominfo lal-utility | grep Autostart
+  ```
+
+  ## Tempting but wrong
+
+  - **Stopping the batch job.** The guest recovers, and the search team's reindex no longer
+    runs.
+  - **`systemctl set-property --runtime`.** The limit holds until the next reboot.
 objectives:
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.kernel-parameters, title: Configure kernel parameters persistent and non-persistent}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.libvirt, title: Manage Virtual Machines with libvirt}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.bridges-bonds, title: Configure bridge and bonding devices}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.performance, title: Monitor storage performance}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.performance, title: Monitor and troubleshoot system performance and services}
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.performance
+    title: Monitor and troubleshoot system performance and services
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.bridges-bonds
+    title: Configure bridge and bonding devices
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.libvirt
+    title: Manage Virtual Machines (libvirt)
 sources:
-  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
-  - {kind: upstream, title: libvirt domain XML, url: https://libvirt.org/formatdomain.html}
-  - {kind: upstream, title: NetworkManager bridge settings, url: https://networkmanager.dev/docs/api/latest/settings-bridge.html}
-  - {kind: upstream, title: systemd resource control, url: https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html}
-  - {kind: man-page, title: sysctl manual, man_page: sysctl(8)}
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: CPUQuota and other resource controls
+    man_page: systemd.resource-control(5)
+  - kind: man-page
+    title: Live resource usage per unit
+    man_page: systemd-cgtop(1)
+  - kind: man-page
+    title: Bridge and port profiles
+    man_page: nm-settings-nmcli(5)
+  - kind: man-page
+    title: Change a guest's network
+    man_page: virt-xml(1)
 topology:
+  networks:
+    - {name: lab, cidr: 10.88.0.0/24}
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 2304
+      image: rocky-10.2-lab-v2
+      memory_mib: 2048
       vcpus: 2
-      nested_virtualization: true
-      disks:
-        - {name: capacityio, size_mib: 1024, role: capacity investigation I/O disk}
+      nics: [{network: lab, name: lab0}]
+    - name: labpeer
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: lab, name: lab0}]
 checks:
-  - check_id: kernel-capacity-policy
+  - check_id: batch-job-capped
     kind: command
     target: node2
-    description: Swappiness is correct live and in persistent sysctl policy.
-    parameters: {sudo: true, arguments: [bash, -c, 'test "$(sysctl -n vm.swappiness)" = 10 && grep -RqsE ''^ *vm\.swappiness *= *10([[:space:]]*(#.*)?)?$'' /etc/sysctl.conf /etc/sysctl.d']}
-  - check_id: cpu-worker-constrained
+    description: lal-reindex keeps running and starts at boot, using at most half of one CPU.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        systemctl is-active --quiet lal-reindex.service || fail "lal-reindex.service is not running"
+        systemctl is-enabled --quiet lal-reindex.service || fail "lal-reindex.service does not start at boot"
+        stat=/sys/fs/cgroup$(unit_value lal-reindex.service ControlGroup)/cpu.stat
+        used() { awk '$1 == "usage_usec" {print $2}' "$stat"; }
+        before=$(used); sleep 5; after=$(used)
+        share=$(( (after - before) / 50000 ))   # percent of one CPU over 5 seconds
+        (( share <= 55 )) || fail "lal-reindex used ${share}% of a CPU over the last 5 seconds; the policy allows 50%"
+        (( share >= 20 )) || fail "lal-reindex barely runs (${share}% of a CPU); it must keep working"
+  - check_id: host-on-the-bridge
     kind: command
     target: node2
-    description: The CPU worker remains operational with the required quota and priority.
-    parameters: {arguments: [bash, -c, 'systemctl is-active --quiet lal-capacity-cpu.service && systemctl is-enabled --quiet lal-capacity-cpu.service && test "$(systemctl show -p CPUQuotaPerSecUSec --value lal-capacity-cpu.service)" = 300ms && test "$(systemctl show -p Nice --value lal-capacity-cpu.service)" = 5']}
-  - check_id: io-worker-constrained
+    description: br-lab carries 10.88.0.20/24 with lab0 as its port, and node2 reaches labpeer.
+    parameters:
+      timeout_seconds: 60
+      script: |
+        [[ -d /sys/class/net/br-lab/bridge ]] || fail "there is no bridge br-lab"
+        [[ $(basename "$(readlink /sys/class/net/lab0/master 2>/dev/null)") == br-lab ]] || fail "lab0 is not a port of br-lab"
+        ip -4 -o address show dev br-lab | grep -q ' 10\.88\.0\.20/24 ' || fail "br-lab does not have 10.88.0.20/24"
+        [[ -z $(ip -4 -o address show dev lab0) ]] || fail "lab0 still has an address of its own"
+        reached() { answer=$(curl --silent --show-error --max-time 3 http://10.88.0.5:8080/ 2>&1); }
+        retry 40 reached || fail "node2 cannot reach labpeer: ${answer#curl: }"   # STP may still be listening
+  - check_id: guest-on-the-bridge
     kind: command
     target: node2
-    description: The I/O worker remains operational with low I/O weight.
-    parameters: {arguments: [bash, -c, 'systemctl is-active --quiet lal-capacity-io.service && systemctl is-enabled --quiet lal-capacity-io.service && test "$(systemctl show -p IOWeight --value lal-capacity-io.service)" = 10']}
-  - check_id: bridge-topology-live
-    kind: command
-    target: node2
-    description: The bridge owns its persistent dummy port and required address.
-    parameters: {arguments: [bash, -c, 'ip -4 addr show br-lab | grep -Fq ''192.0.2.50/24'' && test "$(basename "$(readlink /sys/class/net/lab-port/master)")" = br-lab && test "$(nmcli -g connection.autoconnect con show lal-capacity-bridge)" = yes && test "$(nmcli -g ipv4.never-default con show lal-capacity-bridge)" = yes']}
-  - check_id: capacity-guest-running
-    kind: command
-    target: node2
-    description: The exact replacement guest is running and autostarts.
-    parameters: {sudo: true, arguments: [bash, -c, 'test "$(virsh -c qemu:///system domstate capacity-guest)" = running && virsh -c qemu:///system dominfo capacity-guest | grep -Eq ''^Autostart: +enable''']}
-  - check_id: capacity-guest-resources
-    kind: command
-    target: node2
-    description: Guest compute, disk, and bridge NIC match the requested state.
+    description: lal-utility runs on br-lab and starts with node2.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(virsh -c qemu:///system dominfo capacity-guest |
-          awk -F: '/^CPU.s.:/ {gsub(/ /,"",$2); print $2}')" = 1 &&
-          test "$(virsh -c qemu:///system dominfo capacity-guest |
-          awk -F: '/^Max memory:/ {gsub(/ KiB/,"",$2); print $2+0}')" = 393216 &&
-          virsh -c qemu:///system domblklist capacity-guest |
-          grep -Fq /var/lib/libvirt/images/capacity-guest.qcow2 &&
-          virsh -c qemu:///system dumpxml capacity-guest | grep -q "source bridge='br-lab'"
-persistence: {reboot: true, hosts: [node2]}
+      timeout_seconds: 60
+      script: |
+        running() { [[ $(virsh domstate lal-utility 2>/dev/null) == running ]]; }
+        attempts=1
+        if (( $(cut -d. -f1 /proc/uptime) < 300 )); then attempts=30; fi   # autostart may still be running
+        retry "$attempts" running || fail "lal-utility is $(virsh domstate lal-utility 2>&1)"
+        expect_eq "$(virsh dominfo lal-utility | sed -n 's/^Autostart: *//p')" enable "lal-utility's autostart"
+        read -r interface type source _ <<<"$(virsh domiflist lal-utility | awk 'NR > 2 && NF {print; exit}')"
+        expect_eq "$type $source" "bridge br-lab" "what lal-utility's network interface is attached to"
+        [[ $(basename "$(readlink /sys/class/net/$interface/master 2>/dev/null)") == br-lab ]] ||
+          fail "lal-utility's interface $interface is not a port of br-lab"
+persistence:
+  reboot: true
+  hosts: [node2]
 setup: actions/virtualization-host-capacity-incident.setup.yaml
 reference_solution: actions/virtualization-host-capacity-incident.solution.yaml
 alternate_solutions: [actions/virtualization-host-capacity-incident.alternate.yaml]
+rejected_solutions:
+  - actions/virtualization-host-capacity-incident.rejected-cap-until-reboot.yaml
+  - actions/virtualization-host-capacity-incident.rejected-stop-the-batch-job.yaml

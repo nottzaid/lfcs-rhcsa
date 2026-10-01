@@ -1,86 +1,174 @@
 schema_version: 1
 scenario_id: system-environment-policy
-version: 1
+version: 2
 status: verified
-title: Login shells inherit a drifting operations environment
-summary: Repair system-wide and personal Bash login profiles without duplicating PATH entries.
-estimated_minutes: 20
+title: Operators keep running the retired report tool
+summary: The shared login environment picks the wrong tool, the wrong editor, and grows with every subshell.
+estimated_minutes: 25
 task_type: fix
 difficulty: foundation
-task: >-
-  On node2, login environments for the operations team are inconsistent. Configure Bash login
-  shells system-wide so EDITOR is /usr/bin/vi and /opt/lal/bin occurs exactly once in PATH, even
-  if the system profile is sourced again. For opsanalyst only, set and export REPORT_FORMAT=compact
-  in the personal login environment. Preserve the normal per-user Bash startup behavior. Do not
-  reboot node1; it is not part of this scenario.
+task: |
+  The operations team on **node2** reports three annoyances with their shells:
+
+  - `lal-report` runs the retired 1.4 release from `/usr/local/bin` instead of the current
+    one in `/opt/lal/bin`.
+  - `EDITOR` opens nano, but the team standard is vi.
+  - Every new tmux pane or nested `bash` adds another `/opt/lal/bin` to `PATH`.
+
+  Fix the shared login environment for everyone, and set `opsanalyst`'s personal report
+  format while you are there.
+requirements:
+  - "Every Bash login shell, and every interactive shell started from one, has `EDITOR=/usr/bin/vi`."
+  - "`/opt/lal/bin` appears in `PATH` exactly once, ahead of `/usr/local/bin`, however many shells are nested, so `lal-report` runs the current release."
+  - "`opsanalyst`'s login shells export `REPORT_FORMAT=compact`; no other account gets `REPORT_FORMAT`."
+  - "`opsanalyst`'s own `~/.bashrc` still loads at login, so their `rep` alias keeps working."
+hints:
+  - "`type -a lal-report` shows every candidate in `PATH` order. `grep -r lal /etc/profile.d` finds the shared setting."
+  - "Bash login shells read `/etc/profile`, which sources `/etc/profile.d/*.sh`. On Rocky Linux, `/etc/bashrc` sources those files again for every interactive non-login shell. Read both files."
+  - "A `profile.d` script must be safe to run twice: only add a directory when `case \":$PATH:\"` says it is missing. On RHEL-family systems, `pathmunge` inside `profile.d` scripts does exactly that. Personal settings belong in the user's own startup files, not in `/etc`."
+debrief: |
+  ## What was wrong
+
+  `/etc/profile.d/lal-operations.sh` said:
+
+  ```bash
+  export EDITOR=/usr/bin/nano
+  export PATH=$PATH:/opt/lal/bin
+  ```
+
+  Appending put `/opt/lal/bin` *after* `/usr/local/bin`, so the retired copy of `lal-report`
+  won the `PATH` search. And because Rocky Linux's `/etc/bashrc` sources `profile.d` again
+  in every interactive non-login shell, each tmux pane or nested `bash` appended it once
+  more. `opsanalyst`'s `~/.bash_profile` exported `REPORT_FORMAT=verbose`.
+
+  ## A clean fix
+
+  ```bash
+  sudo tee /etc/profile.d/lal-operations.sh <<'EOF'
+  export EDITOR=/usr/bin/vi
+  case ":$PATH:" in
+      *:/opt/lal/bin:*) ;;
+      *) PATH=/opt/lal/bin:$PATH ;;
+  esac
+  export PATH
+  EOF
+  sudo sed -i 's/^export REPORT_FORMAT=.*/export REPORT_FORMAT=compact/' ~opsanalyst/.bash_profile
+  ```
+
+  The `case` guard makes the script idempotent: running it a second time changes nothing.
+  Inside `profile.d` scripts on RHEL-family systems, `pathmunge /opt/lal/bin` does the same
+  thing; `/etc/profile` and `/etc/bashrc` both define it for their scripts.
+
+  ## Check it yourself
+
+  ```bash
+  sudo -iu opsviewer bash -ic 'type -a lal-report; echo "$EDITOR"; echo "$PATH"'
+  sudo -iu opsanalyst printenv REPORT_FORMAT
+  sudo -iu opsviewer printenv REPORT_FORMAT    # prints nothing
+  ```
+
+  Settings apply to *new* login shells. The shell you edited from keeps its old
+  environment until you log in again.
+
+  ## Tempting but wrong
+
+  - **`export PATH=/opt/lal/bin:$PATH` without a guard.** The first shell is right; the
+    first nested shell has `/opt/lal/bin` twice, and it keeps growing.
+  - **Setting `REPORT_FORMAT` in `/etc/profile.d`.** It is a personal preference, and a
+    system-wide file hands it to every account.
+  - **Replacing `~/.bash_profile` with a single `export` line.** The template's
+    `. ~/.bashrc` line goes with it, and the user's aliases and functions stop loading at
+    login.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: users-groups.environment-profiles
     title: Manage personal and system-wide environment profiles
-  - track: professional
-    version: v1
-    objective_id: idempotent-login-environment-policy
-    title: Maintain idempotent shared and per-user login environments
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: upstream
-    title: GNU Bash startup files documentation
+    title: GNU Bash startup files
     url: https://www.gnu.org/software/bash/manual/html_node/Bash-Startup-Files.html
   - kind: man-page
-    title: Bash invocation and startup files
+    title: Bash invocation, startup files, and the type builtin
     man_page: bash(1)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
-  - check_id: shared-login-policy
+  - check_id: shared-editor
     kind: command
     target: node2
-    description: Both operations users receive the required idempotent system environment.
+    description: Login shells and nested interactive shells have EDITOR=/usr/bin/vi.
     parameters:
       sudo: true
-      arguments:
-        - sh
-        - -c
-        - >-
-          for user in opsanalyst opsviewer; do
-          result=$(runuser --login "$user" --command
-          '. /etc/profile; count=$(printf "%s" "$PATH" | awk -v RS=: '\''$0 ==
-          "/opt/lal/bin" {n++} END {print n+0}'\''); printf "%s|%s" "$EDITOR" "$count"') ||
-          exit 1; test "$result" = '/usr/bin/vi|1' || exit 1; done
-  - check_id: analyst-personal-policy
+      script: |
+        for user in opsanalyst opsviewer; do
+          expect_eq "$(runuser -l "$user" -c 'printf %s "$EDITOR"')" /usr/bin/vi "EDITOR for $user"
+          nested=$(runuser -l "$user" -c "bash -ic 'printf %s \"\$EDITOR\"'" 2>/dev/null)
+          expect_eq "$nested" /usr/bin/vi "EDITOR in $user's nested shell"
+        done
+  - check_id: current-tool-first-and-once
     kind: command
     target: node2
-    description: opsanalyst receives the required exported personal setting.
+    description: /opt/lal/bin is in PATH once, ahead of /usr/local/bin, even in nested shells.
     parameters:
       sudo: true
-      arguments:
-        - runuser
-        - --login
-        - opsanalyst
-        - --command
-        - test "$REPORT_FORMAT" = compact && export -p | grep -q 'REPORT_FORMAT="compact"'
-  - check_id: viewer-has-no-personal-override
+      script: |
+        position() { tr ':' '\n' <<<"$1" | grep -nx -- "$2" | head -n 1 | cut -d: -f1; }
+        for user in opsanalyst opsviewer; do
+          login=$(runuser -l "$user" -c 'printf %s "$PATH"')
+          nested=$(runuser -l "$user" -c "bash -ic 'bash -ic \"printf %s \\\"\\\$PATH\\\"\"'" 2>/dev/null)
+          for shell in login nested; do
+            path=${!shell}
+            count=$(tr ':' '\n' <<<"$path" | grep -cx /opt/lal/bin)
+            expect_eq "$count" 1 "the number of /opt/lal/bin entries in $user's $shell PATH"
+            first=$(position "$path" /opt/lal/bin)
+            local_bin=$(position "$path" /usr/local/bin)
+            [[ -z "$local_bin" || "$first" -lt "$local_bin" ]] ||
+              fail "/usr/local/bin comes before /opt/lal/bin in $user's $shell PATH"
+          done
+          expect_eq "$(runuser -l "$user" -c 'lal-report --version')" "lal-report 2.0" "the lal-report $user runs"
+        done
+  - check_id: analyst-report-format
     kind: command
     target: node2
-    description: The personal report setting did not leak to another account.
+    description: opsanalyst's login shells export REPORT_FORMAT=compact.
     parameters:
       sudo: true
-      arguments:
-        - runuser
-        - --login
-        - opsviewer
-        - --command
-        - test -z "${REPORT_FORMAT:-}"
+      script: |
+        exported=$(runuser -l opsanalyst -c 'export -p' | grep -E '^declare -x REPORT_FORMAT=') ||
+          fail "REPORT_FORMAT is not exported in opsanalyst's login shell"
+        value=${exported#declare -x REPORT_FORMAT=}
+        expect_eq "${value//\"/}" compact "opsanalyst's REPORT_FORMAT"
+  - check_id: format-stays-personal
+    kind: command
+    target: node2
+    description: No other account gets REPORT_FORMAT.
+    parameters:
+      sudo: true
+      script: |
+        value=$(runuser -l opsviewer -c 'printf %s "${REPORT_FORMAT-unset}"')
+        expect_eq "$value" unset "REPORT_FORMAT for opsviewer"
+  - check_id: analyst-bashrc-loads
+    kind: command
+    target: node2
+    description: opsanalyst's own ~/.bashrc still loads at login.
+    parameters:
+      sudo: true
+      script: |
+        runuser -l opsanalyst -c 'alias rep' >/dev/null 2>&1 ||
+          fail "opsanalyst's login shell no longer loads ~/.bashrc (the rep alias is missing)"
 persistence:
-  reboot: true
-  hosts: [node2]
+  reboot: false
 setup: actions/system-environment-policy.setup.yaml
 reference_solution: actions/system-environment-policy.solution.yaml
 alternate_solutions: [actions/system-environment-policy.alternate.yaml]
+rejected_solutions:
+  - actions/system-environment-policy.rejected-unguarded-path.yaml
+  - actions/system-environment-policy.rejected-global-format.yaml

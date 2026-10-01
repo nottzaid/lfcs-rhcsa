@@ -1,8 +1,8 @@
 schema_version: 1
 actions:
-  - action_id: create-team-directory-and-client-key
+  - action_id: run-the-directory-and-the-team-leads-workstation
     target: node1
-    timeout_seconds: 180
+    timeout_seconds: 240
     arguments:
       - sudo
       - --
@@ -10,7 +10,9 @@ actions:
       - -c
       - |
         set -euo pipefail
-        dsctl lal remove --do-it >/dev/null 2>&1 || true
+        nmcli connection add type ethernet ifname corp0 con-name corp ipv4.method manual \
+          ipv4.addresses 10.65.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection up corp >/dev/null
         cat > /tmp/lal-ds.inf <<'EOF'
         [general]
         config_version = 2
@@ -77,11 +79,11 @@ actions:
         1OXBjx9ukv/49f0YmnDWAAAAEmxhbC1kZXBsb3ktZml4dHVyZQECAw==
         -----END OPENSSH PRIVATE KEY-----
         EOF
-        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW lal-teamlead-fixture\n' > /home/teamlead/.ssh/lal_teamlead.pub
+        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW teamlead@platform\n' > /home/teamlead/.ssh/lal_teamlead.pub
         chown teamlead:teamlead /home/teamlead/.ssh/lal_teamlead*
         chmod 0600 /home/teamlead/.ssh/lal_teamlead
         chmod 0644 /home/teamlead/.ssh/lal_teamlead.pub
-  - action_id: install-broken-team-host
+  - action_id: onboard-the-team-in-a-hurry
     target: node2
     arguments:
       - sudo
@@ -90,44 +92,50 @@ actions:
       - -c
       - |
         set -euo pipefail
-        userdel -r ldapdev >/dev/null 2>&1 || true
-        groupdel ldapops >/dev/null 2>&1 || true
-        id teamlead >/dev/null 2>&1 || useradd -m teamlead
-        usermod -u 3099 teamlead
-        usermod -p "$(openssl passwd -6 "$(cat /proc/sys/kernel/random/uuid)")" teamlead
-        groupadd -g 3100 platform >/dev/null 2>&1 || true
-        authselect select sssd with-mkhomedir --force
-        cat > /etc/sssd/sssd.conf <<'EOF'
+        nmcli connection add type ethernet ifname corp0 con-name corp ipv4.method manual \
+          ipv4.addresses 10.65.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up corp >/dev/null
+        # A trial account from before the directory existed, never removed.
+        # (Created before SSSD knew the directory; useradd refuses names that NSS already resolves.)
+        useradd --uid 4300 --create-home ldapdev
+        authselect select sssd --force >/dev/null
+        cat > /etc/sssd/sssd.conf <<'CONF'
         [sssd]
         services = nss, pam
         domains = lab
+
         [domain/lab]
         id_provider = ldap
         auth_provider = ldap
-        ldap_uri = ldap://192.0.2.99
+        ldap_uri = ldap://10.65.0.1
         ldap_search_base = dc=lab,dc=internal
         ldap_id_use_start_tls = false
-        enumerate = true
-        EOF
+        CONF
         chmod 0600 /etc/sssd/sssd.conf
         systemctl enable sssd.service
-        systemctl restart sssd.service || true
-        rm -rf /srv/platform
+        systemctl restart sssd.service
+        groupadd --gid 3100 platform
+        # teamlead was created by hand from memory; the roster says UID 3100, group platform.
+        useradd --uid 3099 --create-home teamlead
         install -d -m 0700 /srv/platform
         printf 'platform-plan\n' > /srv/platform/plan
-        rm -f /etc/profile.d/lal-team.sh /etc/security/limits.d/80-lal-team.conf
+        chown 3100:3100 /srv/platform/plan
+        chmod 0660 /srv/platform/plan
+        cat > /etc/profile.d/lal-team.conf <<'PROFILE'
+        # Platform team settings.
+        export TEAM_REGION=amman
+        PROFILE
+        cat > /etc/security/limits.d/80-lal-team.conf <<'LIMITS'
+        # Platform team: builds open many files.
+        platform    soft    nofile    4096
+        LIMITS
         install -d -o teamlead -g teamlead -m 0700 /home/teamlead/.ssh
-        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBadKeyOnly broken\n' > /home/teamlead/.ssh/authorized_keys
+        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW teamlead@platform\n' \
+          > /home/teamlead/.ssh/authorized_keys
         chown teamlead:teamlead /home/teamlead/.ssh/authorized_keys
         chmod 0600 /home/teamlead/.ssh/authorized_keys
-        rm -f /etc/ssh/sshd_config.d/80-lal-team.conf
-        semanage port -d -t ssh_port_t -p tcp 2222 >/dev/null 2>&1 || true
+        cat > /etc/ssh/sshd_config.d/60-platform-host.conf <<'SSHD'
+        # Host policy: administrators and the platform team only.
+        AllowGroups wheel platform
+        SSHD
         systemctl restart sshd.service
-  - action_id: copy-key-between-training-hosts
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - "printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW lal-teamlead-fixture' > /tmp/lal_teamlead.pub"

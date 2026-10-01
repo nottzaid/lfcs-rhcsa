@@ -1,33 +1,11 @@
 schema_version: 1
 actions:
-  - action_id: create-utility-guest-disk
+  - action_id: start-the-network-now-and-at-boot
     target: node2
-    arguments: [sudo, --, qemu-img, create, -f, qcow2, /var/lib/libvirt/images/lfcs-guest.qcow2, 768M]
-  - action_id: define-and-run-utility-guest
+    arguments: [sudo, --, bash, -c, "virsh net-start appliances && virsh net-autostart appliances"]
+  - action_id: point-the-guest-at-its-moved-disk
     target: node2
-    timeout_seconds: 120
-    arguments:
-      - sudo
-      - --
-      - virt-install
-      - --connect
-      - qemu:///system
-      - --virt-type
-      - qemu
-      - --name
-      - lfcs-guest
-      - --memory
-      - "384"
-      - --vcpus
-      - "1"
-      - --disk
-      - path=/var/lib/libvirt/images/lfcs-guest.qcow2,format=qcow2,bus=virtio
-      - --import
-      - --osinfo
-      - generic
-      - --boot
-      - uefi
-      - --graphics
-      - none
-      - --noautoconsole
-      - --autostart
+    arguments: [sudo, --, virt-xml, lal-utility, --edit, target=vda, --disk, path=/var/lib/libvirt/images/archive/lal-utility-data.img]
+  - action_id: start-the-guest-now-and-at-boot
+    target: node2
+    arguments: [sudo, --, bash, -c, "virsh start lal-utility && virsh autostart lal-utility"]

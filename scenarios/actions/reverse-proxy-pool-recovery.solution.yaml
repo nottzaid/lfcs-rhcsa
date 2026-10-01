@@ -1,15 +1,20 @@
 schema_version: 1
 actions:
-  - action_id: repair-haproxy-backend
+  - action_id: label-the-new-port-for-web-traffic
+    target: node2
+    arguments: [sudo, --, semanage, port, -m, -t, http_port_t, -p, tcp, "8081"]
+  - action_id: health-check-the-pool
     target: node2
     arguments:
       - sudo
       - --
-      - bash
-      - -c
-      - |
-        sed -i 's/server retired 192\.0\.2\.99:8081 check/server node1 {{host.node1.address}}:8081 check/' /etc/haproxy/haproxy.cfg
-        setsebool -P httpd_can_network_connect 1
-        setsebool -P haproxy_connect_any 1
-        haproxy -c -f /etc/haproxy/haproxy.cfg
-        systemctl restart haproxy.service
+      - sed
+      - -i
+      - -e
+      - 's/^\(    server app[12] [0-9.]*:8081\)$/\1 check/'
+      - -e
+      - '/^    balance roundrobin$/a\    option httpchk GET /health'
+      - /etc/haproxy/haproxy.cfg
+  - action_id: validate-and-reload
+    target: node2
+    arguments: [sudo, --, bash, -c, "haproxy -c -q -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy.service"]

@@ -1,26 +1,31 @@
 schema_version: 1
 actions:
-  - action_id: configure-internal-time-server
-    target: node1
+  - action_id: run-the-site-time-server
+    target: timesrv
     arguments:
       - sudo
       - --
       - bash
       - -c
       - |
-        cat > /etc/chrony.conf <<'EOF'
+        set -euo pipefail
+        nmcli connection add type ethernet ifname site0 con-name site ipv4.method manual \
+          ipv4.addresses 10.40.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection up site >/dev/null
+        cat > /etc/chrony.conf <<'CONF'
+        # Site time server: serves its own clock to the site network.
         local stratum 8
-        allow {{host.node2.address}}/32
+        allow 10.40.0.0/24
         driftfile /var/lib/chrony/drift
         makestep 1.0 3
         rtcsync
         logdir /var/log/chrony
-        EOF
-        systemctl enable --now chronyd.service
+        CONF
+        systemctl enable chronyd.service
         systemctl restart chronyd.service
         firewall-cmd --quiet --permanent --add-service=ntp
         firewall-cmd --quiet --reload
-  - action_id: install-unreachable-client-source
+  - action_id: leave-node2-on-the-old-site
     target: node2
     arguments:
       - sudo
@@ -28,12 +33,11 @@ actions:
       - bash
       - -c
       - |
-        cat > /etc/chrony.conf <<'EOF'
-        server 192.0.2.123 iburst
-        driftfile /var/lib/chrony/drift
-        makestep 1.0 3
-        rtcsync
-        logdir /var/log/chrony
-        EOF
-        systemctl enable --now chronyd.service
-        systemctl restart chronyd.service
+        set -euo pipefail
+        nmcli connection add type ethernet ifname site0 con-name site ipv4.method manual \
+          ipv4.addresses 10.40.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up site >/dev/null
+        sed -i 's/^pool .*/server 10.40.0.100 iburst/' /etc/chrony.conf
+        grep -q '^server 10.40.0.100 iburst$' /etc/chrony.conf
+        systemctl disable --now chronyd.service
+        date --set "$(date --date '+7 minutes' '+%F %T')" >/dev/null

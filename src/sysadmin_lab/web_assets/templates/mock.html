@@ -11,11 +11,34 @@
     </div>
     <div class="topic-count"><strong>{{ tasks|length }}</strong><span>tasks</span></div>
   </section>
+  <section class="rehearsal-card" aria-labelledby="rehearsal-title">
+    <div class="section-heading">
+      <div>
+        <h2 id="rehearsal-title">Rehearsal</h2>
+        {% if rehearsal %}
+          <p class="rehearsal-score {{ 'check-pass' if rehearsal.passed else 'check-fail' }}">
+            <strong>{{ rehearsal.percent }}%</strong>: {{ rehearsal.solved }} of {{ tasks|length }} tasks solved since you started on {{ rehearsal.started_at.astimezone().strftime('%a %d %b, %H:%M') }}.
+            The LFCS passes at {{ rehearsal.passing_percent }}%.
+          </p>
+          <p>A task you check without solving earns the share of its requirements it met, as on the exam. Only checks run since the rehearsal began count.</p>
+        {% else %}
+          <p>Start a rehearsal to score the checks you run from now on against the exam's pass mark.</p>
+        {% endif %}
+      </div>
+      <button
+        class="button {{ 'button-secondary' if rehearsal else 'button-primary' }}"
+        type="button"
+        data-job-endpoint="/api/mocks/{{ mock.mock_id }}/rehearsal"
+        data-job-label="Starting the rehearsal"
+        {% if rehearsal %}data-job-confirm="Start over? Checks from the current rehearsal will no longer count."{% endif %}
+      >{{ 'Start over' if rehearsal else 'Start rehearsal' }}</button>
+    </div>
+  </section>
   <section class="scenario-list" aria-labelledby="mock-tasks-title">
     <div class="section-heading"><div><h2 id="mock-tasks-title">Task set</h2><p>Start tasks in order, check the resulting state, and reset or revisit any weak area.</p></div></div>
     <div class="table-scroll">
       <table>
-        <thead><tr><th>#</th><th>Name</th><th>Time</th><th>Type</th><th></th></tr></thead>
+        <thead><tr><th>#</th><th>Name</th><th>Time</th><th>Type</th>{% if rehearsal %}<th>Result</th>{% endif %}<th></th></tr></thead>
         <tbody>
           {% for scenario in tasks %}
             <tr>
@@ -23,6 +46,12 @@
               <td><a class="scenario-name" href="/scenarios/{{ scenario.scenario_id }}">{{ scenario.title }}</a><span class="scenario-summary">{{ scenario.summary }}</span></td>
               <td class="nowrap">~{{ scenario.estimated_minutes }} min</td>
               <td>{{ scenario.task_type.value|capitalize }}</td>
+              {% if rehearsal %}
+                {% set result = results[scenario.scenario_id] %}
+                <td class="nowrap result-{{ result.status.value }}">
+                  {% if result.status.value == 'solved' %}Solved{% elif result.status.value == 'partial' %}{{ (result.credit * 100)|round|int }}% of requirements{% else %}Not checked{% endif %}
+                </td>
+              {% endif %}
               <td class="row-actions"><a class="button button-secondary" href="/scenarios/{{ scenario.scenario_id }}">Info</a><button class="button button-primary" type="button" data-job-endpoint="/api/scenarios/{{ scenario.scenario_id }}/sessions" data-job-label="Launching {{ scenario.title }}">Run</button></td>
             </tr>
           {% endfor %}

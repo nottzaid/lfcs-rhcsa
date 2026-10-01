@@ -1,9 +1,9 @@
 schema_version: 1
 actions:
-  - action_id: create-alternate-utility-disk
+  - action_id: move-the-disk-back
     target: node2
-    arguments: [sudo, --, qemu-img, create, -f, qcow2, /var/lib/libvirt/images/lfcs-guest.qcow2, 768M]
-  - action_id: define-utility-guest-with-xml
+    arguments: [sudo, --, mv, /var/lib/libvirt/images/archive/lal-utility-data.img, /var/lib/libvirt/images/lal-utility-data.img]
+  - action_id: autostart-and-start-everything
     target: node2
     arguments:
       - sudo
@@ -11,23 +11,8 @@ actions:
       - bash
       - -c
       - |
-        cat > /tmp/lfcs-guest.xml <<'EOF'
-        <domain type='qemu'>
-          <name>lfcs-guest</name>
-          <memory unit='MiB'>384</memory>
-          <vcpu>1</vcpu>
-          <os firmware='efi'><type arch='x86_64' machine='q35'>hvm</type><boot dev='hd'/></os>
-          <features><acpi/></features>
-          <devices>
-            <disk type='file' device='disk'>
-              <driver name='qemu' type='qcow2'/>
-              <source file='/var/lib/libvirt/images/lfcs-guest.qcow2'/>
-              <target dev='vda' bus='virtio'/>
-            </disk>
-            <console type='pty'/>
-          </devices>
-        </domain>
-        EOF
-        virsh -c qemu:///system define /tmp/lfcs-guest.xml
-        virsh -c qemu:///system autostart lfcs-guest
-        virsh -c qemu:///system start lfcs-guest
+        set -euo pipefail
+        virsh net-autostart appliances
+        virsh net-start appliances
+        virsh autostart lal-utility
+        virsh start lal-utility

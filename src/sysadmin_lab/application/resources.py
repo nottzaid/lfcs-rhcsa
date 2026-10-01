@@ -25,6 +25,8 @@ class ResourceRecord:
 class ResourceRegistry(Protocol):
     def get(self, kind: ResourceKind, name: str) -> ResourceRecord | None: ...
 
+    def list_session(self, session_id: UUID, kind: ResourceKind) -> tuple[ResourceRecord, ...]: ...
+
     def add(self, record: ResourceRecord) -> None: ...
 
     def remove(self, record: ResourceRecord) -> None: ...
@@ -55,6 +57,8 @@ class HypervisorGateway(Protocol):
     def find(self, kind: ResourceKind, name: str) -> ManagedResource | None: ...
 
     def define(self, kind: ResourceKind, xml: str) -> ManagedResource: ...
+
+    def connect_interfaces(self, name: str, macs: tuple[str, ...]) -> None: ...
 
 
 class ResourceManager:
@@ -100,6 +104,23 @@ class ResourceManager:
             resource.stop()
         resource.undefine()
         self._registry.remove(record)
+
+    def connect_interfaces(self, identity: ResourceIdentity, macs: tuple[str, ...]) -> None:
+        """Plug in an owned domain's scenario NICs, which start unplugged."""
+        if identity.kind is not ResourceKind.DOMAIN:
+            raise ResourceSafetyError(f"only domains have interfaces: {identity.name}")
+        record = self._registry.get(identity.kind, identity.name)
+        if record is None or record.identity != identity:
+            raise ResourceSafetyError(f"registry has no ownership record for {identity.name}")
+        resource = self._gateway.find(identity.kind, identity.name)
+        if resource is None:
+            raise ResourceDriftError(f"registered resource is absent from libvirt: {identity.name}")
+        self._assert_resource(resource, record)
+        self._gateway.connect_interfaces(identity.name, macs)
+
+    def owned(self, session_id: UUID, kind: ResourceKind) -> tuple[ResourceIdentity, ...]:
+        """Identities the registry records for one session, for exact per-session cleanup."""
+        return tuple(record.identity for record in self._registry.list_session(session_id, kind))
 
     def is_registered(self, identity: ResourceIdentity) -> bool:
         record = self._registry.get(identity.kind, identity.name)

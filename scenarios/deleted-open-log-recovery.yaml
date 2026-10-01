@@ -1,72 +1,169 @@
 schema_version: 1
 scenario_id: deleted-open-log-recovery
-version: 1
+version: 2
 status: verified
-title: Disk space vanished after a log was deleted
-summary: Recover blocks held by an open deleted file and restore normal logging.
+title: The log volume is full of nothing
+summary: A log filesystem reports itself full, yet its directories are almost empty.
 estimated_minutes: 25
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  Space on node2 was not recovered when an operator deleted lal-writer.log. Identify the
-  process holding the deleted file, configure lal-writer to use normal visible logging by
-  setting KEEP_DELETED=0 in /etc/lal-writer.conf, and recover the held blocks. Keep
-  lal-writer.service running and enabled. Do not reboot node2 or kill unrelated processes.
+task: |
+  On **node2**, `/var/log/lal` is a small dedicated log filesystem. The metrics collector
+  that writes there started failing with `No space left on device`. An operator already
+  deleted the biggest log file they could find, but `df` still reports the filesystem as full,
+  and `du` finds only a few kilobytes in it.
+
+  Recover the space without rebooting node2 or recreating the filesystem, and leave every
+  service logging where the team can read it.
+requirements:
+  - "`/var/log/lal` has at least 80% of its space free again."
+  - "`lal-ingest.service` is running and appends to a visible `/var/log/lal/ingest/ingest.log`."
+  - "Other writers can store data on `/var/log/lal` again."
+  - "The filesystem on `/var/log/lal` is the original one, still mounted, and node2 was not rebooted."
+hints:
+  - "Compare `df -h /var/log/lal` with `sudo du -sh /var/log/lal`. When they disagree, the missing space is held by files that no longer have a name."
+  - "A deleted file keeps its blocks for as long as any process holds it open. `sudo lsof -a +L1 /var/log/lal` lists open files on that filesystem with no links left; `ls -l /proc/PID/fd` shows one process's open files."
+  - "The holder has to let go of the deleted file. `systemctl cat lal-ingest` shows how the service can be restarted or told to reopen its log, and `journalctl -u lal-ingest` shows whether that worked."
+debrief: |
+  ## What was wrong
+
+  `rm` removes a *name*. A file's blocks are freed only when its last name is gone **and**
+  no process has it open. `lal-ingest` held `ingest.log` open on file descriptor 3, so
+  deleting it hid the file from `du` and `ls` but left about 430 MiB allocated. `df` counts
+  allocated blocks; `du` counts the files it can reach by name.
+
+  ```text
+  $ sudo lsof -a +L1 /var/log/lal
+  COMMAND     PID      USER FD TYPE ...      SIZE/OFF NLINK ... NAME
+  lal-inges 30532 lalingest 3w  REG ... 433246466     0 ... /var/log/lal/ingest/ingest.log (deleted)
+  ```
+
+  ## A clean fix
+
+  ```bash
+  sudo systemctl restart lal-ingest
+  df -h /var/log/lal
+  ```
+
+  The restart ends the process, which closes the last reference to the deleted file and
+  frees its blocks. The new process then creates a fresh, visible `ingest.log`.
+
+  `systemctl reload` looks gentler: `lal-ingest`, like most daemons, reopens its log on
+  `SIGHUP`, which is also how logrotate's `postrotate` works. Try it here and the journal
+  says `ingest.log: No space left on device`. On a completely full XFS filesystem even an
+  empty file cannot be created, so the daemon keeps the deleted file it already has. Reload
+  works once space exists, for example after truncating the deleted file through `/proc`:
+
+  ```bash
+  pid=$(systemctl show -p MainPID --value lal-ingest)
+  sudo ls -l /proc/$pid/fd            # find the fd pointing at ingest.log (deleted)
+  sudo truncate -s0 /proc/$pid/fd/3
+  sudo systemctl reload lal-ingest
+  ```
+
+  ## Check it yourself
+
+  ```bash
+  sudo lsof -a +L1 /var/log/lal     # nothing
+  df -h /var/log/lal
+  sudo tail -f /var/log/lal/ingest/ingest.log
+  ```
+
+  ## Tempting but wrong
+
+  - **Truncating through `/proc` and stopping there.** The space comes back instantly, and
+    that is the right emergency move for a service that must not be interrupted. But the
+    daemon keeps writing into a file nobody can see or rotate.
+  - **`touch ingest.log`.** On a full filesystem it fails outright. With space available it
+    creates an empty file with the old name while the daemon keeps writing to the deleted
+    one.
+  - **Rebooting.** It frees the space by stopping everything, which is exactly what you
+    avoid on a production host.
+
+  Next time, empty a live log with `truncate -s0 file` instead of deleting it, or let
+  logrotate rotate it and signal the daemon.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: essential-commands.diskspace
     title: Troubleshoot diskspace issues
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.performance
+    title: Monitor and troubleshoot system performance and services
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: lsof manual
-    man_page: lsof(8)
+    title: List open files, including deleted ones (+L1)
+    man_page: lsof(1)
   - kind: man-page
-    title: proc pid fd documentation
+    title: /proc/PID/fd and deleted files
     man_page: proc_pid_fd(5)
+  - kind: man-page
+    title: ExecReload= and reloading services
+    man_page: systemd.service(5)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
+      disks:
+        - name: logs
+          size_mib: 512
+          role: dedicated log filesystem
 checks:
-  - check_id: writer-operational
-    kind: service
-    target: node2
-    description: The writer remains running and enabled.
-    parameters:
-      name: lal-writer.service
-      active: true
-      enabled: true
-  - check_id: deleted-file-released
+  - check_id: space-recovered
     kind: command
     target: node2
-    description: No process holds a deleted file from the writer log directory.
+    description: /var/log/lal has at least 80% of its space free.
+    parameters:
+      script: |
+        used=$(df --output=pcent /var/log/lal | tail -n 1 | tr -dc 0-9)
+        (( used <= 20 )) || fail "/var/log/lal is ${used}% full"
+  - check_id: ingest-log-visible
+    kind: command
+    target: node2
+    description: lal-ingest.service is running and appending to a visible ingest.log.
     parameters:
       sudo: true
-      arguments: [bash, -c, '! lsof +L1 -- /var/log 2>/dev/null | grep -Fq lal-writer']
-  - check_id: visible-log-restored
-    kind: file
-    target: node2
-    description: The service writes to its visible log again.
-    parameters:
-      path: /var/log/lal-writer.log
-      kind: file
-      owner: root
-      group: root
-      contains: heartbeat
-  - check_id: writer-mode-corrected
+      script: |
+        systemctl is-active --quiet lal-ingest.service || fail "lal-ingest.service is not running"
+        log=/var/log/lal/ingest/ingest.log
+        [[ -f "$log" ]] || fail "$log does not exist"
+        before=$(stat -c %s "$log")
+        sleep 3
+        after=$(stat -c %s "$log")
+        (( after > before )) || fail "lal-ingest is not writing to the visible $log"
+        deleted=$(lsof -a -p "$(unit_value lal-ingest.service MainPID)" +L1 2>/dev/null | tail -n +2)
+        [[ -z "$deleted" ]] || fail "lal-ingest still holds a deleted file open"
+  - check_id: writers-succeed
     kind: command
     target: node2
-    description: Subsequent service starts use normal logging.
+    description: Other writers can store data on /var/log/lal.
     parameters:
-      arguments: [bash, -c, grep -Eq '^KEEP_DELETED=0$' /etc/lal-writer.conf]
+      sudo: true
+      script: |
+        probe=/var/log/lal/metrics/.check-$$
+        trap 'rm -f "$probe"' EXIT
+        runuser -u lalmetrics -- dd if=/dev/zero of="$probe" bs=1M count=32 status=none 2>/dev/null ||
+          fail "writing 32 MiB to /var/log/lal fails: no space left on device"
+  - check_id: same-filesystem-same-boot
+    kind: command
+    target: node2
+    description: The original filesystem is still mounted, and node2 was not rebooted.
+    parameters:
+      script: |
+        uuid=$(findmnt -n -o UUID /var/log/lal) || fail "/var/log/lal is not mounted"
+        expect_eq "$uuid" "$(cat /usr/share/lal-logs/filesystem-uuid)" "the filesystem UUID"
+        expect_eq "$(cat /proc/sys/kernel/random/boot_id)" "$(cat /usr/share/lal-logs/boot-id)" "the boot ID (node2 was rebooted)"
 persistence:
   reboot: false
 setup: actions/deleted-open-log-recovery.setup.yaml
 reference_solution: actions/deleted-open-log-recovery.solution.yaml
 alternate_solutions: [actions/deleted-open-log-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/deleted-open-log-recovery.rejected-truncate-through-proc.yaml
+  - actions/deleted-open-log-recovery.rejected-recreate-name.yaml

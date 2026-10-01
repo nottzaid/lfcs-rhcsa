@@ -1,16 +1,39 @@
 schema_version: 1
 actions:
-  - action_id: prepare-mount-layout
+  - action_id: install-the-application-and-its-release
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        umount /opt/app/current >/dev/null 2>&1 || true;
-        umount /run/lal-cache >/dev/null 2>&1 || true;
-        sed -i '\#/run/lal-cache#d;\#/opt/app/current#d' /etc/fstab;
-        rm -rf /run/lal-cache /opt/app/current /srv/releases/current;
-        install -d /run/lal-cache /opt/app/current /srv/releases/current;
-        printf 'release-2026.08\n' > /srv/releases/current/version.txt
+      - |
+        set -euo pipefail
+        useradd --system --no-create-home --shell /sbin/nologin lalapp
+        install -d -m 0755 /srv/releases/current /opt/app/current
+        printf 'release-2026.09\n' > /srv/releases/current/version.txt
+        cat > /usr/local/bin/lal-webapp <<'EOF'
+        #!/bin/bash
+        set -eu
+        release=$(cat /opt/app/current/version.txt)
+        printf 'serving %s\n' "$release" > /run/lal-cache/ready
+        echo "lal-webapp: serving $release"
+        exec sleep infinity
+        EOF
+        chmod 0755 /usr/local/bin/lal-webapp
+        cat > /etc/systemd/system/lal-webapp.service <<'EOF'
+        [Unit]
+        Description=Web application
+        RequiresMountsFor=/run/lal-cache /opt/app/current
+
+        [Service]
+        User=lalapp
+        Group=lalapp
+        ExecStart=/usr/local/bin/lal-webapp
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable lal-webapp.service
+        systemctl start lal-webapp.service || true

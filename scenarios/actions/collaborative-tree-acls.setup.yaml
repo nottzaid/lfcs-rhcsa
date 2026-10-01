@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-project-identities-and-tree
+  - action_id: create-project-identities
     target: node2
     arguments:
       - sudo
@@ -9,20 +9,24 @@ actions:
       - -c
       - |
         set -euo pipefail
-        getent group project >/dev/null || groupadd project
-        for user in devone devtwo; do
-          id "$user" >/dev/null 2>&1 || useradd --create-home "$user"
-          usermod -aG project "$user"
-        done
-        for user in auditor outsider; do
-          id "$user" >/dev/null 2>&1 || useradd --create-home "$user"
-        done
-        rm -rf /srv/project
-        install -d -o root -g root -m 0755 /srv/project/specs /srv/project/archive
+        groupadd project
+        for user in devone devtwo auditor outsider; do useradd --create-home "$user"; done
+        usermod -aG project devone
+        usermod -aG project devtwo
+  - action_id: create-tree-with-drifted-permissions
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -o root -g root -m 0755 /srv/project /srv/project/specs /srv/project/archive
         printf 'approved plan\n' > /srv/project/specs/plan.txt
         printf 'historical note\n' > /srv/project/archive/note.txt
         chmod 0644 /srv/project/specs/plan.txt /srv/project/archive/note.txt
-        setfacl -Rb /srv/project
-  - action_id: install-contradictory-acl
-    target: node2
-    arguments: [sudo, --, setfacl, -m, "u:auditor:rwx,m::rwx", /srv/project/specs/plan.txt]
+        printf 'draft review comments\n' > /srv/project/specs/review.txt
+        chown devone:devone /srv/project/specs/review.txt
+        chmod 0600 /srv/project/specs/review.txt
+        setfacl -m u:auditor:rwx,m::rwx /srv/project/specs/plan.txt

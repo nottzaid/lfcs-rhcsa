@@ -1,41 +1,47 @@
 schema_version: 1
 actions:
-  - action_id: write-alternate-router-ruleset
-    target: node2
+  - action_id: replace-firewalld-with-an-nftables-ruleset
+    target: router
     arguments:
       - sudo
       - --
       - bash
       - -c
       - |
-        install -d /etc/nftables
-        cat > /etc/nftables/lal-router.nft <<'EOF'
-        table inet lal_filter {
-          chain input { type filter hook input priority 0; policy drop;
-            ct state related,established accept
-            iif lo accept
+        set -euo pipefail
+        systemctl disable --now firewalld.service
+        cat > /etc/nftables/router.nft <<'NFT'
+        flush ruleset
+
+        table inet filter {
+          chain input {
+            type filter hook input priority filter; policy drop;
+            ct state established,related accept
+            ct state invalid drop
+            iifname "lo" accept
+            meta l4proto { icmp, ipv6-icmp } accept
             tcp dport 22 accept
-            iif lan0 accept
-            iif wan0 tcp dport 80 accept
-            iif wan0 tcp dport 8080 accept
+            iifname "wan0" tcp dport 8080 ct status dnat accept
           }
-          chain forward { type filter hook forward priority 0; policy drop;
-            ct state related,established accept
-            iif lan0 oif wan0 accept
-          }
-        }
-        table ip lal_nat {
-          chain incoming { type nat hook prerouting priority -100;
-            iif wan0 tcp dport 80 redirect to :8080
-          }
-          chain outgoing { type nat hook postrouting priority 100;
-            iif lan0 oif wan0 masquerade
+          chain forward {
+            type filter hook forward priority filter; policy drop;
+            ct state established,related accept
+            iifname "lan0" oifname "wan0" accept
           }
         }
-        EOF
-        echo 'include "/etc/nftables/lal-router.nft"' >> /etc/sysconfig/nftables.conf
-        sysctl -w net.ipv4.ip_forward=1
-        printf 'net.ipv4.ip_forward=1\n' > /etc/sysctl.d/90-lal-router.conf
-        nft -f /etc/nftables/lal-router.nft
-        systemctl enable nftables.service
-        systemctl restart nftables.service
+
+        table ip nat {
+          chain prerouting {
+            type nat hook prerouting priority dstnat; policy accept;
+            iifname "wan0" tcp dport 80 redirect to :8080
+          }
+          chain postrouting {
+            type nat hook postrouting priority srcnat; policy accept;
+            oifname "wan0" masquerade
+          }
+        }
+        NFT
+        printf 'include "/etc/nftables/router.nft"\n' > /etc/sysconfig/nftables.conf
+        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-router.conf
+        sysctl --quiet --load /etc/sysctl.d/90-router.conf
+        systemctl enable --now nftables.service

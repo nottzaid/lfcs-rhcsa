@@ -1,28 +1,13 @@
 schema_version: 1
 actions:
-  - action_id: install-path-aware-reportbot-schedule
+  - action_id: explicit-zone-full-path-and-day-names
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        printf '%s\n' 'SHELL=/bin/sh' 'CRON_TZ = "UTC"'
-        'PATH=/opt/lal/bin:/usr/bin:/bin' 'MAILTO=""'
-        '40 6 * * mon-fri generate-usage-report --format compact'
-        | crontab -u reportbot -
-  - action_id: prove-report-job-with-clean-environment
-    target: node2
-    arguments:
-      - sudo
-      - --user=reportbot
-      - --set-home
-      - --
-      - env
-      - --ignore-environment
-      - HOME=/var/lib/lal-reports
-      - PATH=/opt/lal/bin:/usr/bin:/bin
-      - generate-usage-report
-      - --format
-      - compact
+      - |
+        printf '%s\n' '# Finance usage report' 'CRON_TZ=UTC' 'MAILTO=root' \
+          '40 06 * * mon-fri /opt/lal/bin/generate-usage-report --format compact' |
+          crontab -u reportbot -

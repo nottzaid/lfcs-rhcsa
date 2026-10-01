@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: install-alternate-service-layout
+  - action_id: install-a-local-unit-with-different-choices
     target: node2
     arguments:
       - sudo
@@ -8,17 +8,21 @@ actions:
       - bash
       - -c
       - |
-        cat > /etc/systemd/system/lal-collector.service <<'EOF'
+        set -euo pipefail
+        install -d /usr/local/lib/systemd/system
+        cat > /usr/local/lib/systemd/system/lal-collector.service <<'EOF'
         [Unit]
-        Description=Warehouse collector daemon
+        Description=Warehouse metrics collector
+        After=network-online.target
+        Wants=network-online.target
 
         [Service]
         Type=exec
+        ExecStart=/opt/lal/bin/collector
         User=collector
         Group=collector
         WorkingDirectory=/var/lib/lal-collector
         EnvironmentFile=-/etc/lal-collector.conf
-        ExecStart=/opt/lal/bin/collector
         Restart=always
         RestartSec=1
 

@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: reissue-without-extensions
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /etc/lal-pki
+        openssl req -new -newkey rsa:2048 -nodes -subj /CN=api.internal \
+          -addext 'subjectAltName=DNS:api.internal,IP:127.0.0.1' -keyout private/api.key -out /tmp/api.csr
+        openssl x509 -req -in /tmp/api.csr -CA ca.crt -CAkey private/ca.key -CAcreateserial \
+          -days 397 -out api.crt
+        chmod 0600 private/api.key
+        systemctl reload nginx.service

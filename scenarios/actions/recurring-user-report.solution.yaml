@@ -1,23 +1,12 @@
 schema_version: 1
 actions:
-  - action_id: install-reportbot-schedule
+  - action_id: rewrite-the-crontab
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        printf '%s\n' 'CRON_TZ=UTC' 'MAILTO=""'
-        '40 6 * * 1-5 /opt/lal/bin/generate-usage-report --format compact'
-        | crontab -u reportbot -
-  - action_id: prove-report-job
-    target: node2
-    arguments:
-      - sudo
-      - --user=reportbot
-      - --set-home
-      - --
-      - /opt/lal/bin/generate-usage-report
-      - --format
-      - compact
+      - |
+        printf '%s\n' 'PATH=/opt/lal/bin:/usr/bin:/bin' \
+          '40 6 * * 1-5 generate-usage-report --format compact' | crontab -u reportbot -

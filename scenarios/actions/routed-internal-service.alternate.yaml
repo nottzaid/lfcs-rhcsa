@@ -1,16 +1,14 @@
 schema_version: 1
 actions:
-  - action_id: replace-uplink-route-property
+  - action_id: swap-the-stale-route
     target: node2
     arguments:
       - sudo
       - --
-      - nmcli
-      - connection
-      - modify
-      - lal-uplink
-      - ipv4.routes
-      - 198.51.100.0/24 192.0.2.2
-  - action_id: reapply-uplink-profile
-    target: node2
-    arguments: [sudo, --, nmcli, device, reapply, uplink0]
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection modify transit -ipv4.routes '172.20.30.0/24 10.50.0.254'
+        nmcli connection modify transit +ipv4.routes '172.20.30.0/24 10.50.0.1'
+        nmcli device reapply transit0

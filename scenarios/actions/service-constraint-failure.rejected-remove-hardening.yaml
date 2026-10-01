@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: drop-the-hardening
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        rm /etc/systemd/system/lal-api.service.d/10-hardening.conf
+        systemctl daemon-reload
+        systemctl restart lal-api.service

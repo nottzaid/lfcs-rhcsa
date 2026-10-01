@@ -1,0 +1,12 @@
+schema_version: 1
+actions:
+  - action_id: set-the-clock-from-the-time-server-once
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        chronyd -q 'server 10.40.0.1 iburst'

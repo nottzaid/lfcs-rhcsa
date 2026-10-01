@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from uuid import UUID
+
 from sysadmin_lab.application.resources import ResourceRecord
 from sysadmin_lab.domain.resources import ResourceCollisionError, ResourceKind, ResourceSafetyError
 
@@ -12,6 +14,13 @@ class MemoryResourceRegistry:
 
     def get(self, kind: ResourceKind, name: str) -> ResourceRecord | None:
         return self._records.get((kind, name))
+
+    def list_session(self, session_id: UUID, kind: ResourceKind) -> tuple[ResourceRecord, ...]:
+        return tuple(
+            record
+            for (record_kind, name), record in sorted(self._records.items())
+            if record_kind is kind and record.identity.session_id == session_id
+        )
 
     def add(self, record: ResourceRecord) -> None:
         key = (record.identity.kind, record.identity.name)

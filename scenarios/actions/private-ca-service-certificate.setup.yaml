@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-private-ca
+  - action_id: create-the-private-ca
     target: node2
     arguments:
       - sudo
@@ -9,11 +9,52 @@ actions:
       - -c
       - |
         set -euo pipefail
-        rm -rf /etc/lal-pki
         install -d -m 0755 /etc/lal-pki
         install -d -m 0700 /etc/lal-pki/private
-        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -sha256 \
-          -subj /CN=LAL-Training-CA \
-          -keyout /etc/lal-pki/private/ca.key -out /etc/lal-pki/ca.crt >/dev/null 2>&1
-        chmod 0600 /etc/lal-pki/private/ca.key
-        chmod 0644 /etc/lal-pki/ca.crt
+        cd /etc/lal-pki
+        openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj '/CN=Lab Internal CA' \
+          -keyout private/ca.key -out ca.crt 2>/dev/null
+        chmod 0600 private/ca.key
+        chmod 0644 ca.crt
+        install -d -m 0755 /usr/share/lal-pki
+        sha256sum /etc/lal-pki/ca.crt /etc/lal-pki/private/ca.key > /usr/share/lal-pki/ca.sha256
+  - action_id: issue-the-legacy-cn-only-certificate
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /etc/lal-pki
+        openssl req -new -newkey rsa:2048 -nodes -subj /CN=api.internal \
+          -keyout private/api.key -out /tmp/legacy.csr 2>/dev/null
+        openssl x509 -req -in /tmp/legacy.csr -CA ca.crt -CAkey private/ca.key -CAcreateserial \
+          -days 397 -out api.crt 2>/dev/null
+        rm -f /tmp/legacy.csr
+        chmod 0644 private/api.key api.crt
+  - action_id: serve-the-api-with-nginx
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cat > /etc/nginx/conf.d/api.conf <<'EOF'
+        server {
+            listen 8443 ssl;
+            server_name api.internal;
+            ssl_certificate /etc/lal-pki/api.crt;
+            ssl_certificate_key /etc/lal-pki/private/api.key;
+            location / {
+                default_type text/plain;
+                return 200 "api-ready\n";
+            }
+        }
+        EOF
+        grep -q 'api.internal' /etc/hosts || printf '127.0.0.1 api.internal\n' >> /etc/hosts
+        restorecon -R /etc/lal-pki
+        systemctl enable --now nginx.service

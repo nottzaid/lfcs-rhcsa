@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: delete-every-export
+    target: node2
+    arguments: [sudo, --, bash, -c, "rm -f /srv/lal-catalog/exports/catalog-*.csv"]
+  - action_id: grow-the-volume-and-its-filesystem
+    target: node2
+    arguments: [sudo, --, lvextend, --resizefs, --size, 1024M, vgapps/lvcatalog]
+  - action_id: mount-it-at-boot
+    target: node2
+    arguments: [sudo, --, bash, -c, "echo 'LABEL=LAL_CATALOG /srv/lal-catalog ext4 defaults 0 2' >> /etc/fstab && systemctl daemon-reload"]
+  - action_id: restart-the-catalog
+    target: node2
+    arguments: [sudo, --, systemctl, restart, lal-catalog.service]

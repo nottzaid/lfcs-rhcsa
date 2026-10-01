@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: set-low-io-weight
+  - action_id: cap-the-archiver-in-a-drop-in
     target: node2
     arguments:
       - sudo
@@ -8,10 +8,8 @@ actions:
       - bash
       - -c
       - |
-        install -d /etc/systemd/system/lal-io-load.service.d
-        cat > /etc/systemd/system/lal-io-load.service.d/io-weight.conf <<'EOF'
-        [Service]
-        IOWeight=10
-        EOF
+        set -euo pipefail
+        install -d /etc/systemd/system/lal-archiver.service.d
+        printf '[Service]\nIOWriteBandwidthMax=/srv/data 1M\n' > /etc/systemd/system/lal-archiver.service.d/io.conf
         systemctl daemon-reload
-        systemctl restart lal-io-load.service
+        systemctl restart lal-archiver.service

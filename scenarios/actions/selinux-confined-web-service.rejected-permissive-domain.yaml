@@ -1,0 +1,8 @@
+schema_version: 1
+actions:
+  - action_id: make-the-web-domain-permissive
+    target: node2
+    arguments: [sudo, --, semanage, permissive, -a, httpd_t]
+  - action_id: restart-nginx
+    target: node2
+    arguments: [sudo, --, systemctl, restart, nginx.service]

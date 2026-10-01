@@ -1,17 +1,72 @@
 schema_version: 1
 scenario_id: offline-filesystem-recovery
-version: 1
+version: 2
 status: verified
-title: The records filesystem was left with errors
-summary: Repair an unmounted ext4 filesystem and restore its persistent mount.
-estimated_minutes: 35
+title: A record is missing from the crashed server's disk
+summary: Repair a damaged ext4 filesystem offline and recover the file its damage orphaned.
+estimated_minutes: 30
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  The ext4 filesystem on /dev/disk/by-id/virtio-lal-records is unmounted after an unclean
-  failure and reports errors. Check and repair it while it is offline, preserving its data.
-  Mount it at /srv/records and configure a persistent UUID- or label-based mount. Do not
-  reformat the disk. Node2 may be rebooted after the repair if you wish.
+task: |
+  The records disk from a server that crashed last night is now attached to **node2** as
+  `/dev/disk/by-id/virtio-lal-records`. It is not mounted. The records team says
+  `2026/important.record` existed on it at the time of the crash and they need it back, and
+  the kernel reported errors on this filesystem before the crash.
+
+  Repair the filesystem without losing data, put the record back where it belongs, and
+  mount the disk at `/srv/records` so it comes back after every reboot.
+requirements:
+  - "The filesystem is repaired: no errors remain, and it is still the original filesystem (not reformatted)."
+  - "`/srv/records/2026/important.record` exists again with its original content, and nothing is left in `lost+found`."
+  - "The other 2026 ledgers are intact."
+  - "The filesystem is mounted at `/srv/records`, and `/etc/fstab` mounts it by UUID or label."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "`dumpe2fs -h DEVICE` shows the filesystem state and error counters. Never repair a mounted filesystem."
+  - "`e2fsck -f` forces a full check; read every question it asks. `-n` answers no to everything, which is a safe way to look first."
+  - "When `e2fsck` finds a file with no directory entry pointing at it, it reconnects it under `lost+found`, named `#INODE`. Look there after the repair."
+debrief: |
+  ## What was wrong
+
+  The crash left an inode that was still allocated and full of data but had no directory
+  entry pointing at it, and the superblock was flagged with errors. Mounting it anyway shows
+  a `2026/` directory without the record, and the kernel logs a warning. The data was never
+  gone, just unreachable by name.
+
+  ## A clean recovery
+
+  ```bash
+  disk=/dev/disk/by-id/virtio-lal-records
+  sudo dumpe2fs -h $disk | grep -iE 'state|error'
+  sudo e2fsck -f $disk            # answer yes; it offers "Connect to /lost+found?"
+  sudo mkdir -p /srv/records
+  echo 'LABEL=LAL_RECORDS /srv/records ext4 defaults 0 2' | sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload && sudo mount /srv/records
+  ls -l /srv/records/lost+found   # #16: a regular file of 23 bytes
+  sudo cat /srv/records/lost+found/#16
+  sudo mv '/srv/records/lost+found/#16' /srv/records/2026/important.record
+  ```
+
+  `e2fsck` walks every inode and every directory. An allocated inode that no directory
+  references is "unattached"; `e2fsck` links it into `lost+found` under its inode number,
+  because the name was stored in the directory entry that was lost. Identifying such files is
+  detective work with `file`, `cat`, sizes, and timestamps. The last field in the fstab line,
+  `2`, tells boot to check this filesystem after the root filesystem.
+
+  ## Check it yourself
+
+  ```bash
+  sudo dumpe2fs -h /dev/disk/by-id/virtio-lal-records | grep 'Filesystem state'
+  findmnt /srv/records
+  ls -l /srv/records/2026 /srv/records/lost+found
+  ```
+
+  ## Tempting but wrong
+
+  - **Mounting it as it is.** It mounts, with a kernel warning, the record stays missing, and
+    the damage can grow once you write to it.
+  - **`e2fsck` on the mounted filesystem.** `e2fsck` refuses, and forcing it corrupts data.
+  - **`mkfs`.** Clean at once, and everything on it is gone.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -26,57 +81,79 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: e2fsck manual
+    title: Check and repair ext2/3/4 filesystems
     man_page: e2fsck(8)
   - kind: man-page
-    title: fstab manual
+    title: Inspect the superblock and state
+    man_page: dumpe2fs(8)
+  - kind: man-page
+    title: The fstab pass field
     man_page: fstab(5)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
       disks:
         - name: records
-          size_mib: 768
-          role: damaged records filesystem
+          size_mib: 512
+          role: records disk from a crashed server
 checks:
-  - check_id: filesystem-clean
+  - check_id: filesystem-repaired
     kind: command
     target: node2
-    description: ext4 records a clean filesystem state after repair.
+    description: No errors remain, and it is the original filesystem.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - dumpe2fs -h /dev/disk/by-id/virtio-lal-records 2>/dev/null | grep -Eq '^Filesystem state:[[:space:]]+clean$'
-  - check_id: records-mounted
+      script: |
+        disk=/dev/disk/by-id/virtio-lal-records
+        expect_eq "$(blkid -s UUID -o value "$disk")" "$(cat /usr/share/lal-records/filesystem-uuid)" "the filesystem UUID"
+        header=$(dumpe2fs -h "$disk" 2>/dev/null)
+        expect_eq "$(sed -n 's/^Filesystem state: *//p' <<<"$header")" clean "the filesystem state"
+        checked=$(date -d "$(sed -n 's/^Last checked: *//p' <<<"$header")" +%s)
+        (( checked >= $(cat /usr/share/lal-records/damaged-at) )) ||
+          fail "the filesystem has not been checked since it was damaged"
+  - check_id: record-recovered
     kind: command
     target: node2
-    description: The repaired ext4 filesystem is mounted at /srv/records.
-    parameters: {arguments: [findmnt, --noheadings, --types, ext4, --mountpoint, /srv/records]}
-  - check_id: records-preserved
-    kind: file
-    target: node2
-    description: Existing records survived the repair.
+    description: 2026/important.record is back with its original content, and lost+found is empty.
     parameters:
-      path: /srv/records/important.record
-      kind: file
-      contains: preserve after recovery
-  - check_id: recovery-mount-persistent
+      sudo: true
+      script: |
+        mountpoint -q /srv/records || fail "nothing is mounted at /srv/records"
+        [[ -f /srv/records/2026/important.record ]] || fail "/srv/records/2026/important.record is missing"
+        (cd /srv/records && sha256sum --check --status /usr/share/lal-records/record.sha256) ||
+          fail "important.record does not have its original content"
+        left=$(ls -A /srv/records/lost+found | tr '\n' ' ')
+        [[ -z "$left" ]] || fail "lost+found still holds: $left"
+  - check_id: ledgers-intact
     kind: command
     target: node2
-    description: fstab uses a stable filesystem identity.
+    description: The other 2026 ledgers are intact.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - awk '$2=="/srv/records" && $1 ~ /^(UUID=|LABEL=LAL_RECORDS$)/ {ok=1} END {exit !ok}' /etc/fstab
+      sudo: true
+      script: |
+        cd /srv/records 2>/dev/null || fail "nothing is mounted at /srv/records"
+        damaged=$(sha256sum --check --quiet /usr/share/lal-records/ledgers.sha256 2>/dev/null | wc -l)
+        (( damaged == 0 )) || fail "$damaged ledgers are missing or changed"
+  - check_id: mounted-persistently
+    kind: command
+    target: node2
+    description: It is mounted at /srv/records, and /etc/fstab mounts it by UUID or label.
+    parameters:
+      sudo: true
+      script: |
+        source=$(findmnt -n -o SOURCE --mountpoint /srv/records) || fail "nothing is mounted at /srv/records"
+        expect_eq "$(readlink -f "$source")" "$(readlink -f /dev/disk/by-id/virtio-lal-records)" "the device at /srv/records"
+        entry=$(fstab_field /srv/records SOURCE)
+        case "$entry" in UUID=*|LABEL=*) ;; "") fail "/etc/fstab has no entry for /srv/records" ;; *) fail "/etc/fstab mounts /srv/records by $entry; use UUID= or LABEL=" ;; esac
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/offline-filesystem-recovery.setup.yaml
 reference_solution: actions/offline-filesystem-recovery.solution.yaml
 alternate_solutions: [actions/offline-filesystem-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/offline-filesystem-recovery.rejected-mount-as-is.yaml
+  - actions/offline-filesystem-recovery.rejected-record-left-behind.yaml

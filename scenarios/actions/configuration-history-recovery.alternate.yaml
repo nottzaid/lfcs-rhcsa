@@ -1,14 +1,17 @@
 schema_version: 1
 actions:
-  - action_id: extract-approved-blob
+  - action_id: extract-the-approved-blob-and-commit
     target: node2
     arguments:
+      - sudo
+      - --
       - bash
       - -c
-      - git -C /etc/lal-app show approved-v1:app.conf > /etc/lal-app/app.conf
-  - action_id: stage-and-commit-restoration
-    target: node2
-    arguments: [git, -C, /etc/lal-app, add, app.conf]
-  - action_id: create-audit-commit
-    target: node2
-    arguments: [git, -C, /etc/lal-app, commit, -m, Return app.conf to approved-v1]
+      - |
+        set -euo pipefail
+        git -C /etc/lal-app show approved-v1:app.conf > /etc/lal-app/app.conf
+        git -C /etc/lal-app add app.conf
+        git -C /etc/lal-app -c user.name='On-call Admin' -c user.email=oncall@lab.invalid \
+          commit --quiet -m 'Roll back rejected worker change'
+        systemctl stop lal-app.service
+        systemctl start lal-app.service

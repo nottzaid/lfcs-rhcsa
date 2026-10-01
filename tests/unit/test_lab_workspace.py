@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+import dataclasses
+from contextlib import nullcontext
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
+from sysadmin_lab.adapters.sqlite_progress import SqliteCheckAttemptRepository
+from sysadmin_lab.adapters.sqlite_rehearsals import SqliteMockRehearsalRepository
+from sysadmin_lab.application.image_building import ImageBuildError
 from sysadmin_lab.application.lab_workspace import LabWorkspace, WorkspacePaths
-from sysadmin_lab.catalog import load_catalog, load_image_manifest
+from sysadmin_lab.application.progress import ProgressService
+from sysadmin_lab.catalog import CatalogError, load_catalog, load_image_manifest
+from sysadmin_lab.domain.progress import CheckAttempt
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
@@ -41,7 +49,7 @@ class FakeRuntime:
         self.reset_args: tuple | None = None
         self.scenarios = SimpleNamespace(
             start=self.start,
-            check=lambda _session_id, manifest: ("report", manifest.scenario_id),
+            check=lambda _session_id, manifest, **_options: ("report", manifest.scenario_id),
             reset=self.reset,
             destroy=lambda _session_id: self.state.transition(SessionStatus.DESTROYING).transition(
                 SessionStatus.DESTROYED
@@ -89,6 +97,7 @@ def test_workspace_delegates_complete_learner_lifecycle(
         image_cache=tmp_path / "cache",
         runtime_root=tmp_path / "runtime",
         mock_exam_directory=root / "mock-exams",
+        curriculum=root / "curricula" / "lfcs-2026-08.yaml",
     )
     runtime = FakeRuntime(tmp_path, manifest.scenario_id)
     image = tmp_path / "base.qcow2"
@@ -105,6 +114,7 @@ def test_workspace_delegates_complete_learner_lifecycle(
     assert snapshots[0].state == runtime.state
     assert snapshots[0].machines == (runtime.machine,)
     assert workspace.session(SESSION_ID) == snapshots[0]
+    assert workspace.curriculum().curriculum_id == "lfcs-2026-08"
     assert workspace.progress() == ("progress",)  # type: ignore[comparison-overlap]
 
     assert workspace.start(manifest.scenario_id) == "started"  # type: ignore[comparison-overlap]
@@ -115,3 +125,88 @@ def test_workspace_delegates_complete_learner_lifecycle(
     assert runtime.reset_args is not None
     assert runtime.reset_args[0] == SESSION_ID
     assert workspace.destroy(SESSION_ID).status is SessionStatus.DESTROYED
+
+
+def test_the_catalog_is_reused_until_a_manifest_changes(tmp_path: Path) -> None:
+    import dataclasses
+    import shutil
+
+    root = Path(__file__).parents[2]
+    scenarios = tmp_path / "scenarios"
+    shutil.copytree(root / "scenarios", scenarios)
+    workspace = LabWorkspace(
+        dataclasses.replace(WorkspacePaths.under(root), scenario_directory=scenarios)
+    )
+    first = workspace.scenarios()
+    assert workspace.scenarios() is first  # nothing changed: no second parse
+
+    manifest = scenarios / "local-account-repair.yaml"
+    manifest.write_text(
+        manifest.read_text().replace("\ntitle: ", "\ntitle: Edited ", 1), encoding="utf-8"
+    )
+    edited = workspace.scenario("local-account-repair")
+    assert edited.title.startswith("Edited ")
+    assert workspace.scenarios() is not first
+
+    (scenarios / "local-account-repair.yaml").unlink()
+    with pytest.raises(CatalogError, match="scenario does not exist: local-account-repair"):
+        workspace.scenario("local-account-repair")
+
+
+def test_a_rehearsal_scores_checks_made_after_it_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).parents[2]
+    workspace = LabWorkspace(WorkspacePaths.under(root))
+    mock = workspace.mock_exam("lfcs-mock-a")
+    first, second = mock.tasks[:2]
+    versions = {scenario.scenario_id: scenario.version for scenario in workspace.scenarios()}
+
+    state = tmp_path / "state.db"
+    with (
+        SqliteMockRehearsalRepository(state) as rehearsals,
+        SqliteCheckAttemptRepository(state) as attempts,
+    ):
+        progress = ProgressService(attempts)
+        runtime = SimpleNamespace(rehearsals=rehearsals, progress=progress)
+        monkeypatch.setattr(
+            "sysadmin_lab.application.lab_workspace.open_vm_runtime",
+            lambda _root: nullcontext(runtime),
+        )
+        assert workspace.rehearsal("lfcs-mock-a") is None
+        started = workspace.start_rehearsal("lfcs-mock-a")
+
+        def check(scenario_id: str, minutes: int, earned: int, solved: bool) -> CheckAttempt:
+            return CheckAttempt(
+                uuid4(),
+                uuid4(),
+                scenario_id,
+                versions[scenario_id],
+                started + timedelta(minutes=minutes),
+                earned,
+                2,
+                solved,
+                False,
+            )
+
+        progress.record(check(first, -5, 2, True))  # solved before the rehearsal began
+        progress.record(check(first, 3, 2, True))
+        progress.record(check(second, 9, 1, False))
+        score = workspace.rehearsal("lfcs-mock-a")
+        assert score is not None
+        assert (score.solved, score.percent, score.passing_percent) == (1, 8, 67)  # 1.5 of 20
+        with pytest.raises(LookupError, match="mock exam does not exist"):
+            workspace.start_rehearsal("lfcs-mock-z")
+
+
+def test_nothing_is_provisioned_until_the_lab_image_is_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).parents[2]
+    paths = dataclasses.replace(WorkspacePaths.under(root), image_cache=tmp_path / "images")
+    monkeypatch.setattr(
+        "sysadmin_lab.application.lab_workspace.open_vm_runtime",
+        lambda _root: pytest.fail("provisioning began without an image"),
+    )
+    with pytest.raises(ImageBuildError, match="built image is missing; run labctl image build"):
+        LabWorkspace(paths).start("nfs-client-recovery")

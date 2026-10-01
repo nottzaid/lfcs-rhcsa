@@ -10,13 +10,14 @@ from sysadmin_lab.application.actions import ActionExecutionError
 from sysadmin_lab.application.checking import CheckReport, CheckResult
 from sysadmin_lab.application.ports import CheckObservation
 from sysadmin_lab.application.scenario_sessions import (
+    LearnerCheckReport,
     ScenarioLaunchError,
     ScenarioSessionService,
 )
 from sysadmin_lab.application.session_artifacts import GuestAccess
-from sysadmin_lab.application.vm_sessions import ProvisionedSession
+from sysadmin_lab.application.vm_sessions import MachineUnreachableError, ProvisionedSession
 from sysadmin_lab.domain.actions import ActionManifest
-from sysadmin_lab.domain.models import ScenarioManifest, ScenarioStatus
+from sysadmin_lab.domain.models import PersistenceSpec, ScenarioManifest, ScenarioStatus
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
@@ -90,6 +91,13 @@ class Machines:
 class VmSessions:
     provisioned: ProvisionedSession
     destroyed: list[UUID] = field(default_factory=list)
+    rebooted: list[tuple[str, ...]] = field(default_factory=list)
+    reboot_failure: Exception | None = None
+
+    def reboot(self, session_id: UUID, host_names: tuple[str, ...]) -> None:
+        self.rebooted.append(host_names)
+        if self.reboot_failure is not None:
+            raise self.reboot_failure
 
     def provision_many(self, **_kwargs: object) -> ProvisionedSession:
         return self.provisioned
@@ -223,7 +231,7 @@ def test_check_reset_and_destroy_delegate_with_scenario_identity(tmp_path: Path)
     spec = manifest()
     expected = report(spec, passed=False)
     scenario, vm, _actions, progress = service(tmp_path, [expected, expected])
-    assert scenario.check(SESSION_ID, spec) == expected
+    assert scenario.check(SESSION_ID, spec) == LearnerCheckReport(expected)
     assert len(progress.attempts) == 1
     assert progress.attempts[0].session_id == SESSION_ID
     reset = scenario.reset(SESSION_ID, spec, setup(), {"rocky-base": tmp_path / "base.qcow2"})
@@ -235,3 +243,72 @@ def test_check_reset_and_destroy_delegate_with_scenario_identity(tmp_path: Path)
     wrong = spec.model_copy(update={"scenario_id": "wrong-scenario"})
     with pytest.raises(ScenarioLaunchError, match="session runs"):
         scenario.reset(SESSION_ID, wrong, setup(), {})
+
+
+def persistent_manifest() -> ScenarioManifest:
+    return manifest().model_copy(
+        update={"persistence": PersistenceSpec(reboot=True, hosts=("node1",))}
+    )
+
+
+def test_check_does_not_reboot_while_the_live_state_fails(tmp_path: Path) -> None:
+    spec = persistent_manifest()
+    scenario, vm, _actions, progress = service(tmp_path, [report(spec, passed=False)])
+
+    result = scenario.check(SESSION_ID, spec)
+
+    assert vm.rebooted == []
+    assert result.reboot_hosts == ("node1",)
+    assert not result.solved
+    assert not progress.attempts[0].required_passed
+
+
+def test_check_proves_persistence_by_rebooting_once_the_live_state_passes(
+    tmp_path: Path,
+) -> None:
+    spec = persistent_manifest()
+    scenario, vm, _actions, progress = service(
+        tmp_path, [report(spec, passed=True), report(spec, passed=True)]
+    )
+
+    result = scenario.check(SESSION_ID, spec)
+
+    assert vm.rebooted == [("node1",)]
+    assert result.after_reboot is not None
+    assert result.solved
+    assert progress.attempts[0].required_passed
+
+
+def test_state_lost_on_reboot_is_not_solved(tmp_path: Path) -> None:
+    spec = persistent_manifest()
+    scenario, _vm, _actions, progress = service(
+        tmp_path, [report(spec, passed=True), report(spec, passed=False)]
+    )
+
+    result = scenario.check(SESSION_ID, spec)
+
+    assert result.live_passed and not result.solved
+    assert progress.attempts[0].earned_weight == 0
+
+
+def test_unbootable_host_is_reported_to_the_learner(tmp_path: Path) -> None:
+    spec = persistent_manifest()
+    scenario, vm, _actions, progress = service(tmp_path, [report(spec, passed=True)])
+    vm.reboot_failure = MachineUnreachableError("node1", "no SSH")
+
+    result = scenario.check(SESSION_ID, spec)
+
+    assert result.unreachable_host == "node1"
+    assert not result.solved
+    assert progress.attempts[0].earned_weight == 0
+
+
+def test_skipping_the_reboot_never_counts_as_solved(tmp_path: Path) -> None:
+    spec = persistent_manifest()
+    scenario, vm, _actions, progress = service(tmp_path, [report(spec, passed=True)])
+
+    result = scenario.check(SESSION_ID, spec, prove_persistence=False)
+
+    assert vm.rebooted == []
+    assert result.live_passed and not result.solved
+    assert not progress.attempts[0].required_passed

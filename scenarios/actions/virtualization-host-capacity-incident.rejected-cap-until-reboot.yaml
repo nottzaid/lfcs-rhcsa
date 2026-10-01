@@ -1,0 +1,24 @@
+schema_version: 1
+actions:
+  - action_id: cap-the-batch-job-for-now
+    target: node2
+    arguments: [sudo, --, systemctl, set-property, --runtime, lal-reindex.service, CPUQuota=50%]
+  - action_id: move-the-host-onto-a-bridge
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type bridge ifname br-lab con-name br-lab bridge.stp no \
+          ipv4.method manual ipv4.addresses 10.88.0.20/24 ipv6.method disabled
+        nmcli connection add type ethernet ifname lab0 con-name br-lab-port controller br-lab port-type bridge
+        nmcli connection delete lab
+        nmcli connection up br-lab
+        nmcli connection up br-lab-port
+        virt-xml lal-utility --edit --network bridge=br-lab >/dev/null
+        virsh destroy lal-utility >/dev/null
+        virsh start lal-utility >/dev/null
+        virsh autostart lal-utility >/dev/null

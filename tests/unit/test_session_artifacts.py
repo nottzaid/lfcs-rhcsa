@@ -10,6 +10,7 @@ import yaml
 
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder
 from sysadmin_lab.domain.models import DiskSpec
+from sysadmin_lab.domain.virtual_machines import ScenarioInterface
 
 SESSION_ID = UUID("10000000-0000-0000-0000-000000000001")
 
@@ -60,6 +61,8 @@ def test_builder_creates_overlay_seed_and_access_details(tmp_path: Path) -> None
     parsed = yaml.safe_load(user_data)
     assert parsed["hostname"] == "lal-node1"
     assert parsed["users"][1]["plain_text_passwd"] == access.password
+    # Only the guest's own name is managed; scenario edits to /etc/hosts must survive boots.
+    assert parsed["manage_etc_hosts"] == "localhost"
 
 
 def test_builder_reuses_key_but_never_existing_session(tmp_path: Path) -> None:
@@ -117,3 +120,27 @@ def test_builder_rejects_unsafe_inputs_and_destroy_is_exact(tmp_path: Path) -> N
     builder.destroy(SESSION_ID, "node1")
     assert not paths.directory.exists()
     assert sibling.exists()
+
+
+def test_scenario_interfaces_are_named_by_mac_and_left_to_the_learner(tmp_path: Path) -> None:
+    runner = FakeRunner()
+    builder = SessionArtifactBuilder(tmp_path / "runtime", runner)
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    lan = ScenarioInterface("lan0", "lal-branch-10000000-net-lan", "52:54:00:12:34:56")
+
+    paths, _access = builder.create(
+        session_id=SESSION_ID, role="router", hostname="router", base_image=base, interfaces=(lan,)
+    )
+
+    parsed = yaml.safe_load((paths.seed_source / "user-data").read_text(encoding="utf-8"))
+    files = {item["path"]: item["content"] for item in parsed["write_files"]}
+    assert files["/etc/systemd/network/70-lal-lan0.link"] == (
+        "[Match]\nMACAddress=52:54:00:12:34:56\n\n[Link]\nName=lan0\n"
+    )
+    assert files["/etc/NetworkManager/conf.d/70-lal-scenario-interfaces.conf"] == (
+        "[main]\nno-auto-default=mac:52:54:00:12:34:56\n"
+    )
+    assert files["/etc/linux-admin-lab/interfaces"] == "52:54:00:12:34:56 lan0\n"
+    assert parsed["runcmd"][0][:2] == ["sh", "-c"]
+    assert parsed["hostname"] == "router"

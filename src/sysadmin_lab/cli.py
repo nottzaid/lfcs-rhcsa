@@ -9,7 +9,19 @@ from uuid import UUID
 
 import typer
 
+from sysadmin_lab.adapters.sqlite_sessions import SqliteSessionRepository
 from sysadmin_lab.application.checking import CheckReport
+from sysadmin_lab.application.doctor import (
+    Severity,
+    firewall_finding,
+    image_finding,
+    kvm_finding,
+    libvirt_findings,
+    nested_finding,
+    session_finding,
+    tool_findings,
+    unit_is_active,
+)
 from sysadmin_lab.application.image_acquisition import HttpsDownloader, ImageAcquirer
 from sysadmin_lab.application.image_building import (
     ImageBuildError,
@@ -17,8 +29,8 @@ from sysadmin_lab.application.image_building import (
     SubprocessBuildRunner,
     resolve_built_image,
 )
-from sysadmin_lab.application.scenario_sessions import StartedScenario
-from sysadmin_lab.application.verification import ScenarioVerifier
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
+from sysadmin_lab.application.verification import PhaseResult, ScenarioVerifier
 from sysadmin_lab.application.vm_verification import VmScenarioDriver
 from sysadmin_lab.catalog import (
     CatalogError,
@@ -31,6 +43,7 @@ from sysadmin_lab.composition import open_vm_runtime
 from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.images import ImageVerificationError, verify_installation_source
 from sysadmin_lab.domain.models import ScenarioManifest
+from sysadmin_lab.domain.sessions import SessionStatus
 
 app = typer.Typer(help="Operate and verify the local Linux administration lab.")
 catalog_app = typer.Typer(help="Inspect and validate scenario catalogs.")
@@ -56,12 +69,8 @@ def _ensure_default_image(root: Path) -> Path:
         source = ImageAcquirer(HttpsDownloader()).acquire(
             manifest, root / "runtime" / "cache" / "isos"
         )
-        return KickstartImageBuilder(SubprocessBuildRunner()).build(
-            manifest,
-            manifest_path,
-            source,
-            image_cache,
-        ).artifact
+        builder = KickstartImageBuilder(SubprocessBuildRunner())
+        return builder.build(manifest, manifest_path, source, image_cache).artifact
 
 
 def _loopback_port_available(host: str, port: int) -> bool:
@@ -120,6 +129,50 @@ def up(
         opener.daemon = True
         opener.start()
     uvicorn.run(create_app(root), host=host, port=port, log_level="info")
+
+
+@app.command("doctor")
+def doctor(
+    project_root: Annotated[Path, typer.Option(file_okay=False)] = Path("."),
+) -> None:
+    """Check this host for everything the lab needs, without changing anything."""
+    root = project_root.resolve()
+    manifest_path = root / "images" / "rocky-10.2" / "iso-manifest.yaml"
+    runtime_root = root / "runtime"
+
+    def open_libvirt() -> object:
+        import libvirt  # type: ignore[import-untyped]
+
+        return libvirt.open("qemu:///system")  # raises libvirtError when it cannot connect
+
+    def built_image() -> Path:
+        manifest = load_image_manifest(manifest_path)
+        images = runtime_root / "cache" / "images"
+        return resolve_built_image(manifest, manifest_path, images).artifact
+
+    findings = [
+        kvm_finding(),
+        nested_finding(),
+        *tool_findings(),
+        *libvirt_findings(open_libvirt, runtime_root),
+        firewall_finding(unit_is_active),
+        image_finding(built_image),
+    ]
+    state_path = runtime_root / "state" / "lab.db"
+    if state_path.exists():
+        with SqliteSessionRepository(state_path) as sessions:
+            findings.append(
+                session_finding(
+                    (str(state.session_id), state.status.value, state.scenario_id)
+                    for state in sessions.list_all(limit=1000)
+                )
+            )
+    for finding in findings:
+        typer.echo(f"{finding.severity.value:<4}  {finding.subject}: {finding.detail}")
+        if finding.fix and finding.severity is not Severity.OK:
+            typer.echo(f"      fix: {finding.fix}")
+    if any(finding.severity is Severity.FAIL for finding in findings):
+        raise typer.Exit(code=1)
 
 
 @catalog_app.command("validate")
@@ -296,13 +349,27 @@ def _scenario_launch_inputs(
 
 
 def _show_started(started: StartedScenario) -> None:
-    machine = started.provisioned.machine
     typer.echo(f"session: {started.provisioned.state.session_id}")
-    typer.echo(f"domain: {machine.identity.name}")
-    typer.echo(f"address: {machine.address}")
-    typer.echo(f"console username: {machine.username}")
-    typer.echo(f"console password: {machine.password}")
-    typer.echo(f"ssh: ssh -i {machine.private_key} {machine.username}@{machine.address}")
+    for machine in started.provisioned.machines:
+        typer.echo(f"{machine.host_name}:")
+        typer.echo(f"  domain: {machine.identity.name}")
+        typer.echo(f"  address: {machine.address}")
+        typer.echo(f"  console username: {machine.username}")
+        typer.echo(f"  console password: {machine.password}")
+        typer.echo(f"  ssh: ssh -i {machine.private_key} {machine.username}@{machine.address}")
+
+
+def _show_brief(manifest: ScenarioManifest) -> None:
+    typer.echo("")
+    typer.echo(manifest.task.strip())
+    if manifest.requirements:
+        typer.echo("")
+        typer.echo("Done means:")
+        for requirement in manifest.requirements:
+            typer.echo(f"  - {requirement}")
+    if manifest.reboot_hosts:
+        hosts = ", ".join(manifest.reboot_hosts)
+        typer.echo(f"Once the live state passes, the check reboots {hosts} to prove persistence.")
 
 
 def _show_report(report: CheckReport) -> None:
@@ -310,8 +377,28 @@ def _show_report(report: CheckReport) -> None:
         status = (
             "ERROR" if result.observation.error else "PASS" if result.observation.passed else "FAIL"
         )
-        typer.echo(f"{status} {result.check.check_id}: {result.observation.message}")
+        typer.echo(f"{status} {result.check.description} ({result.observation.message})")
     typer.echo(f"score: {report.earned_weight}/{report.available_weight}")
+
+
+def _show_learner_report(report: LearnerCheckReport) -> None:
+    hosts = ", ".join(report.reboot_hosts)
+    if report.reboot_hosts:
+        typer.echo("live state:")
+    _show_report(report.live)
+    if report.unreachable_host:
+        typer.echo(
+            f"{report.unreachable_host} did not come back over SSH after rebooting. Open its "
+            "console in virt-manager to see why it cannot finish booting."
+        )
+    elif report.after_reboot is not None:
+        typer.echo(f"after rebooting {hosts}:")
+        _show_report(report.after_reboot)
+    elif report.reboot_hosts and report.live_passed:
+        typer.echo(f"persistence not proven: rerun without --skip-reboot to reboot {hosts}")
+    elif report.reboot_hosts:
+        typer.echo(f"once the live state passes, the check reboots {hosts} to prove persistence")
+    typer.echo("solved" if report.solved else "not solved yet")
 
 
 @scenario_app.command("start")
@@ -335,12 +422,19 @@ def start_scenario(
         typer.echo(f"scenario start failed: {exc}", err=True)
         raise typer.Exit(code=1) from exc
     _show_started(started)
-    typer.echo(f"task: {manifest.task}")
+    _show_brief(manifest)
 
 
 @scenario_app.command("check")
 def check_scenario(
     session_id: UUID,
+    prove_persistence: Annotated[
+        bool,
+        typer.Option(
+            "--prove-persistence/--skip-reboot",
+            help="Reboot the scenario's persistence hosts once the live state passes.",
+        ),
+    ] = True,
     scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
     runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
 ) -> None:
@@ -349,13 +443,41 @@ def check_scenario(
         with open_vm_runtime(runtime_root) as runtime:
             state = runtime.sessions.get(session_id)
             manifest = find_scenario(scenario_directory, state.scenario_id)
-            report = runtime.scenarios.check(session_id, manifest)
+            report = runtime.scenarios.check(
+                session_id, manifest, prove_persistence=prove_persistence
+            )
     except Exception as exc:
         typer.echo(f"scenario check failed: {exc}", err=True)
         raise typer.Exit(code=2) from exc
-    _show_report(report)
-    if report.has_errors or not report.required_passed:
+    _show_learner_report(report)
+    if not report.solved:
         raise typer.Exit(code=1)
+
+
+@scenario_app.command("list")
+def list_scenarios(
+    include_destroyed: Annotated[
+        bool, typer.Option("--all", help="Include sessions that were already destroyed.")
+    ] = False,
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
+) -> None:
+    """List scenario sessions, for example to find ones a crash left behind."""
+    try:
+        with open_vm_runtime(runtime_root) as runtime:
+            sessions = [
+                (state, runtime.machines.list(state.session_id))
+                for state in runtime.sessions.list_all(limit=1000)
+                if include_destroyed or state.status is not SessionStatus.DESTROYED
+            ]
+    except Exception as exc:
+        typer.echo(f"scenario list failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not sessions:
+        typer.echo("no scenario sessions")
+        return
+    for state, machines in sessions:
+        hosts = ",".join(machine.host_name for machine in machines) or "-"
+        typer.echo(f"{state.session_id}  {state.status.value:<10}  {state.scenario_id}  {hosts}")
 
 
 @scenario_app.command("status")
@@ -410,6 +532,16 @@ def destroy_scenario(
     typer.echo(f"scenario session {state.session_id}: {state.status.value}")
 
 
+def _phase_outcome(phase: PhaseResult) -> str:
+    if phase.errored:
+        return "a check errored"
+    if phase.expected is None:
+        return "live state passes; the reboot must expose it"
+    if phase.expected:
+        return "checks pass" if phase.passed else "checks should pass but fail"
+    return "checks fail as designed" if not phase.passed else "checks should fail but pass"
+
+
 @scenario_app.command("verify")
 def verify_scenario(
     scenario_id: str,
@@ -441,15 +573,12 @@ def verify_scenario(
         typer.echo(f"scenario verification failed: {exc}", err=True)
         raise typer.Exit(code=2) from exc
     for phase in report.phases:
-        expects_broken = phase.phase.value in {"initial", "reset"}
-        accepted = phase.passed is not expects_broken
-        status = "PASS" if accepted else "FAIL"
-        outcome = "checks fail as designed" if expects_broken else "checks pass"
+        status = "PASS" if phase.accepted else "FAIL"
         solution = f" ({phase.solution})" if phase.solution else ""
-        typer.echo(f"{status} {phase.phase.value}{solution}: {outcome}")
-        if not accepted:
+        typer.echo(f"{status} {phase.phase.value}{solution}: {_phase_outcome(phase)}")
+        if not phase.accepted:
             for observation in phase.observations:
-                if not observation.passed or observation.error:
+                if observation.error or (phase.expected and not observation.passed):
                     marker = "ERROR" if observation.error else "CHECK"
                     typer.echo(f"  {marker} {observation.check_id}: {observation.message}")
     if not report.passed:

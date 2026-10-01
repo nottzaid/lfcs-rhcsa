@@ -1,16 +1,20 @@
 schema_version: 1
 actions:
-  - action_id: install-deployment-client-key
-    target: node1
+  - action_id: prepare-the-deploy-runner
+    target: runner
     arguments:
       - sudo
       - --
       - bash
       - -c
       - |
-        id deploy >/dev/null 2>&1 || useradd --create-home deploy
+        set -euo pipefail
+        nmcli connection add type ethernet ifname deploy0 con-name deploy ipv4.method manual \
+          ipv4.addresses 10.15.0.10/24 ipv6.method disabled >/dev/null
+        nmcli connection up deploy >/dev/null
+        useradd --create-home deploy
         install -d -o deploy -g deploy -m 0700 /home/deploy/.ssh
-        cat > /home/deploy/.ssh/lal_deploy <<'EOF'
+        cat > /home/deploy/.ssh/lal_deploy <<'KEY'
         -----BEGIN OPENSSH PRIVATE KEY-----
         b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
         QyNTUxOQAAACD9/k+S4/Md8/gwJF8MtjZ+AdTlwY8fbpL/+PX9GJpw1gAAAJhjRknUY0ZJ
@@ -18,13 +22,20 @@ actions:
         AAAECIvTeEuZuZ4aHJt+GkggofWKEOEWvyym/151itTnjE6v3+T5Lj8x3z+DAkXwy2Nn4B
         1OXBjx9ukv/49f0YmnDWAAAAEmxhbC1kZXBsb3ktZml4dHVyZQECAw==
         -----END OPENSSH PRIVATE KEY-----
-        EOF
-        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW lal-deploy-fixture\n' > /home/deploy/.ssh/lal_deploy.pub
-        chown deploy:deploy /home/deploy/.ssh/lal_deploy*
-        chmod 0600 /home/deploy/.ssh/lal_deploy
-        chmod 0644 /home/deploy/.ssh/lal_deploy.pub
-        rm -f /home/deploy/.ssh/config /home/deploy/.ssh/known_hosts
-  - action_id: install-stale-ssh-server-policy
+        KEY
+        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW lal-deploy\n' \
+          > /home/deploy/.ssh/lal_deploy.pub
+        cat > /home/deploy/.ssh/config <<'CONFIG'
+        # Deployment target used by the pipeline.
+        Host app-node
+            HostName 10.15.0.20
+            User deploy
+            IdentityFile ~/.ssh/lal_deploy
+            IdentitiesOnly yes
+        CONFIG
+        chown deploy:deploy /home/deploy/.ssh/*
+        chmod 0600 /home/deploy/.ssh/lal_deploy /home/deploy/.ssh/config
+  - action_id: harden-node2-for-deployments
     target: node2
     arguments:
       - sudo
@@ -32,13 +43,29 @@ actions:
       - bash
       - -c
       - |
-        getent group opsssh >/dev/null || groupadd opsssh
-        id deploy >/dev/null 2>&1 || useradd --create-home deploy
-        gpasswd -d deploy opsssh >/dev/null 2>&1 || true
+        set -euo pipefail
+        nmcli connection add type ethernet ifname deploy0 con-name deploy ipv4.method manual \
+          ipv4.addresses 10.15.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up deploy >/dev/null
+        groupadd opsssh
+        useradd --create-home --groups opsssh deploy
         install -d -o deploy -g deploy -m 0700 /home/deploy/.ssh
-        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIBadKeyForInitialStateOnly rejected\n' > /home/deploy/.ssh/authorized_keys
+        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW lal-deploy\n' \
+          > /home/deploy/.ssh/authorized_keys
         chown deploy:deploy /home/deploy/.ssh/authorized_keys
         chmod 0600 /home/deploy/.ssh/authorized_keys
-        rm -f /etc/ssh/sshd_config.d/60-lal-policy.conf /etc/ssh/sshd_config.d/99-deployment.conf
-        semanage port -d -t ssh_port_t -p tcp 2222 >/dev/null 2>&1 || true
-        systemctl restart sshd
+        # Someone shared the deploy home with the deploy group, so releases could be dropped in.
+        install -d -o deploy -g deploy /home/deploy/releases
+        chmod 2775 /home/deploy /home/deploy/releases
+        cat > /etc/ssh/sshd_config.d/40-deployment-port.conf <<'SSHD'
+        # Security policy SEC-114: administrators use port 22, deployments use port 2222.
+        Port 22
+        Port 2222
+
+        Match LocalPort 22
+            AllowGroups wheel
+
+        Match LocalPort 2222
+            AllowGroups opsssh
+        SSHD
+        systemctl restart sshd.service

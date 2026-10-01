@@ -14,7 +14,12 @@ firstboot --disable
 
 selinux --enforcing
 firewall --enabled --service=ssh
-services --enabled=sshd,qemu-guest-agent,NetworkManager,firewalld,chronyd,cloud-init-local,cloud-init,cloud-config,cloud-final
+services --enabled=sshd,qemu-guest-agent,NetworkManager,firewalld,chronyd,cloud-init-local,cloud-init,cloud-config,cloud-final --disabled=kdump
+
+# Crash dumps are never collected in a disposable lab. Building the kdump initramfs cost
+# about a minute of every first boot, and the crash kernel reservation wastes guest memory.
+%addon com_redhat_kdump --disable
+%end
 
 zerombr
 clearpart --all --initlabel
@@ -30,8 +35,10 @@ NetworkManager
 acl
 at
 autofs
+bash-completion
 bind-utils
 chrony
+cifs-utils
 cloud-init
 cloud-utils-growpart
 createrepo_c
@@ -41,6 +48,7 @@ e2fsprogs
 firewalld
 git-core
 haproxy
+iotop-c
 iproute
 iscsi-initiator-utils
 libvirt-client
@@ -48,6 +56,8 @@ libvirt-daemon-config-network
 libvirt-daemon-kvm
 lsof
 lvm2
+man-pages
+nano
 nginx
 nfs-utils
 nftables
@@ -58,22 +68,30 @@ openssl
 perf
 podman
 policycoreutils-python-utils
+psmisc
 python3
 qemu-guest-agent
 qemu-kvm
-rsync
 rpm-build
+rpm-sign
+rsync
 setools-console
+setroubleshoot-server
+socat
 sssd
 sssd-tools
+strace
 stress-ng
 sudo
 sysstat
 targetcli
 tcpdump
+tmux
 traceroute
 tuned
+vim-enhanced
 virt-install
+wget
 xfsprogs
 %end
 
@@ -88,6 +106,9 @@ cat > /etc/ssh/sshd_config.d/10-linux-admin-lab.conf <<'EOF'
 PasswordAuthentication no
 PermitRootLogin no
 EOF
+
+# Index manual pages now so `man -k` works from the first login.
+mandb --quiet
 
 dnf clean all
 cloud-init clean --logs --machine-id --seed

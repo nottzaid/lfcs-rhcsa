@@ -1,18 +1,40 @@
 schema_version: 1
 actions:
-  - action_id: mount-runtime-cache
-    target: node2
-    arguments: [sudo, --, mount, -t, tmpfs, -o, "size=65536k,mode=750", tmpfs, /run/lal-cache]
-  - action_id: mount-current-release
-    target: node2
-    arguments: [sudo, --, mount, --bind, /srv/releases/current, /opt/app/current]
-  - action_id: persist-mounts
+  - action_id: write-systemd-mount-units
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        printf '%s\n' 'tmpfs /run/lal-cache tmpfs rw,nosuid,nodev,size=64M,mode=0750 0 0'
-        '/srv/releases/current /opt/app/current none defaults,bind 0 0' >> /etc/fstab
+      - |
+        set -euo pipefail
+        cat > '/etc/systemd/system/run-lal\x2dcache.mount' <<'EOF'
+        [Unit]
+        Description=Private cache for the web application
+
+        [Mount]
+        What=tmpfs
+        Where=/run/lal-cache
+        Type=tmpfs
+        Options=mode=0750,uid=lalapp,gid=lalapp,size=65536k
+
+        [Install]
+        WantedBy=local-fs.target
+        EOF
+        cat > /etc/systemd/system/opt-app-current.mount <<'EOF'
+        [Unit]
+        Description=Read-only view of the current release
+
+        [Mount]
+        What=/srv/releases/current
+        Where=/opt/app/current
+        Type=none
+        Options=bind,ro
+
+        [Install]
+        WantedBy=local-fs.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable --now 'run-lal\x2dcache.mount' opt-app-current.mount
+        systemctl restart lal-webapp.service

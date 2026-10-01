@@ -1,6 +1,9 @@
 schema_version: 1
 actions:
-  - action_id: repair-time-and-virtual-filesystems
+  - action_id: point-the-automounter-at-node1
+    target: node2
+    arguments: [sudo, --, bash, -c, "sed -i 's/files\\.old\\.invalid:/10.80.0.1:/' /etc/auto.data && systemctl enable --now autofs.service"]
+  - action_id: give-the-scratch-tmpfs-its-96-mib
     target: node2
     arguments:
       - sudo
@@ -8,43 +11,32 @@ actions:
       - bash
       - -c
       - |
-        cat > /etc/chrony.conf <<'EOF'
-        server {{host.node1.address}} iburst
-        driftfile /var/lib/chrony/drift
-        makestep 1.0 3
-        rtcsync
-        logdir /var/log/chrony
-        EOF
-        systemctl enable chronyd.service
+        set -euo pipefail
+        sed -i 's#^tmpfs /run/lal-data-cache tmpfs size=96,#tmpfs /run/lal-data-cache tmpfs size=96M,#' /etc/fstab
+        systemctl daemon-reload
+        mount -o remount /run/lal-data-cache
+  - action_id: make-the-new-disk-the-priority-swap
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkswap -q -L LAL_REMOTE_SWAP /dev/disk/by-id/virtio-lal-remoteswap
+        sed -i 's#^UUID=5d1b7c1e-0f3a-4c55-9a0e-2f6c1b7a9e44 none swap#LABEL=LAL_REMOTE_SWAP none swap#' /etc/fstab
+        systemctl daemon-reload
+        swapon -a
+  - action_id: follow-the-site-time-server
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i 's/^server ntp\.old\.invalid iburst$/server 10.80.0.1 iburst/' /etc/chrony.conf
         systemctl restart chronyd.service
-        chronyc waitsync 30 0.5
-        sed -i '\#/run/lal-data-cache#d' /etc/fstab
-        printf 'tmpfs /run/lal-data-cache tmpfs size=96M,mode=0750 0 0\n' >> /etc/fstab
-        mount /run/lal-data-cache
-  - action_id: configure-priority-swap
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - |
-        disk=/dev/disk/by-id/virtio-lal-remoteswap
-        mkswap -L LAL_REMOTE_SWAP "$disk"
-        uuid=$(blkid -s UUID -o value "$disk")
-        printf 'UUID=%s none swap pri=50 0 0\n' "$uuid" >> /etc/fstab
-        swapon --priority 50 "$disk"
-  - action_id: configure-project-automount
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - |
-        install -d /etc/auto.master.d
-        printf '/data /etc/auto.lal-data --timeout=60\n' > /etc/auto.master.d/lal-data.autofs
-        printf 'projects -fstype=nfs4,ro {{host.node1.address}}:/srv/lal-data/projects\n' > /etc/auto.lal-data
-        systemctl enable --now autofs.service
-        systemctl restart autofs.service
-        cat /data/projects/status.txt
+        chronyc waitsync 30 0.5 0 1 >/dev/null

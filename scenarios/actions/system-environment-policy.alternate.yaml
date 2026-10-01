@@ -1,25 +1,24 @@
 schema_version: 1
 actions:
-  - action_id: replace-drifting-shared-profile
+  - action_id: replace-the-profile-using-pathmunge
     target: node2
     arguments:
       - sudo
       - --
-      - sh
+      - bash
       - -c
-      - >-
-        rm -f /etc/profile.d/lal-operations.sh &&
-        printf '%s\n' 'EDITOR=/usr/bin/vi' 'export EDITOR'
-        'case "$PATH" in' '    /opt/lal/bin|/opt/lal/bin:*|*:/opt/lal/bin|*:/opt/lal/bin:*) ;;'
-        '    *) PATH="/opt/lal/bin:$PATH" ;;' 'esac' 'export PATH'
-        > /etc/profile.d/zz-lal-operations.sh &&
-        chmod 0644 /etc/profile.d/zz-lal-operations.sh
-  - action_id: edit-personal-setting
+      - |
+        rm /etc/profile.d/lal-operations.sh
+        printf '%s\n' '# Operations team defaults' 'pathmunge /opt/lal/bin' \
+          'EDITOR=/usr/bin/vi' 'export EDITOR' > /etc/profile.d/operations.sh
+        chmod 0644 /etc/profile.d/operations.sh
+  - action_id: move-the-preference-into-bashrc
     target: node2
     arguments:
       - sudo
       - --
-      - sed
-      - --in-place
-      - s/REPORT_FORMAT=verbose/REPORT_FORMAT=compact/
-      - /home/opsanalyst/.bash_profile
+      - bash
+      - -c
+      - |
+        sed -i '/REPORT_FORMAT=/d' /home/opsanalyst/.bash_profile
+        printf 'REPORT_FORMAT=compact\nexport REPORT_FORMAT\n' >> /home/opsanalyst/.bashrc

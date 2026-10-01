@@ -10,14 +10,15 @@ from fastapi.testclient import TestClient
 from sysadmin_lab.application.checking import CheckReport, CheckResult
 from sysadmin_lab.application.lab_workspace import ScenarioSessionSnapshot
 from sysadmin_lab.application.ports import CheckObservation
-from sysadmin_lab.application.scenario_sessions import StartedScenario
-from sysadmin_lab.catalog import load_catalog
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
+from sysadmin_lab.catalog import load_catalog, load_curriculum_manifest
+from sysadmin_lab.domain.curricula import CurriculumManifest
 from sysadmin_lab.domain.models import ScenarioStatus
 from sysadmin_lab.domain.progress import ScenarioProgress
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
-from sysadmin_lab.web import create_app
+from sysadmin_lab.web import create_app, render_markdown
 
 SESSION_ID = UUID("10000000-0000-0000-0000-000000000001")
 RESET_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -64,6 +65,11 @@ class FakeWorkspace:
             raise LookupError("scenario does not exist")
         return self.manifest
 
+    def curriculum(self) -> CurriculumManifest:
+        return load_curriculum_manifest(
+            Path(__file__).parents[2] / "curricula" / "lfcs-2026-08.yaml"
+        )
+
     def mock_exams(self) -> tuple:
         return ()
 
@@ -88,9 +94,9 @@ class FakeWorkspace:
             self.report,
         )
 
-    def check(self, session_id: UUID) -> CheckReport:
+    def check(self, session_id: UUID) -> LearnerCheckReport:
         self.session(session_id)
-        return self.report
+        return LearnerCheckReport(self.report)
 
     def reset(self, session_id: UUID) -> StartedScenario:
         self.session(session_id)
@@ -130,14 +136,17 @@ def test_lfcs_topic_and_scenario_pages_expose_hands_on_loop(tmp_path: Path) -> N
         assert "LFCS" in catalog.text
         assert workspace.manifest.title in catalog.text
         assert f"{workspace.manifest.estimated_minutes} min" in catalog.text
-        assert "Times are advisory estimates" in catalog.text
+        assert "Times are estimates, never deadlines" in catalog.text
         assert "No limit" not in catalog.text
         assert "Info" in catalog.text and "Run" in catalog.text
-        assert "Active" in catalog.text
+        assert "Running" in catalog.text
+        assert "0 of 1 solved" in catalog.text
         assert catalog.headers["cache-control"] == "no-store"
 
         detail = client.get(f"/scenarios/{workspace.manifest.scenario_id}")
-        assert workspace.manifest.task.split(".", maxsplit=1)[0] in detail.text
+        assert render_markdown(workspace.manifest.task) in detail.text
+        for requirement in workspace.manifest.requirements:
+            assert render_markdown(requirement) in detail.text
         assert "Launch scenario" in detail.text
         assert workspace.manifest.topology.hosts[0].name in detail.text
 
@@ -161,8 +170,9 @@ def test_session_page_and_api_show_connection_and_state_grading(tmp_path: Path) 
         assert accepted.status_code == 202
         completed = wait_for_job(client, accepted.json()["job_id"])
         assert completed["status"] == "succeeded"
-        assert completed["result"]["required_passed"] is True
-        assert completed["result"]["results"][0]["message"] == "matched"
+        assert completed["result"]["solved"] is True
+        assert completed["result"]["after_reboot"] is None
+        assert completed["result"]["live"]["results"][0]["message"] == "matched"
 
 
 def test_start_reset_destroy_jobs_return_browser_destinations(tmp_path: Path) -> None:
@@ -215,3 +225,84 @@ def test_topic_page_prefers_durable_solved_progress_over_active_state(tmp_path: 
         progress = client.get("/api/progress").json()[0]
         assert progress["solved"] is True
         assert progress["attempts"] == 3
+
+
+def test_json_api_exposes_released_scenarios_sessions_and_progress(tmp_path: Path) -> None:
+    workspace = FakeWorkspace(tmp_path)
+    with TestClient(create_app(workspace=workspace)) as client:  # type: ignore[arg-type]
+        scenarios = client.get("/api/scenarios").json()
+        assert [item["scenario_id"] for item in scenarios] == [workspace.manifest.scenario_id]
+        detail = client.get(f"/api/scenarios/{workspace.manifest.scenario_id}").json()
+        assert detail["hosts"][0]["name"] == workspace.manifest.topology.hosts[0].name
+
+        sessions = client.get("/api/sessions").json()
+        assert sessions[0]["machines"][0]["ssh_command"].endswith("labadmin@192.0.2.10")
+        session = client.get(f"/api/sessions/{SESSION_ID}").json()
+        assert session["status"] == "ready"
+        assert client.get("/api/progress").json() == []
+        assert client.get("/mocks/missing").status_code == 404
+
+
+def test_session_page_offers_hints_and_gates_the_debrief_until_solved(tmp_path: Path) -> None:
+    workspace = FakeWorkspace(tmp_path)
+    workspace.manifest = workspace.manifest.model_copy(
+        update={
+            "task": "The service is down. <script>alert(1)</script>",
+            "requirements": ("`lal-api.service` is **active**",),
+            "hints": ("Read `journalctl -u lal-api`.", "Look at `ProtectSystem=`."),
+            "debrief": "The unit could not write its **state directory**.",
+        }
+    )
+    with TestClient(create_app(workspace=workspace)) as client:  # type: ignore[arg-type]
+        page = client.get(f"/sessions/{SESSION_ID}").text
+        assert "<script>alert(1)</script>" not in page
+        assert "&lt;script&gt;" in page
+        assert "<code>lal-api.service</code> is <strong>active</strong>" in page
+        assert "Show hint 1 of 2" in page
+        assert "<code>journalctl -u lal-api</code>" in page
+        assert 'id="debrief" hidden' in page
+        assert "Show the debrief" in page
+
+        workspace.progress_value = (
+            ScenarioProgress(
+                scenario_id=workspace.manifest.scenario_id,
+                scenario_version=workspace.manifest.version,
+                attempts=1,
+                solved=True,
+                best_earned_weight=1,
+                best_available_weight=1,
+                last_checked_at=datetime(2026, 9, 30, tzinfo=UTC),
+            ),
+        )
+        solved = client.get(f"/sessions/{SESSION_ID}").text
+        assert 'id="debrief" hidden' not in solved
+        assert "Show the debrief" not in solved
+
+
+def test_a_second_check_while_one_runs_joins_the_running_job(tmp_path: Path) -> None:
+    import threading
+
+    from sysadmin_lab.application.background_jobs import BackgroundJobQueue
+
+    release = threading.Event()
+
+    class SlowWorkspace(FakeWorkspace):
+        def check(self, session_id: UUID) -> LearnerCheckReport:
+            release.wait(timeout=10)
+            return super().check(session_id)
+
+    jobs = BackgroundJobQueue()  # supplied by the caller, so the app must not close it
+    try:
+        with TestClient(create_app(workspace=SlowWorkspace(tmp_path), jobs=jobs)) as client:  # type: ignore[arg-type]
+            headers = {"X-Lab-Request": "browser"}
+            first = client.post(f"/api/sessions/{SESSION_ID}/check", headers=headers)
+            assert first.status_code == 202
+            second = client.post(f"/api/sessions/{SESSION_ID}/check", headers=headers)
+            assert second.status_code == 409
+            assert second.json()["job_id"] == first.json()["job_id"]
+            release.set()
+            assert wait_for_job(client, first.json()["job_id"])["status"] == "succeeded"
+        assert jobs.submit(kind="later", resource_key="other", operation=dict).status.value
+    finally:
+        release.set()
+        jobs.close()

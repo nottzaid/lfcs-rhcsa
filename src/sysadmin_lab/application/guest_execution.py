@@ -125,3 +125,20 @@ class GuestReadiness:
             interval_seconds=interval_seconds,
             command_timeout_seconds=command_timeout_seconds,
         )
+        self.wait_for_boot(endpoint)
+
+    def wait_for_boot(self, endpoint: GuestEndpoint, *, timeout_seconds: float = 180.0) -> None:
+        """Wait until systemd has finished booting.
+
+        SSH answers long before units ordered after network-online.target have started, and
+        checks that run in between would grade a half-booted machine. A boot that never
+        finishes, for example because a unit waits forever, is left for the checks to report.
+        """
+        try:
+            self._executor.run(
+                endpoint,
+                ("systemctl", "is-system-running", "--wait"),
+                timeout_seconds=timeout_seconds,
+            )
+        except GuestCommandTimeout:
+            return

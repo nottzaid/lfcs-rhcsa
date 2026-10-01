@@ -1,77 +1,192 @@
 schema_version: 1
 scenario_id: automated-container-worker
-version: 1
+version: 2
 status: verified
-title: The automated worker deployment was left half-configured
-summary: Repair a local repository and Git policy, then deploy a constrained scheduled container.
+title: The report worker has produced nothing for a week
+summary: A containerized worker fails on a package that cannot be installed, runs unapproved settings, and is never refreshed.
 estimated_minutes: 50
-task_type: build
+task_type: troubleshoot
 difficulty: exam
-task: >-
-  node2 contains a local package repository at /srv/lal-worker-repo, a configuration Git
-  repository at /etc/lal-automation, and image localhost/lal-worker:1. Repair and enable the
-  lal-worker repository and install lal-worker-assets. Restore worker.conf from tag
-  approved-worker, commit only that restoration on the current branch, and leave the worktree
-  clean. Run the image as rootful container lal-automation under systemd, load SITE=amman from
-  worker.conf, mount /var/lib/lal-automation at /data with SELinux relabeling and
-  /usr/share/lal-worker-assets at /assets read-only, and write amman:approved-worker to
-  /data/ready before remaining active. The systemd service must start at boot with MemoryMax
-  128M and CPUQuota 50%. Create persistent lal-automation-refresh.timer to activate its
-  supplied refresh service every 15 minutes, enable it, and run the refresh once now.
+task: |
+  The nightly report worker on **node2** runs as a Podman container, `lal-automation`,
+  defined as a Quadlet unit, `lal-automation.service`. It has produced nothing since last
+  week's migration. How it is supposed to work:
+
+  - it reads its reference data from the package `lal-worker-assets`, which comes from
+    node2's internal repository `lal-worker` (node2 is air-gapped; packages are verified
+    against the automation team's signing key);
+  - its settings live in the Git repository `/etc/lal-automation`; only the configuration
+    tagged `approved-worker` may run, and changes are made as new commits, never by
+    rewriting history;
+  - when it is up, it records what it serves in `/var/lib/lal-automation/ready`;
+  - `lal-automation-refresh.timer` refreshes its reference data every 15 minutes, and
+    catches up on refreshes missed while node2 was down.
+
+  Get the worker producing again, the way the runbook says.
+requirements:
+  - "`lal-worker-assets` is installed from `lal-worker`, which stays enabled, with signature checking on, for future updates."
+  - "The worker runs the approved configuration: `/etc/lal-automation` matches `approved-worker`, through a new commit on `main`; the unapproved commit stays in the history, and the worktree is clean."
+  - "`lal-automation.service` runs the `lal-automation` container, and `/var/lib/lal-automation/ready` reports `site=amman assets=2.1`."
+  - "`lal-automation-refresh.timer` is enabled, fires every 15 minutes, and catches up on missed runs; the refresh has run at least once."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "Start with the worker itself: `systemctl status lal-automation` and `journalctl -u lal-automation` say why its container does not start. `dnf repolist --all` shows every repository, enabled or not."
+  - "`git log --oneline --decorate` and `git diff approved-worker` show what changed since the approved configuration. `git restore --source=` and `git revert` both create the change you then commit."
+  - "`systemctl cat lal-automation-refresh.timer` shows the schedule; `systemd-analyze calendar` tests an `OnCalendar=` expression, and `Persistent=` is described in `systemd.timer(5)`."
+debrief: |
+  ## What was wrong
+
+  1. **The repository was disabled** during the migration (`enabled=0`), so
+     `lal-worker-assets` could not be installed, and the container could not start:
+     `Error: statfs /usr/share/lal-worker-assets: no such file or directory`.
+  2. **An unapproved commit** on top of `approved-worker` set `SITE=test-lab`; once the
+     worker ran, it would have served the wrong site.
+  3. **The refresh timer** fired hourly, did not catch up on missed runs, and was not even
+     enabled.
+
+  ## A clean fix
+
+  ```bash
+  sudo dnf config-manager --set-enabled lal-worker
+  sudo dnf install lal-worker-assets          # verified against the key in gpgkey=
+  cd /etc/lal-automation
+  sudo git restore --source=approved-worker worker.conf
+  sudo git commit -am 'Restore the approved worker configuration'
+  sudo systemctl restart lal-automation
+  #   [Timer] OnCalendar=*:0/15  and  Persistent=true   in lal-automation-refresh.timer
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now lal-automation-refresh.timer
+  sudo systemctl start lal-automation-refresh.service
+  ```
+
+  `git revert HEAD` is just as good here, because the unapproved commit changed nothing
+  else. A drop-in that resets `OnCalendar=` before setting the new value works for the
+  timer too.
+
+  ## Check it yourself
+
+  ```bash
+  dnf repolist; rpm -q lal-worker-assets
+  git -C /etc/lal-automation log --oneline --decorate; git -C /etc/lal-automation status
+  cat /var/lib/lal-automation/ready
+  systemctl list-timers lal-automation-refresh.timer
+  ```
+
+  ## Tempting but wrong
+
+  - **`git reset --hard approved-worker`.** The settings are right, and the record of what
+    ran last week is gone.
+  - **`dnf install --enablerepo=lal-worker`.** The package installs, and the repository stays
+    disabled, so the worker never gets an update.
+  - **`OnCalendar=*:0/15` without `Persistent=true`.** Refreshes missed while node2 was down
+    are skipped, not caught up.
 objectives:
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.scheduled-jobs, title: Manage or schedule jobs for executing commands}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.packages-repositories, title: Search install validate and maintain packages or repositories}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.containers, title: Configure container engines create and manage containers}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.git, title: Basic Git operations}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.constraints, title: Determine application and service specific constraints}
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.packages-repositories
+    title: Search for, install, validate, and maintain software packages or repositories
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.git
+    title: Basic Git Operations
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.containers
+    title: Configure container engines, create and manage containers
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.scheduled-jobs
+    title: Manage or schedule jobs for executing commands
 sources:
-  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
-  - {kind: upstream, title: Podman Quadlet documentation, url: https://docs.podman.io/en/latest/markdown/podman-systemd.unit.5.html}
-  - {kind: upstream, title: Git restore documentation, url: https://git-scm.com/docs/git-restore}
-  - {kind: upstream, title: systemd timer documentation, url: https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html}
-  - {kind: man-page, title: dnf manual, man_page: dnf(8)}
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: enabled, gpgcheck, and gpgkey
+    man_page: dnf.conf(5)
+  - kind: upstream
+    title: Restore a file from another commit (git restore)
+    url: https://git-scm.com/docs/git-restore
+  - kind: man-page
+    title: Quadlet .container files
+    man_page: podman-systemd.unit(5)
+  - kind: man-page
+    title: OnCalendar and Persistent
+    man_page: systemd.timer(5)
 topology:
   hosts:
-    - {name: node2, image: rocky-10.2-lab-v1, memory_mib: 1792, vcpus: 2}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1536, vcpus: 2}
 checks:
-  - check_id: worker-package-installed
+  - check_id: assets-from-the-repository
     kind: command
     target: node2
-    description: The required package came from the repaired local repository.
-    parameters: {sudo: true, arguments: [bash, -c, 'rpm -q lal-worker-assets >/dev/null && test "$(cat /usr/share/lal-worker-assets/payload)" = approved-worker && dnf repolist --enabled | grep -q lal-worker']}
-  - check_id: approved-worker-history-restored
-    kind: command
-    target: node2
-    description: The approved configuration is restored in a focused commit.
-    parameters: {sudo: true, arguments: [bash, -c, 'test -z "$(git -C /etc/lal-automation status --porcelain)" && git -C /etc/lal-automation diff --quiet approved-worker -- worker.conf && test "$(git -C /etc/lal-automation diff-tree --no-commit-id --name-only -r HEAD)" = worker.conf && test "$(cat /etc/lal-automation/worker.conf)" = SITE=amman']}
-  - check_id: automation-container-running
-    kind: command
-    target: node2
-    description: The named container runs with the required environment and mounts.
+    description: lal-worker-assets is installed from lal-worker, which stays enabled with signature checking.
     parameters:
       sudo: true
-      arguments: [bash, -c, 'test "$(podman inspect -f ''{{.State.Running}}'' lal-automation)" = true && podman inspect -f ''{{range .Config.Env}}{{println .}}{{end}}'' lal-automation | grep -qx SITE=amman && podman inspect -f ''{{range .Mounts}}{{println .Source .Destination .RW}}{{end}}'' lal-automation | grep -q ''/var/lib/lal-automation /data true'' && podman inspect -f ''{{range .Mounts}}{{println .Source .Destination .RW}}{{end}}'' lal-automation | grep -q ''/usr/share/lal-worker-assets /assets false''']
-  - check_id: automation-service-constrained
+      timeout_seconds: 60
+      script: |
+        rpm -q lal-worker-assets >/dev/null || fail "lal-worker-assets is not installed"
+        settings=$(dnf config-manager --dump lal-worker 2>/dev/null) || fail "dnf does not know a repository called lal-worker"
+        expect_eq "$(sed -n 's/^enabled = //p' <<<"$settings")" 1 "enabled for lal-worker"
+        expect_eq "$(sed -n 's/^gpgcheck = //p' <<<"$settings")" 1 "gpgcheck for lal-worker"
+        expect_eq "$(dnf -q repoquery --installed --qf '%{from_repo}' lal-worker-assets 2>/dev/null)" lal-worker "the repository the assets came from"
+  - check_id: approved-configuration
     kind: command
     target: node2
-    description: systemd starts the container at boot with the requested resource controls.
-    parameters: {arguments: [bash, -c, 'systemctl is-active --quiet lal-automation.service && systemctl is-enabled --quiet lal-automation.service && test "$(systemctl show -p MemoryMax --value lal-automation.service)" = 134217728 && test "$(systemctl show -p CPUQuotaPerSecUSec --value lal-automation.service)" = 500ms']}
-  - check_id: automation-produced-state
-    kind: file
-    target: node2
-    description: The container and package produced the exact persistent result.
-    parameters: {path: /var/lib/lal-automation/ready, kind: file, contains: 'amman:approved-worker'}
-  - check_id: refresh-schedule-persistent
+    description: The settings match approved-worker through a new commit on main, with history kept and a clean worktree.
+    parameters:
+      sudo: true
+      script: |
+        cd /etc/lal-automation 2>/dev/null || fail "/etc/lal-automation is missing"
+        expect_eq "$(git symbolic-ref --short HEAD 2>/dev/null || echo 'a detached HEAD')" main "the checked-out branch"
+        git merge-base --is-ancestor "$(cat /usr/share/lal-automation/unapproved-commit)" HEAD 2>/dev/null ||
+          fail "the unapproved commit is no longer in main's history"
+        git diff --quiet approved-worker HEAD -- worker.conf || fail "worker.conf in HEAD differs from approved-worker"
+        dirty=$(git status --porcelain | head -n 1)
+        [[ -z $dirty ]] || fail "the worktree is not clean: $dirty"
+  - check_id: worker-producing
     kind: command
     target: node2
-    description: The refresh timer runs every 15 minutes, catches missed runs, and is enabled.
-    parameters: {arguments: [bash, -c, 'systemctl is-active --quiet lal-automation-refresh.timer && systemctl is-enabled --quiet lal-automation-refresh.timer && test "$(systemctl show -p Persistent --value lal-automation-refresh.timer)" = yes && systemctl cat lal-automation-refresh.timer | grep -Eq ''OnCalendar=.*:0/15''']}
-  - check_id: refresh-proven
+    description: lal-automation.service runs the container, which reports site=amman assets=2.1.
+    parameters:
+      sudo: true
+      timeout_seconds: 30
+      script: |
+        running() { [[ $(podman inspect --format '{{.State.Running}}' lal-automation 2>/dev/null) == true ]]; }
+        systemctl is-active --quiet lal-automation.service && retry 10 running ||
+          fail "lal-automation is not running: $(journalctl -u lal-automation.service -o cat --no-pager | grep -E '^(Error|lal-worker):' | tail -n 1)"
+        expect_eq "$(cat /var/lib/lal-automation/ready 2>/dev/null)" "site=amman assets=2.1" "what the worker reports"
+  - check_id: refresh-schedule
+    kind: command
+    target: node2
+    description: The refresh timer is enabled, fires every 15 minutes, and catches up on missed runs.
+    parameters:
+      script: |
+        systemctl is-enabled --quiet lal-automation-refresh.timer || fail "lal-automation-refresh.timer is not enabled"
+        systemctl is-active --quiet lal-automation-refresh.timer || fail "lal-automation-refresh.timer is not active"
+        expect_eq "$(unit_value lal-automation-refresh.timer Persistent)" yes "Persistent for the refresh timer"
+        mapfile -t upcoming < <(unit_value lal-automation-refresh.timer TimersCalendar |
+          grep -o 'OnCalendar=[^;]*' | sed 's/^OnCalendar=//; s/ *$//' |
+          while IFS= read -r expression; do
+            systemd-analyze calendar --iterations=8 "$expression" 2>/dev/null |
+              sed -n 's/^ *\(Next elapse\|Iteration #[0-9]*\): *//p'
+          done | while IFS= read -r moment; do date -u -d "$moment" +%s; done | sort -n -u | head -n 8)
+        (( ${#upcoming[@]} == 8 )) || fail "the refresh timer has no recurring calendar schedule"
+        for ((i = 1; i < 8; i++)); do
+          expect_eq "$((upcoming[i] - upcoming[i - 1]))" 900 "the interval between refreshes in seconds"
+        done
+  - check_id: refresh-ran
     kind: file
     target: node2
-    description: The supplied refresh job has completed at least once.
-    parameters: {path: /var/lib/lal-automation/refreshed, kind: file, contains: refreshed}
-persistence: {reboot: true, hosts: [node2]}
+    description: The refresh has run at least once.
+    parameters: {path: /var/lib/lal-automation/refreshed, kind: file}
+persistence:
+  reboot: true
+  hosts: [node2]
 setup: actions/automated-container-worker.setup.yaml
 reference_solution: actions/automated-container-worker.solution.yaml
 alternate_solutions: [actions/automated-container-worker.alternate.yaml]
+rejected_solutions:
+  - actions/automated-container-worker.rejected-reset-history.yaml
+  - actions/automated-container-worker.rejected-repository-enabled-once.yaml
+  - actions/automated-container-worker.rejected-no-catch-up.yaml

@@ -6,7 +6,11 @@ from pathlib import Path
 import pytest
 
 from sysadmin_lab.application.actions import ActionExecutionError, ActionRunner
-from sysadmin_lab.application.guest_execution import GuestCommandResult, GuestEndpoint
+from sysadmin_lab.application.guest_execution import (
+    GuestCommandResult,
+    GuestCommandTimeout,
+    GuestEndpoint,
+)
 from sysadmin_lab.domain.actions import ActionManifest
 
 
@@ -103,3 +107,27 @@ def test_action_runner_rejects_unknown_address_placeholder(tmp_path: Path) -> No
     )
     with pytest.raises(ActionExecutionError, match="unknown host missing"):
         ActionRunner(Executor([])).run(action, {"node1": endpoint(tmp_path)})
+
+
+def test_a_hung_action_is_named_in_the_error(tmp_path: Path) -> None:
+    class HangingExecutor:
+        def run(self, endpoint, arguments, *, timeout_seconds):
+            raise GuestCommandTimeout("process exceeded 90 second timeout")
+
+    manifest = ActionManifest.model_validate(
+        {
+            "actions": [
+                {
+                    "action_id": "mount-share",
+                    "target": "node2",
+                    "arguments": ["mount", "-a"],
+                    "timeout_seconds": 90,
+                }
+            ]
+        }
+    )
+    endpoint = GuestEndpoint("192.0.2.10", "labadmin", (tmp_path / "key").resolve())
+    with pytest.raises(
+        ActionExecutionError, match="mount-share on node2 did not finish within 90 seconds"
+    ):
+        ActionRunner(HangingExecutor()).run(manifest, {"node2": endpoint})  # type: ignore[arg-type]

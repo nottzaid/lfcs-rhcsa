@@ -1,73 +1,204 @@
 schema_version: 1
 scenario_id: storage-backed-application-recovery
-version: 1
+version: 2
 status: verified
-title: A full application volume has taken the service down
-summary: Diagnose storage exhaustion, preserve data, grow LVM, and restore a persistent service.
-estimated_minutes: 60
+title: The catalog is down and its disk is full
+summary: A service died when its volume filled up; free space by policy, grow the volume, and make the fix survive a reboot.
+estimated_minutes: 50
 task_type: troubleshoot
 difficulty: exam
-task: >-
-  lal-catalog.service on node2 is down because its ext4 data volume at /srv/lal-catalog ran
-  out of space. Preserve customer.db, remove the obsolete archive.fill file, grow
-  vgapps/lvcatalog to exactly 1024 MiB, and expand the filesystem online. Keep the volume
-  persistently mounted at /srv/lal-catalog by filesystem UUID, then leave lal-catalog.service
-  running and enabled. Do not recreate the filesystem or customer database.
+task: |
+  `lal-catalog.service` on **node2** stopped last night and keeps failing to start. It
+  serves the customer catalog from `/srv/lal-catalog`, which is its own LVM volume,
+  `vgapps/lvcatalog`. The nightly export job also writes its CSV files there, under
+  `exports/`, and the retention policy for them is in `/etc/lal-catalog.conf`.
+
+  Capacity ticket CAP-77 already approved growing the catalog volume to 1024 MiB.
+
+  Get the catalog serving again (`curl http://127.0.0.1:8090/` on node2) without losing
+  customer data or any export the policy says to keep, and make sure the next reboot does
+  not take it down again.
+requirements:
+  - "`lal-catalog.service` runs, starts at boot, and `http://127.0.0.1:8090/` reports all 1042 customers."
+  - "The customer data is unchanged."
+  - "The exports inside the retention period are kept untouched; older ones are gone."
+  - "`vgapps/lvcatalog` is 1024 MiB, its filesystem uses all of it, and it is still the original filesystem."
+  - "`/etc/fstab` mounts the volume at `/srv/lal-catalog`, and all of this still holds after node2 reboots."
+hints:
+  - "Start with the service's own words: `systemctl status lal-catalog` and `journalctl -u lal-catalog`. Then `df -h` and `du -sh /srv/lal-catalog/*` show where the space went."
+  - "Read the retention policy before deleting anything, and compare it with the dates in the export names. `vgs` shows whether the volume group has room to grow."
+  - "Growing a logical volume does not grow the filesystem on it: `lvextend --resizefs` does both, and ext4 grows while mounted. Then check how the volume gets mounted: `findmnt /srv/lal-catalog` and `/etc/fstab`."
+debrief: |
+  ## What was wrong
+
+  The catalog records every start in its SQLite database, and the volume was completely
+  full, so SQLite could not write its journal:
+
+  ```text
+  lal-catalog: cannot write to the catalog: database or disk is full
+  ```
+
+  A month of nightly exports, 16 MiB each, had filled the 512 MiB volume; the retention
+  policy keeps only the last seven days. And behind that sat a second problem: the volume
+  had been mounted by hand after a disk replacement and was missing from `/etc/fstab`. At
+  the next boot, `/srv/lal-catalog` would have been an empty directory on the root
+  filesystem, and the service would have failed with `no such database`.
+
+  ## A clean fix
+
+  ```bash
+  cd /srv/lal-catalog/exports
+  ls catalog-*.csv | sort | head -n -7 | sudo xargs rm --     # keep the newest seven days
+  sudo lvextend --resizefs --size 1024M vgapps/lvcatalog
+  echo "UUID=$(sudo blkid -s UUID -o value /dev/vgapps/lvcatalog) /srv/lal-catalog ext4 defaults 0 2" |
+    sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload
+  sudo systemctl restart lal-catalog
+  ```
+
+  - Deleting by the date in the name follows the policy exactly. `find -mtime +6` measures
+    24-hour periods from now, so depending on the time of day it keeps one file too many.
+  - `--resizefs` runs `resize2fs` after growing the volume; `lvextend` alone leaves the
+    filesystem at its old size.
+  - `LABEL=LAL_CATALOG` or `/dev/vgapps/lvcatalog` are as stable as the UUID; `/dev/vdb`
+    names would not be.
+  - The service has `Restart=on-failure`, so once space is free it recovers by itself
+    within seconds; restarting it is still the clean way to confirm.
+
+  ## Check it yourself
+
+  ```bash
+  curl http://127.0.0.1:8090/
+  sudo lvs vgapps; df -h /srv/lal-catalog
+  findmnt --verify
+  ls /srv/lal-catalog/exports
+  ```
+
+  ## Tempting but wrong
+
+  - **Deleting every export.** The service comes back, and a week of exports that policy
+    says to keep is gone.
+  - **`lvextend` without `--resizefs`.** The volume is 1 GiB, and the filesystem, and the
+    free space, stay exactly as before.
+  - **Leaving the mount as it is.** Everything works until the next reboot.
 objectives:
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.processes-services, title: Diagnose and manage processes and services}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.recovery, title: Diagnose and recover Linux systems}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.lvm, title: Configure and manage LVM storage}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.filesystems, title: Create manage and troubleshoot filesystems}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.diskspace, title: Troubleshoot diskspace usage}
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.processes-services
+    title: Diagnose, identify, manage, and troubleshoot processes and services
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.recovery
+    title: Recover from hardware, operating system, or filesystem failures
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.lvm
+    title: Configure and manage LVM storage
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.filesystems
+    title: Create, manage, and troubleshoot filesystems
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.diskspace
+    title: Troubleshoot diskspace issues
 sources:
-  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
-  - {kind: man-page, title: lvextend manual, man_page: lvextend(8)}
-  - {kind: man-page, title: resize2fs manual, man_page: resize2fs(8)}
-  - {kind: man-page, title: fstab manual, man_page: fstab(5)}
-  - {kind: man-page, title: systemctl manual, man_page: systemctl(1)}
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Grow a logical volume and its filesystem
+    man_page: lvextend(8)
+  - kind: man-page
+    title: Grow an ext4 filesystem
+    man_page: resize2fs(8)
+  - kind: man-page
+    title: Persistent mounts
+    man_page: fstab(5)
+  - kind: man-page
+    title: Find what uses the space
+    man_page: du(1)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1280
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
       vcpus: 1
       disks:
-        - {name: appdata, size_mib: 2048, role: LVM application data disk}
+        - {name: appdata, size_mib: 2048, role: catalog data disk}
 checks:
-  - check_id: application-volume-grown
+  - check_id: catalog-serving
     kind: command
     target: node2
-    description: The logical volume is exactly 1024 MiB and ext4 uses the enlarged device.
+    description: lal-catalog.service runs, starts at boot, and reports 1042 customers.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        systemctl is-enabled --quiet lal-catalog.service || fail "lal-catalog.service does not start at boot"
+        serving() { systemctl is-active --quiet lal-catalog.service; }
+        retry 10 serving ||
+          fail "lal-catalog is not running: $(journalctl -u lal-catalog.service -o cat --no-pager | grep '^lal-catalog:' | tail -n 1)"
+        answer=$(curl --silent --max-time 5 --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:8090/ 2>/dev/null)
+        expect_eq "$answer" "catalog: 1042 customers" "the catalog's answer"
+  - check_id: customers-unchanged
+    kind: command
+    target: node2
+    description: The customer data is unchanged.
     parameters:
       sudo: true
-      arguments: [bash, -c, 'test "$(lvs --noheadings --units m --nosuffix -o lv_size vgapps/lvcatalog | awk ''{printf "%d", $1}'')" -eq 1024 && test "$(findmnt -n -o FSTYPE /srv/lal-catalog)" = ext4 && test "$(df -BM --output=size /srv/lal-catalog | tail -1 | tr -dc ''0-9'')" -ge 930']
-  - check_id: customer-data-preserved
-    kind: file
-    target: node2
-    description: The original customer database remains intact.
-    parameters: {path: /srv/lal-catalog/customer.db, kind: file, contains: 'customer-record: 1042'}
-  - check_id: obsolete-archive-removed
-    kind: file
-    target: node2
-    description: The obsolete space-consuming archive is gone.
-    parameters: {path: /srv/lal-catalog/archive.fill, exists: false}
-  - check_id: stable-volume-policy
+      script: |
+        [[ -f /srv/lal-catalog/customer.db ]] || fail "/srv/lal-catalog/customer.db is missing"
+        digest=$(python3 -c 'import hashlib, sqlite3; rows = sqlite3.connect("file:/srv/lal-catalog/customer.db?mode=ro", uri=True).execute("SELECT * FROM customers ORDER BY id").fetchall(); print(hashlib.sha256(repr(rows).encode()).hexdigest())' 2>&1) ||
+          fail "the customer database cannot be read: ${digest##*: }"
+        expect_eq "$digest" "$(cat /usr/share/lal-catalog/customers.sha256)" "the checksum of the customer rows"
+  - check_id: exports-per-policy
     kind: command
     target: node2
-    description: fstab uses the filesystem UUID and the live mount agrees.
+    description: Exports inside the retention period are untouched, and older ones are gone.
     parameters:
-      arguments: [bash, -c, 'uuid=$(findmnt -n -o UUID /srv/lal-catalog); test -n "$uuid" && awk -v id="UUID=$uuid" ''$1==id && $2=="/srv/lal-catalog" && $3=="ext4" {ok=1} END {exit !ok}'' /etc/fstab']
-  - check_id: catalog-service-restored
-    kind: service
-    target: node2
-    description: The application service is running and enabled.
-    parameters: {name: lal-catalog.service, active: true, enabled: true}
-  - check_id: catalog-service-owns-process
+      timeout_seconds: 60
+      sudo: true
+      script: |
+        cd /srv/lal-catalog/exports 2>/dev/null || fail "/srv/lal-catalog/exports is missing"
+        damaged=$(sha256sum --check --quiet /usr/share/lal-catalog/retained-exports.sha256 2>/dev/null | sed -n 's/: FAILED.*//p')
+        [[ -z $damaged ]] || fail "$(wc -l <<<"$damaged") exports inside the retention period are missing or changed: $(paste -sd' ' - <<<"$damaged")"
+        extra=$(comm -23 <(ls catalog-*.csv 2>/dev/null | sort) <(awk '{print $2}' /usr/share/lal-catalog/retained-exports.sha256 | sort))
+        [[ -z $extra ]] ||
+          fail "$(wc -l <<<"$extra") exports past the retention period are still there ($(head -n 1 <<<"$extra") to $(tail -n 1 <<<"$extra"))"
+  - check_id: volume-grown
     kind: command
     target: node2
-    description: The service has a live process reading the preserved database.
-    parameters: {arguments: [bash, -c, 'pid=$(systemctl show -p MainPID --value lal-catalog.service); test "$pid" -gt 1 && tr ''\0'' '' '' < /proc/$pid/cmdline | grep -Fq /srv/lal-catalog/customer.db']}
-persistence: {reboot: true, hosts: [node2]}
+    description: vgapps/lvcatalog is 1024 MiB, fully used by the original filesystem.
+    parameters:
+      sudo: true
+      script: |
+        volume=$(lvs --noheadings --units b --nosuffix -o lv_size vgapps/lvcatalog 2>/dev/null | tr -d ' ')
+        [[ -n $volume ]] || fail "there is no logical volume vgapps/lvcatalog"
+        expect_eq "$((volume / 1048576)) MiB" "1024 MiB" "the size of vgapps/lvcatalog"
+        expect_eq "$(blkid -s UUID -o value /dev/vgapps/lvcatalog)" "$(cat /usr/share/lal-catalog/filesystem-uuid)" "the filesystem UUID"
+        header=$(dumpe2fs -h /dev/vgapps/lvcatalog 2>/dev/null)
+        blocks=$(sed -n 's/^Block count: *//p' <<<"$header"); size=$(sed -n 's/^Block size: *//p' <<<"$header")
+        filesystem=$((blocks * size / 1048576))
+        (( filesystem == 1024 )) || fail "the filesystem uses $filesystem MiB of the 1024 MiB volume"
+  - check_id: mounted-at-boot
+    kind: command
+    target: node2
+    description: /etc/fstab mounts the volume at /srv/lal-catalog, and it is mounted there.
+    parameters:
+      script: |
+        volume=$(readlink -f /dev/vgapps/lvcatalog)
+        [[ $(readlink -f "$(findmnt -n -o SOURCE --mountpoint /srv/lal-catalog)") == "$volume" ]] ||
+          fail "vgapps/lvcatalog is not mounted at /srv/lal-catalog"
+        configured=$(findmnt --fstab --evaluate -n -o SOURCE --mountpoint /srv/lal-catalog 2>/dev/null | tail -n 1)
+        [[ -n $configured ]] || fail "/etc/fstab has no entry for /srv/lal-catalog"
+        [[ $(readlink -f "$configured") == "$volume" ]] || fail "/etc/fstab mounts $configured at /srv/lal-catalog, not vgapps/lvcatalog"
+persistence:
+  reboot: true
+  hosts: [node2]
 setup: actions/storage-backed-application-recovery.setup.yaml
 reference_solution: actions/storage-backed-application-recovery.solution.yaml
 alternate_solutions: [actions/storage-backed-application-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/storage-backed-application-recovery.rejected-delete-every-export.yaml
+  - actions/storage-backed-application-recovery.rejected-volume-only.yaml
+  - actions/storage-backed-application-recovery.rejected-still-mounted-by-hand.yaml

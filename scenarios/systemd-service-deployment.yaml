@@ -1,90 +1,145 @@
 schema_version: 1
 scenario_id: systemd-service-deployment
-version: 1
+version: 2
 status: verified
 title: The collector was copied to the server but never deployed
-summary: Turn an existing program into a persistent least-privilege systemd service.
-estimated_minutes: 30
+summary: Turn a program that runs fine by hand into a proper systemd service.
+estimated_minutes: 25
 task_type: build
 difficulty: intermediate
-task: >-
-  Deploy /opt/lal/bin/collector as lal-collector.service on node2. It must run as the
-  existing collector user and group, read COLLECTOR_SITE from /etc/lal-collector.conf,
-  start in /var/lib/lal-collector, and restart after a process failure. Start and enable
-  it. A successful start writes "warehouse-7" to /var/lib/lal-collector/ready. The service
-  must still be healthy after node2 reboots.
+task: |
+  The metrics collector `/opt/lal/bin/collector` was copied to **node2**, and someone has
+  been running it by hand in a tmux session. Deploy it properly as `lal-collector.service`,
+  the way the collector's handbook describes:
+
+  > The collector runs as the unprivileged `collector` account, reads `COLLECTOR_SITE` from
+  > `/etc/lal-collector.conf`, and works in `/var/lib/lal-collector`, where it writes a
+  > `ready` file naming its site. If it dies, it must come back on its own.
+
+  It must be running now and start automatically at boot.
+requirements:
+  - "`lal-collector.service` is running now and enabled at boot."
+  - "The collector runs as user and group `collector`."
+  - "It gets `COLLECTOR_SITE` from `/etc/lal-collector.conf` and works in `/var/lib/lal-collector`, so `/var/lib/lal-collector/ready` names `warehouse-7`."
+  - "If the collector process is killed, systemd starts it again."
+hints:
+  - "A service is a unit file: put yours in `/etc/systemd/system/`. `systemctl cat sshd` is a real example to compare with."
+  - "`User=`, `Group=`, `WorkingDirectory=`, and `EnvironmentFile=` are in `systemd.exec(5)`; `ExecStart=` and `Restart=` are in `systemd.service(5)`. The `[Install]` section decides what `systemctl enable` does."
+  - "After writing or changing a unit, run `systemctl daemon-reload`. `systemctl enable --now` enables and starts in one step. Test recovery with `sudo kill -9 <MainPID>` and watch `systemctl status`."
+debrief: |
+  ## A clean deployment
+
+  ```ini
+  # /etc/systemd/system/lal-collector.service
+  [Unit]
+  Description=Metrics collector
+
+  [Service]
+  User=collector
+  Group=collector
+  EnvironmentFile=/etc/lal-collector.conf
+  WorkingDirectory=/var/lib/lal-collector
+  ExecStart=/opt/lal/bin/collector
+  Restart=on-failure
+
+  [Install]
+  WantedBy=multi-user.target
+  ```
+
+  ```bash
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now lal-collector.service
+  ```
+
+  - `EnvironmentFile=` reads `KEY=value` lines into the process environment; the collector
+    refuses to start without `COLLECTOR_SITE`.
+  - `WorkingDirectory=` matters because the collector writes `ready` to a *relative* path.
+  - `Restart=on-failure` restarts the service after a non-zero exit, a crash, or a kill by
+    a signal, but not after a clean `systemctl stop`.
+  - `WantedBy=multi-user.target` is what `enable` hooks into, so the service starts at boot.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl status lal-collector
+  ps -o user,group,cmd -p "$(systemctl show -p MainPID --value lal-collector)"
+  sudo kill -9 "$(systemctl show -p MainPID --value lal-collector)"; sleep 2
+  systemctl status lal-collector      # a new PID, still active
+  ```
+
+  ## Tempting but wrong
+
+  - **Leaving out `User=`.** The collector runs as root, and `ready` ends up owned by root.
+  - **Leaving out `Restart=`.** The default is `no`: after a crash, the service stays dead.
+  - **Starting it from `/etc/rc.local` or `@reboot` in cron.** systemd cannot supervise,
+    restart, or report on a process it did not start.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: essential-commands.services
-    title: Create and manage systemd services
+    title: Create, configure, and troubleshoot services
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: systemd service unit documentation
-    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html
   - kind: man-page
-    title: systemd.service manual
+    title: ExecStart=, Restart=, and service types
     man_page: systemd.service(5)
   - kind: man-page
-    title: systemd.exec manual
+    title: User=, WorkingDirectory=, EnvironmentFile=
     man_page: systemd.exec(5)
+  - kind: man-page
+    title: "[Install] and WantedBy="
+    man_page: systemd.unit(5)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
-  - check_id: collector-running-persistently
+  - check_id: collector-running-and-enabled
     kind: service
     target: node2
-    description: The collector is running and enabled for boot.
-    parameters:
-      name: lal-collector.service
-      active: true
-      enabled: true
-  - check_id: collector-runtime-identity
+    description: lal-collector.service is running and enabled at boot.
+    parameters: {name: lal-collector.service, active: true, enabled: true}
+  - check_id: runs-unprivileged
     kind: command
     target: node2
-    description: systemd runs the collector with its dedicated identity and working directory.
+    description: The collector runs as user and group collector.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(systemctl show -p User --value lal-collector.service)" = collector &&
-          test "$(systemctl show -p Group --value lal-collector.service)" = collector &&
-          test "$(systemctl show -p WorkingDirectory --value lal-collector.service)" = /var/lib/lal-collector
-  - check_id: collector-failure-policy
-    kind: command
-    target: node2
-    description: The service is configured to recover from process failure.
-    parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          case "$(systemctl show -p Restart --value lal-collector.service)" in
-            on-failure|always) exit 0;;
-            *) exit 1;;
-          esac
-  - check_id: collector-produced-required-state
+      script: |
+        pid=$(unit_value lal-collector.service MainPID)
+        (( pid > 0 )) || fail "the collector is not running"
+        expect_eq "$(ps -o user= -p "$pid" | tr -d ' ')" collector "the collector's user"
+        expect_eq "$(ps -o group= -p "$pid" | tr -d ' ')" collector "the collector's group"
+  - check_id: configured-and-ready
     kind: file
     target: node2
-    description: The service loaded its environment and wrote the readiness state.
+    description: /var/lib/lal-collector/ready names warehouse-7 and belongs to collector.
+    parameters: {path: /var/lib/lal-collector/ready, kind: file, owner: collector, contains: warehouse-7}
+  - check_id: recovers-from-a-crash
+    kind: command
+    target: node2
+    description: A killed collector is started again by systemd.
     parameters:
-      path: /var/lib/lal-collector/ready
-      kind: file
-      owner: collector
-      group: collector
-      mode: "0644"
-      contains: warehouse-7
+      sudo: true
+      timeout_seconds: 30
+      script: |
+        before=$(unit_value lal-collector.service MainPID)
+        (( before > 0 )) || fail "the collector is not running"
+        kill -KILL "$before"
+        recovered() {
+          now=$(unit_value lal-collector.service MainPID)
+          (( now > 0 && now != before )) && systemctl is-active --quiet lal-collector.service
+        }
+        retry 15 recovered || fail "after kill -9, lal-collector stayed $(systemctl is-active lal-collector.service)"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/systemd-service-deployment.setup.yaml
 reference_solution: actions/systemd-service-deployment.solution.yaml
 alternate_solutions: [actions/systemd-service-deployment.alternate.yaml]
+rejected_solutions:
+  - actions/systemd-service-deployment.rejected-runs-as-root.yaml
+  - actions/systemd-service-deployment.rejected-no-restart.yaml

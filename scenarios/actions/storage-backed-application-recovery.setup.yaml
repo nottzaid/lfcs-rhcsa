@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-full-application-volume
+  - action_id: build-the-catalog-volume
     target: node2
     timeout_seconds: 120
     arguments:
@@ -11,34 +11,118 @@ actions:
       - |
         set -euo pipefail
         disk=/dev/disk/by-id/virtio-lal-appdata
-        systemctl disable --now lal-catalog.service >/dev/null 2>&1 || true
-        umount /srv/lal-catalog >/dev/null 2>&1 || true
-        vgremove -ff -y vgapps >/dev/null 2>&1 || true
-        wipefs -a "$disk"
-        pvcreate -ff -y "$disk"
-        vgcreate vgapps "$disk"
-        lvcreate -L 512M -n lvcatalog vgapps
+        pvcreate -q "$disk"
+        vgcreate -q vgapps "$disk"
+        lvcreate -q -y -L 512M -n lvcatalog vgapps
         mkfs.ext4 -q -L LAL_CATALOG /dev/vgapps/lvcatalog
+        install -d /usr/share/lal-catalog
+        blkid -s UUID -o value /dev/vgapps/lvcatalog > /usr/share/lal-catalog/filesystem-uuid
+        # Mounted by hand after last month's disk replacement; nobody updated /etc/fstab.
         install -d /srv/lal-catalog
-        sed -i '\#/srv/lal-catalog#d' /etc/fstab
-        printf '/dev/mapper/vgapps-lvcatalog /srv/lal-catalog ext4 defaults 0 2\n' >> /etc/fstab
-        mount /srv/lal-catalog
-        printf 'customer-record: 1042\n' > /srv/lal-catalog/customer.db
-        dd if=/dev/zero of=/srv/lal-catalog/archive.fill bs=1M count=470 status=none
-        cat > /etc/systemd/system/lal-catalog.service <<'EOF'
+        mount /dev/vgapps/lvcatalog /srv/lal-catalog
+  - action_id: install-the-catalog-service
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        useradd --system --home-dir /srv/lal-catalog --shell /sbin/nologin lalcat
+        chown lalcat:lalcat /srv/lal-catalog
+        install -d -o lalcat -g lalcat /srv/lal-catalog/exports
+        install -d /opt/lal-catalog
+        cat > /opt/lal-catalog/server.py <<'PY'
+        """Catalog service: records its start in the catalog, then serves the customer count."""
+        import os
+        import sqlite3
+        import sys
+        from http.server import BaseHTTPRequestHandler, HTTPServer
+
+        DATABASE = "/srv/lal-catalog/customer.db"
+
+        if not os.path.exists(DATABASE):
+            sys.exit(f"lal-catalog: {DATABASE}: no such database")
+        catalog = sqlite3.connect(DATABASE)
+        try:
+            with catalog:
+                catalog.execute("INSERT INTO service_log (event) VALUES ('started')")
+        except sqlite3.OperationalError as error:
+            sys.exit(f"lal-catalog: cannot write to the catalog: {error}")
+        customers = catalog.execute("SELECT count(*) FROM customers").fetchone()[0]
+        print(f"lal-catalog: serving {customers} customers", flush=True)
+
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = f"catalog: {customers} customers\n".encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+            def log_message(self, *args):
+                pass
+
+
+        HTTPServer(("127.0.0.1", 8090), Handler).serve_forever()
+        PY
+        runuser -u lalcat -- python3 - <<'PY'
+        import sqlite3
+        catalog = sqlite3.connect("/srv/lal-catalog/customer.db")
+        catalog.execute("CREATE TABLE customers (id INTEGER PRIMARY KEY, name TEXT, city TEXT)")
+        catalog.execute("CREATE TABLE service_log (at TEXT DEFAULT CURRENT_TIMESTAMP, event TEXT)")
+        catalog.executemany(
+            "INSERT INTO customers (name, city) VALUES (?, ?)",
+            [(f"customer-{n:04d}", ("Amman", "Irbid", "Zarqa", "Aqaba")[n % 4]) for n in range(1, 1043)],
+        )
+        catalog.commit()
+        PY
+        runuser -u lalcat -- python3 -c 'import hashlib, sqlite3; rows = sqlite3.connect("/srv/lal-catalog/customer.db").execute("SELECT * FROM customers ORDER BY id").fetchall(); print(hashlib.sha256(repr(rows).encode()).hexdigest())' \
+          > /usr/share/lal-catalog/customers.sha256
+        cat > /etc/lal-catalog.conf <<'CONF'
+        # Nightly exports are written to /srv/lal-catalog/exports as catalog-YYYY-MM-DD.csv.
+        # Retention policy DATA-12: keep the exports of the last 7 days (today included);
+        # older exports are archived elsewhere and may be deleted here.
+        EXPORT_RETENTION_DAYS=7
+        CONF
+        cat > /etc/systemd/system/lal-catalog.service <<'UNIT'
         [Unit]
-        Description=Linux Admin Lab catalog reader
+        Description=Customer catalog
         RequiresMountsFor=/srv/lal-catalog
-        After=local-fs.target
 
         [Service]
-        ExecStartPre=/usr/bin/dd if=/dev/zero of=/srv/lal-catalog/startup.check bs=1M count=64 status=none
-        ExecStart=/usr/bin/tail -f /srv/lal-catalog/customer.db
+        User=lalcat
+        ExecStart=/usr/bin/python3 /opt/lal-catalog/server.py
         Restart=on-failure
+        RestartSec=5
 
         [Install]
         WantedBy=multi-user.target
-        EOF
+        UNIT
         systemctl daemon-reload
-        systemctl enable lal-catalog.service
-        systemctl start lal-catalog.service || true
+        systemctl enable --now lal-catalog.service
+        curl --silent --retry 5 --retry-connrefused --retry-delay 1 http://127.0.0.1:8090/ | grep -q 'catalog: 1042 customers'
+  - action_id: let-a-month-of-exports-fill-the-volume
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -uo pipefail
+        cd /srv/lal-catalog/exports
+        for day in $(seq 30 -1 1); do
+          name="catalog-$(date -d "-$((day - 1)) days" +%F).csv"
+          head -c 15M < <(yes "$(date -d "-$((day - 1)) days" +%F),export,customer rows") > "$name" 2>/dev/null
+          touch -d "-$((day - 1)) days 02:00" "$name"
+        done
+        # The export job ran again tonight and filled whatever space was left.
+        head -c 1G < <(yes "$(date +%F),export,customer rows") >> "catalog-$(date +%F).csv" 2>/dev/null
+        chown lalcat:lalcat ./*.csv
+        sha256sum $(ls | sort | tail -n 7) > /usr/share/lal-catalog/retained-exports.sha256
+        (( $(df --output=avail -B1 /srv/lal-catalog | tail -n 1) < 1048576 ))
+        systemctl restart lal-catalog.service || true

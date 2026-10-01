@@ -1,19 +1,82 @@
 schema_version: 1
 scenario_id: resilient-link-and-bridge
-version: 1
+version: 2
 status: verified
-title: The host needs a resilient uplink and a software bridge
-summary: Build persistent NetworkManager bond and bridge topologies from dummy lab links.
+title: One cable away from losing the storage network
+summary: Move a host's storage link onto an active-backup bond inside a bridge, keeping its address.
 estimated_minutes: 40
-task_type: build
-difficulty: advanced
-task: >-
-  On node2, use NetworkManager to create bond0 in active-backup mode with miimon=100 and
-  slave interfaces bond-a and bond-b. Assign 192.0.2.20/24 to bond0 with no default route.
-  Also create bridge br0 with bridge-port as its port and assign 198.51.100.20/24 with no
-  default route. The three port interfaces are lab dummy devices and must be created by
-  persistent NetworkManager profiles. Bring everything up and enable autoconnect without
-  touching the VM's existing management interface.
+task_type: configure
+difficulty: intermediate
+task: |
+  **node2** reaches the storage network over a single NIC, `stor0`, as 10.90.0.20/24; its
+  NAS is **nas**, 10.90.0.5. A second NIC to the same network, `stor1`, was cabled last
+  week and is still unused. Change ticket CHG-2231 asks for two things:
+
+  - the storage link must survive the loss of either cable: bond `stor0` and `stor1` in
+    active-backup mode, with link monitoring;
+  - node2 will host virtual machines that need to sit on the storage network themselves,
+    so the bond goes into a bridge, `br0`, which carries node2's address.
+
+  node2 keeps 10.90.0.20/24, and its management connection stays as it is.
+requirements:
+  - "node2 reaches the NAS (`http://10.90.0.5/`) from 10.90.0.20, through `br0`."
+  - "`bond0` runs in active-backup mode with link monitoring, and both `stor0` and `stor1` are in it with their links up."
+  - "`bond0` is a port of `br0`; the address lives on `br0` only, not on the bond or the NICs."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "Build from the top down with `nmcli connection add`: the bridge (which gets the address), then the bond as a port of the bridge, then each NIC as a port of the bond. `controller` and `port-type` say where a profile belongs."
+  - "`bond.options` takes the kernel's bonding options, such as `mode` and `miimon`. Without `miimon` or `arp_interval`, a bond never notices a dead link. `cat /proc/net/bonding/bond0` shows what the kernel made of it."
+  - "The old `storage` profile still claims `stor0` and the address. A bridge with STP on waits about 30 seconds before it forwards anything; `bridge.stp no` is usual for a host bridge. `bridge link` shows the bridge's ports."
+debrief: |
+  ## What was asked
+
+  A stack of three layers, each with its own NetworkManager profile:
+
+  ```text
+  br0 (bridge, 10.90.0.20/24)
+  └── bond0 (active-backup, miimon=100)
+      ├── stor0
+      └── stor1
+  ```
+
+  ## A clean build
+
+  ```bash
+  sudo nmcli connection add type bridge ifname br0 con-name br0 bridge.stp no \
+    ipv4.method manual ipv4.addresses 10.90.0.20/24 ipv6.method disabled
+  sudo nmcli connection add type bond ifname bond0 con-name bond0 \
+    bond.options mode=active-backup,miimon=100 controller br0 port-type bridge
+  sudo nmcli connection add type ethernet ifname stor0 con-name bond0-stor0 controller bond0 port-type bond
+  sudo nmcli connection add type ethernet ifname stor1 con-name bond0-stor1 controller bond0 port-type bond
+  sudo nmcli connection delete storage
+  sudo nmcli connection up br0     # then bond0, bond0-stor0, bond0-stor1 if they are not up yet
+  ```
+
+  - **active-backup** sends traffic over one port and moves to the other when its link
+    fails. It needs nothing from the switch, which is why it is the usual choice for
+    redundancy alone.
+  - **`miimon=100`** checks each port's link every 100 ms. With neither `miimon` nor
+    `arp_interval`, the bond never notices that a link died and keeps sending into it.
+  - **The address belongs on the bridge.** A port of a bridge cannot carry an address of
+    its own; the bridge is where node2 itself joins the network, alongside future VMs.
+  - **STP**, on by default, makes a new bridge wait about 30 seconds (listening, then
+    learning) before it forwards. Leaving it on works, only slowly.
+
+  ## Check it yourself
+
+  ```bash
+  cat /proc/net/bonding/bond0
+  bridge link
+  ip -br address
+  nmcli connection show --active
+  ```
+
+  ## Tempting but wrong
+
+  - **`miimon=0`.** The bond forms and passes traffic, and would go on sending into a dead
+    cable.
+  - **Putting the address on the bond and skipping the bridge.** Redundant, but a VM has
+    nothing to attach to.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -23,66 +86,80 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: NetworkManager settings reference
-    url: https://networkmanager.dev/docs/api/latest/settings-connection.html
-  - kind: upstream
-    title: Linux bonding documentation
-    url: https://docs.kernel.org/networking/bonding.html
   - kind: man-page
-    title: nmcli manual
+    title: bond.options, bridge.stp, controller, and port-type
+    man_page: nm-settings-nmcli(5)
+  - kind: man-page
+    title: Adding and activating profiles
     man_page: nmcli(1)
+  - kind: upstream
+    title: Linux bonding modes and link monitoring
+    url: https://docs.kernel.org/networking/bonding.html
 topology:
+  networks:
+    - {name: storage, cidr: 10.90.0.0/24}
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
+      nics: [{network: storage, name: stor0}, {network: storage, name: stor1}]
+    - name: nas
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: storage, name: stor0}]
 checks:
-  - check_id: bond-live
+  - check_id: nas-reachable-through-bridge
     kind: command
     target: node2
-    description: bond0 is active-backup with both lab ports and the required address.
+    description: node2 reaches the NAS from 10.90.0.20 through br0.
     parameters:
-      timeout_seconds: 25
-      arguments:
-        - bash
-        - -c
-        - >-
-          for attempt in $(seq 1 20); do
-          test -r /proc/net/bonding/bond0 &&
-          test "$(grep -c '^Slave Interface: bond-[ab]$' /proc/net/bonding/bond0)" -eq 2 && break;
-          sleep 1; done &&
-          grep -q 'Bonding Mode: fault-tolerance (active-backup)' /proc/net/bonding/bond0 &&
-          grep -q 'MII Polling Interval (ms): 100' /proc/net/bonding/bond0 &&
-          test "$(grep -c '^Slave Interface: bond-[ab]$' /proc/net/bonding/bond0)" -eq 2 &&
-          ip -4 address show bond0 | grep -Fq '192.0.2.20/24'
-  - check_id: bridge-live
+      timeout_seconds: 60
+      script: |
+        # A bridge gets its address once a port has a link, a moment after activation.
+        through_br0() { route=$(ip -4 route get 10.90.0.5 2>&1); [[ $route == *" dev br0 "* && $route == *" src 10.90.0.20 "* ]]; }
+        retry 15 through_br0 || fail "node2 routes 10.90.0.5 as: ${route%%$'\n'*}"
+        reached() { answer=$(curl --silent --show-error --max-time 3 http://10.90.0.5/ 2>&1); }
+        retry 40 reached || fail "node2 cannot reach the NAS: ${answer#curl: }"   # STP may still be listening
+        expect_eq "$answer" nas-ok "the NAS's answer"
+  - check_id: redundant-bond
     kind: command
     target: node2
-    description: br0 has the designated port and address.
+    description: bond0 is active-backup with link monitoring, over stor0 and stor1 with links up.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          ip -4 address show br0 | grep -Fq '198.51.100.20/24' &&
-          test "$(basename "$(readlink /sys/class/net/bridge-port/master)")" = br0
-  - check_id: network-topology-persistent
+      script: |
+        [[ -r /proc/net/bonding/bond0 ]] || fail "there is no bond0"
+        state=$(< /proc/net/bonding/bond0)
+        [[ $state == *"Bonding Mode: fault-tolerance (active-backup)"* ]] ||
+          fail "bond0 is in mode '$(sed -n 's/^Bonding Mode: //p' <<<"$state")'; expected active-backup"
+        miimon=$(sed -n 's/^MII Polling Interval (ms): //p' <<<"$state")
+        arp=$(sed -n 's/^ARP Polling Interval (ms): //p' <<<"$state")
+        (( ${miimon:-0} > 0 || ${arp:-0} > 0 )) || fail "bond0 has no link monitoring (miimon and arp_interval are 0)"
+        for nic in stor0 stor1; do
+          status=$(awk -v nic="$nic" '$0 == "Slave Interface: " nic {found = 1; next} found && /^MII Status:/ {print $3; exit}' <<<"$state")
+          [[ -n $status ]] || fail "$nic is not in bond0"
+          [[ $status == up ]] || fail "$nic is in bond0 but its link is $status"
+        done
+  - check_id: bond-inside-bridge
     kind: command
     target: node2
-    description: NetworkManager owns autoconnecting profiles for every controller and port.
+    description: bond0 is a port of br0, and the address lives on br0 only.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          for connection in lal-bond lal-bond-a lal-bond-b lal-bridge lal-bridge-port; do
-            test "$(nmcli -g connection.autoconnect con show "$connection")" = yes || exit 1;
-          done
+      script: |
+        [[ -d /sys/class/net/br0/bridge ]] || fail "there is no bridge br0"
+        master=$(basename "$(readlink /sys/class/net/bond0/master 2>/dev/null)")
+        [[ $master == br0 ]] || fail "bond0 is not a port of br0"
+        ip -4 -o address show dev br0 | grep -q ' 10\.90\.0\.20/24 ' || fail "br0 does not have 10.90.0.20/24"
+        for device in bond0 stor0 stor1; do
+          [[ -z $(ip -4 -o address show dev "$device") ]] || fail "$device has an IPv4 address of its own"
+        done
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/resilient-link-and-bridge.setup.yaml
 reference_solution: actions/resilient-link-and-bridge.solution.yaml
 alternate_solutions: [actions/resilient-link-and-bridge.alternate.yaml]
+rejected_solutions:
+  - actions/resilient-link-and-bridge.rejected-no-link-monitoring.yaml
+  - actions/resilient-link-and-bridge.rejected-address-on-bond.yaml

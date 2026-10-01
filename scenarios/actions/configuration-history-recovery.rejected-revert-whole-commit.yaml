@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: revert-the-incident-commit
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /etc/lal-app
+        git revert --no-edit HEAD~1
+        systemctl restart lal-app.service

@@ -1,17 +1,78 @@
 schema_version: 1
 scenario_id: inode-exhaustion-recovery
-version: 1
+version: 2
 status: verified
-title: The cache filesystem is full with free bytes remaining
-summary: Diagnose inode exhaustion and remove only disposable cache entries.
-estimated_minutes: 25
+title: The cache is full, but df says it is empty
+summary: New sessions fail with "No space left on device" on a filesystem that reports plenty of free space.
+estimated_minutes: 30
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  /var/lib/lal-cache on node2 cannot create files even though byte capacity remains. Diagnose
-  the filesystem and recover at least 25% of its inodes by removing stale files under
-  /var/lib/lal-cache/stale. Preserve /var/lib/lal-cache/keep and its contents, keep the
-  filesystem mounted, and do not reformat or enlarge the disk.
+task: |
+  Web logins on **node2** started failing. The session service logs:
+
+  ```text
+  lal-sessions: cannot create session file: No space left on device
+  ```
+
+  Yet `df -h /var/lib/lal-cache` shows the cache filesystem almost empty. The cache
+  directory's `README` explains what may be deleted. Get sessions working again and make
+  sure it does not happen again after the next reboot. The live sessions must survive.
+requirements:
+  - "The session service can create new session files in `/var/lib/lal-cache/sessions` again."
+  - "At least 25% of the cache filesystem's inodes are free."
+  - "Whatever filled the cache is stopped and does not start again at boot."
+  - "Every existing session file is intact."
+  - "The cache keeps its original filesystem: not reformatted, enlarged, or unmounted."
+hints:
+  - "A filesystem can run out of two things: data blocks (`df -h`) and inodes, one per file or directory (`df -i`)."
+  - "Find which directory holds all those files: `sudo du --inodes -x /var/lib/lal-cache | sort -n | tail` counts files per directory. Then read the `README`."
+  - "Deleting files buys time only if nothing refills the cache. Look for what keeps writing there: `systemctl list-timers` and `journalctl --since -10min`."
+debrief: |
+  ## What was wrong
+
+  Every file and directory needs an inode, and ext4 fixes the number of inodes when the
+  filesystem is created. The cache was made with only 2048, and a thumbnail job
+  run by `lal-thumbnailer.timer` wrote thousands of tiny files into `tmp/thumbs`. Once the
+  last inode was used, every file creation failed with `ENOSPC`, which the kernel reports
+  as "No space left on device" even though `df -h` shows free blocks.
+
+  ```text
+  $ df -i /var/lib/lal-cache
+  Filesystem     Inodes IUsed IFree IUse% Mounted on
+  /dev/vdb         2048  2048     0  100% /var/lib/lal-cache
+  ```
+
+  ## A clean fix
+
+  ```bash
+  sudo systemctl disable --now lal-thumbnailer.timer
+  sudo find /var/lib/lal-cache/tmp -mindepth 1 -delete
+  df -i /var/lib/lal-cache
+  ```
+
+  Stop the source first, or it refills the cache while you clean. `find -delete` removes
+  files depth-first and never needs a huge argument list, unlike `rm tmp/thumbs/*/*` with
+  thousands of matches.
+
+  ## Check it yourself
+
+  ```bash
+  df -i /var/lib/lal-cache
+  systemctl list-timers --all | grep thumbnailer
+  sudo journalctl -u lal-sessions -n 3
+  ```
+
+  ## Tempting but wrong
+
+  - **Cleaning up but leaving the timer enabled.** It works until the next run, and after
+    a reboot the timer starts again.
+  - **`systemctl mask` on these units.** Masking replaces a unit with a link to
+    `/dev/null` in `/etc/systemd/system`, so it refuses units that are defined there. Disable
+    them, or delete the unit files if the job is retired for good.
+  - **Deleting everything under `/var/lib/lal-cache`.** Inodes come back, and every user
+    is logged out because the live sessions are gone.
+  - **Reformatting with more inodes (`mkfs.ext4 -N`).** It would fix the capacity, but it
+    destroys the live sessions and hides the runaway job instead of stopping it.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,53 +83,82 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: df manual
+    title: Reporting blocks and inodes (-i)
     man_page: df(1)
   - kind: man-page
-    title: find manual
-    man_page: find(1)
+    title: Counting inodes per directory (--inodes)
+    man_page: du(1)
+  - kind: man-page
+    title: How ext4 sizes its inode table
+    man_page: mke2fs(8)
+  - kind: man-page
+    title: Timers and how to list them
+    man_page: systemd.timer(5)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
       disks:
         - name: cache
           size_mib: 256
-          role: inode-limited cache filesystem
+          role: session cache filesystem
 checks:
-  - check_id: inode-capacity-recovered
+  - check_id: sessions-can-be-created
     kind: command
     target: node2
-    description: At least 25 percent of filesystem inodes are free.
+    description: The session service can create new session files again.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - test "$(df -Pi /var/lib/lal-cache | awk 'NR==2 {gsub(/%/,"",$5); print 100-$5}')" -ge 25
-  - check_id: stale-entries-removed
+      sudo: true
+      script: |
+        probe=/var/lib/lal-cache/sessions/.check-$$
+        runuser -u lalsess -- touch "$probe" 2>/dev/null ||
+          fail "creating a session file fails: no space left on device"
+        rm -f "$probe"
+  - check_id: inodes-available
     kind: command
     target: node2
-    description: The disposable stale cache entries are gone.
+    description: At least 25% of the cache filesystem's inodes are free.
     parameters:
-      arguments: [bash, -c, '! find /var/lib/lal-cache/stale -type f -print -quit | grep -q .']
-  - check_id: retained-data-preserved
-    kind: file
-    target: node2
-    description: The protected cache record remains intact.
-    parameters:
-      path: /var/lib/lal-cache/keep/important.record
-      kind: file
-      contains: retain me
-  - check_id: cache-remains-mounted
+      script: |
+        used=$(df --output=ipcent /var/lib/lal-cache | tail -n 1 | tr -dc 0-9)
+        (( used <= 75 )) || fail "the cache filesystem has used ${used}% of its inodes"
+  - check_id: source-retired
     kind: command
     target: node2
-    description: The original filesystem remains mounted.
+    description: The job that filled the cache is stopped and does not start at boot.
     parameters:
-      arguments: [findmnt, --noheadings, --mountpoint, /var/lib/lal-cache]
+      script: |
+        ! systemctl is-active --quiet lal-thumbnailer.timer || fail "lal-thumbnailer.timer is still active"
+        state=$(systemctl is-enabled lal-thumbnailer.timer 2>/dev/null) || true
+        [[ "$state" != enabled ]] || fail "lal-thumbnailer.timer is still enabled at boot"
+  - check_id: sessions-intact
+    kind: command
+    target: node2
+    description: Every existing session file is intact.
+    parameters:
+      sudo: true
+      script: |
+        cd /var/lib/lal-cache/sessions || fail "the sessions directory is gone"
+        damaged=$(sha256sum --check --quiet /usr/share/lal-cache/sessions.sha256 2>/dev/null | wc -l)
+        (( damaged == 0 )) || fail "$damaged of the 150 live session files are missing or changed"
+  - check_id: original-filesystem
+    kind: command
+    target: node2
+    description: The cache keeps its original, still-mounted filesystem.
+    parameters:
+      script: |
+        uuid=$(findmnt -n -o UUID /var/lib/lal-cache) || fail "/var/lib/lal-cache is not mounted"
+        expect_eq "$uuid" "$(cat /usr/share/lal-cache/filesystem-uuid)" "the filesystem UUID"
+        expect_eq "$(df --output=itotal /var/lib/lal-cache | tail -n 1 | tr -dc 0-9)" \
+          "$(cat /usr/share/lal-cache/inode-count)" "the number of inodes"
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [node2]
 setup: actions/inode-exhaustion-recovery.setup.yaml
 reference_solution: actions/inode-exhaustion-recovery.solution.yaml
 alternate_solutions: [actions/inode-exhaustion-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/inode-exhaustion-recovery.rejected-timer-left-enabled.yaml
+  - actions/inode-exhaustion-recovery.rejected-wipe-everything.yaml

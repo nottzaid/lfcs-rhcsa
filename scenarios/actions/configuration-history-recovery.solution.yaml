@@ -1,8 +1,15 @@
 schema_version: 1
 actions:
-  - action_id: restore-approved-file
+  - action_id: restore-only-the-approved-file
     target: node2
-    arguments: [git, -C, /etc/lal-app, restore, --source=approved-v1, --, app.conf]
-  - action_id: commit-restoration
-    target: node2
-    arguments: [git, -C, /etc/lal-app, commit, -am, Restore approved worker configuration]
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /etc/lal-app
+        git restore --source=approved-v1 -- app.conf
+        git commit --quiet -m 'Restore approved worker settings' app.conf
+        systemctl restart lal-app.service

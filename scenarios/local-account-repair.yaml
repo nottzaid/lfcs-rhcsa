@@ -1,45 +1,98 @@
 schema_version: 1
 scenario_id: local-account-repair
-version: 1
+version: 2
 status: verified
-title: The deployment account was created from the wrong specification
-summary: Repair a local service account and its primary group without replacing the machine.
-estimated_minutes: 20
+title: The deployment account was built from a draft spec
+summary: A service account has the wrong identity, and releases it owns now belong to nobody.
+estimated_minutes: 25
 task_type: fix
 difficulty: foundation
-task: >-
-  The deploysvc account on node1 was created with the wrong identifiers, home directory,
-  login shell, and directory permissions. Make releaseops a local group with GID 4200.
-  Make deploysvc a local user with UID 4201, primary group releaseops, home directory
-  /srv/deploysvc, and login shell /bin/bash. Preserve the existing handoff.txt file while
-  moving the home directory. The final home directory must be owned by deploysvc:releaseops
-  with mode 0750.
+task: |
+  Release jobs on **node1** run as the local account `deploysvc`. It was created from a
+  draft of the account spec, so its numeric IDs clash with the ones the artifact store
+  expects and it cannot even log in.
+
+  Bring the account and its group in line with the approved spec below. The account
+  already owns data: `handoff.txt` in its home directory, and the staged releases under
+  `/srv/releases`. None of it may be lost or left behind.
+requirements:
+  - "`releaseops` is a local group with GID `4200`."
+  - "`deploysvc` has UID `4201`, primary group `releaseops`, home directory `/srv/deploysvc`, and login shell `/bin/bash`."
+  - "`/srv/deploysvc` is owned by `deploysvc:releaseops` with mode `0750`, and `handoff.txt` survives the move intact."
+  - "Everything the account and group owned under `/srv/releases` still belongs to them; nothing is left owned by the retired IDs `4301` and `4300`."
+hints:
+  - "Start with what the system reports now: `getent passwd deploysvc`, `id deploysvc`, and `ls -ln` on the home directory and `/srv/releases`. Numeric owners are what the kernel actually stores."
+  - "`groupmod` and `usermod` can change IDs, the home directory, and the shell in place. Recreating the account would lose what it owns."
+  - "Read the NOTES in `usermod(8)`: changing a UID fixes files inside the home directory only. `find / -xdev -uid 4301` shows what else still points at the old number, and so does `-gid` for the group."
+debrief: |
+  ## What was wrong
+
+  The account and group existed with the wrong numbers (UID 4301, GID 4300), a home under
+  `/home`, and `/sbin/nologin` as its shell. Files store owners as numbers, not names, so
+  everything the account created carried those numbers too.
+
+  ## A clean fix
+
+  ```bash
+  sudo groupmod -g 4200 releaseops
+  sudo usermod -u 4201 -g releaseops -d /srv/deploysvc -m -s /bin/bash deploysvc
+  sudo find /srv -xdev -uid 4301 -exec chown -h deploysvc {} +
+  sudo find /srv -xdev -gid 4300 -exec chgrp -h releaseops {} +
+  sudo chmod 0750 /srv/deploysvc
+  ```
+
+  `usermod -m` moves the home directory and `-u` renumbers the files inside it. Nothing
+  renumbers files anywhere else: after the change, `/srv/releases` is owned by a UID that no
+  longer has a name, which `ls -l` shows as a bare `4301`. On Rocky Linux 10, the files in the
+  moved home also keep the old *group* number, because `groupmod -g` rewrites only
+  `/etc/group`. The two `find` commands repair both. `-h` changes the symlink `current`
+  itself instead of the directory it points to.
+
+  `chown -R --from=4301:4300 deploysvc:releaseops /srv` is an equally good repair: it only
+  touches files whose current owner and group match exactly.
+
+  ## Check it yourself
+
+  ```bash
+  getent passwd deploysvc
+  id deploysvc
+  sudo find / -xdev \( -nouser -o -nogroup \) -print
+  ```
+
+  The last command lists every file whose owner or group has no name, which is the general
+  way to find leftovers after any renumbering.
+
+  ## Tempting but wrong
+
+  - **Deleting and recreating the account.** `userdel -r` destroys the home directory and
+    `handoff.txt` with it, and the releases stay orphaned under the old numbers.
+  - **Stopping after `usermod`.** The account looks right in `/etc/passwd`, but the releases
+    now belong to nobody, and a deployment that writes there fails with permission errors.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: users-groups.local-accounts
     title: Create and manage local user and group accounts
-  - track: professional
-    version: v1
-    objective_id: repair-account-without-data-loss
-    title: Repair account metadata while preserving application data
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: usermod manual
+    title: Modify a user account
     man_page: usermod(8)
   - kind: man-page
-    title: groupmod manual
+    title: Modify a group definition
     man_page: groupmod(8)
   - kind: man-page
-    title: passwd database manual
+    title: The password file format
     man_page: passwd(5)
+  - kind: man-page
+    title: Search for files, including by numeric owner
+    man_page: find(1)
 topology:
   hosts:
     - name: node1
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
@@ -48,33 +101,25 @@ checks:
     target: node1
     description: releaseops is a local group with GID 4200.
     parameters:
-      arguments: [getent, group, releaseops]
-      stdout_contains: "releaseops:x:4200:"
-  - check_id: deploysvc-uid
+      script: |
+        entry=$(getent group releaseops) || fail "there is no releaseops group"
+        expect_eq "$(cut -d: -f3 <<<"$entry")" 4200 "the releaseops GID"
+  - check_id: deploysvc-identity
     kind: command
     target: node1
-    description: deploysvc has UID 4201.
+    description: deploysvc has UID 4201, primary group releaseops, home /srv/deploysvc, and shell /bin/bash.
     parameters:
-      arguments: [id, -u, deploysvc]
-      stdout_equals: "4201"
-  - check_id: deploysvc-primary-group
-    kind: command
-    target: node1
-    description: deploysvc has releaseops as its primary group.
-    parameters:
-      arguments: [id, -gn, deploysvc]
-      stdout_equals: releaseops
-  - check_id: deploysvc-passwd-entry
-    kind: command
-    target: node1
-    description: deploysvc has the required home directory and shell.
-    parameters:
-      arguments: [getent, passwd, deploysvc]
-      stdout_contains: ":/srv/deploysvc:/bin/bash"
-  - check_id: deploysvc-home
+      script: |
+        entry=$(getent passwd deploysvc) || fail "there is no deploysvc account"
+        IFS=: read -r _ _ uid gid _ home shell <<<"$entry"
+        expect_eq "$uid" 4201 "the deploysvc UID"
+        expect_eq "$(getent group "$gid" | cut -d: -f1)" releaseops "the primary group"
+        expect_eq "$home" /srv/deploysvc "the home directory"
+        expect_eq "$shell" /bin/bash "the login shell"
+  - check_id: home-directory
     kind: file
     target: node1
-    description: The home directory has the required ownership and mode.
+    description: The home directory is owned by deploysvc:releaseops with mode 0750.
     parameters:
       path: /srv/deploysvc
       kind: directory
@@ -84,12 +129,28 @@ checks:
   - check_id: handoff-preserved
     kind: file
     target: node1
-    description: The existing handoff file survived the move.
+    description: handoff.txt moved with the home directory and still belongs to deploysvc.
     parameters:
       path: /srv/deploysvc/handoff.txt
       kind: file
-      contains: preserve-this-data
+      owner: deploysvc
+      contains: release 2026.09 approved by change board
+  - check_id: releases-still-owned
+    kind: command
+    target: node1
+    description: Nothing is left owned by the retired IDs, and the staged releases still belong to deploysvc.
+    parameters:
+      sudo: true
+      script: |
+        orphans=$(find /srv /home -xdev \( -uid 4301 -o -gid 4300 \) -printf '%p ' | head -c 200)
+        [[ -z "$orphans" ]] || fail "still owned by the retired IDs: $orphans"
+        expect_eq "$(stat -c %U:%G /srv/releases/2026.09/app.tar)" deploysvc:releaseops "the owner of the staged release"
+        expect_eq "$(stat -c %U:%G /srv/releases/current)" deploysvc:releaseops "the owner of the current symlink"
 persistence:
   reboot: false
 setup: actions/local-account-repair.setup.yaml
 reference_solution: actions/local-account-repair.solution.yaml
+alternate_solutions: [actions/local-account-repair.alternate.yaml]
+rejected_solutions:
+  - actions/local-account-repair.rejected-recreate.yaml
+  - actions/local-account-repair.rejected-home-only.yaml

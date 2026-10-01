@@ -11,6 +11,8 @@ from fastapi import Depends, FastAPI, HTTPException, Request, status
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from markdown_it import MarkdownIt
+from markupsafe import Markup
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from sysadmin_lab.application.background_jobs import (
@@ -25,13 +27,21 @@ from sysadmin_lab.application.lab_workspace import (
     ScenarioSessionSnapshot,
     WorkspacePaths,
 )
-from sysadmin_lab.application.scenario_sessions import StartedScenario
+from sysadmin_lab.application.learning_path import build_learning_path
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
 from sysadmin_lab.domain.mock_exams import MockExamManifest
 from sysadmin_lab.domain.models import ScenarioManifest, ScenarioStatus
 from sysadmin_lab.domain.progress import ScenarioProgress
-from sysadmin_lab.domain.sessions import SessionState
+from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 
 ASSET_ROOT = Path(__file__).with_name("web_assets")
+# Scenario prose is trusted repository content, but raw HTML stays disabled anyway so a
+# manifest can only ever produce Markdown's own safe subset.
+_MARKDOWN = MarkdownIt("commonmark", {"html": False}).enable("table")
+
+
+def render_markdown(text: str) -> Markup:
+    return Markup(_MARKDOWN.render(text))
 
 
 def _manifest_json(manifest: ScenarioManifest) -> dict[str, Any]:
@@ -90,6 +100,19 @@ def _session_json(snapshot: ScenarioSessionSnapshot) -> dict[str, Any]:
             }
             for machine in snapshot.machines
         ],
+    }
+
+
+def _learner_report_json(report: LearnerCheckReport) -> dict[str, Any]:
+    return {
+        "solved": report.solved,
+        "live_passed": report.live_passed,
+        "reboot_hosts": list(report.reboot_hosts),
+        "unreachable_host": report.unreachable_host,
+        "live": _report_json(report.live),
+        "after_reboot": (
+            _report_json(report.after_reboot) if report.after_reboot is not None else None
+        ),
     }
 
 
@@ -184,6 +207,7 @@ def create_app(
     )
     app.mount("/static", StaticFiles(directory=ASSET_ROOT / "static"), name="static")
     templates = Jinja2Templates(directory=ASSET_ROOT / "templates")
+    templates.env.filters["markdown"] = render_markdown
 
     @app.middleware("http")
     async def private_responses(request: Request, call_next: Any) -> Any:
@@ -242,6 +266,14 @@ def create_app(
     def home() -> RedirectResponse:
         return RedirectResponse("/scenarios/topic/lfcs", status_code=307)
 
+    def solved_now(manifest: ScenarioManifest) -> bool:
+        return any(
+            item.scenario_id == manifest.scenario_id
+            and item.scenario_version == manifest.version
+            and item.solved
+            for item in active_workspace.progress()
+        )
+
     @app.get("/scenarios/topic/lfcs", response_class=HTMLResponse)
     def catalog_page(request: Request) -> HTMLResponse:
         scenarios = tuple(
@@ -249,35 +281,25 @@ def create_app(
             for scenario in active_workspace.scenarios()
             if scenario.status is ScenarioStatus.VERIFIED
         )
-        sessions = active_workspace.sessions(limit=20)
-        progress = active_workspace.progress()
-        mock_exams = tuple(
-            mock
-            for mock in active_workspace.mock_exams()
-            if mock.status is ScenarioStatus.VERIFIED
+        path = build_learning_path(
+            scenarios, active_workspace.curriculum(), active_workspace.progress()
         )
         active_by_scenario = {
             snapshot.state.scenario_id: snapshot
-            for snapshot in sessions
-            if snapshot.state.status.value == "ready"
+            for snapshot in active_workspace.sessions(limit=20)
+            if snapshot.state.status is SessionStatus.READY
         }
-        progress_by_scenario = {
-            item.scenario_id: item
-            for item in progress
-            if any(
-                scenario.scenario_id == item.scenario_id
-                and scenario.version == item.scenario_version
-                for scenario in scenarios
-            )
-        }
+        mock_exams = tuple(
+            mock for mock in active_workspace.mock_exams() if mock.status is ScenarioStatus.VERIFIED
+        )
         return templates.TemplateResponse(
             request=request,
             name="catalog.html",
             context={
-                "scenarios": scenarios,
-                "sessions": sessions,
+                "path": path,
+                "scenario_count": len(scenarios),
+                "solved_count": sum(section.solved for section in path),
                 "active_by_scenario": active_by_scenario,
-                "progress_by_scenario": progress_by_scenario,
                 "mock_exams": mock_exams,
             },
         )
@@ -287,10 +309,12 @@ def create_app(
         mock = mock_or_404(mock_id)
         scenarios = {scenario.scenario_id: scenario for scenario in active_workspace.scenarios()}
         tasks = tuple(scenarios[scenario_id] for scenario_id in mock.tasks)
+        rehearsal = active_workspace.rehearsal(mock_id)
+        results = {task.scenario_id: task for task in rehearsal.tasks} if rehearsal else {}
         return templates.TemplateResponse(
             request=request,
             name="mock.html",
-            context={"mock": mock, "tasks": tasks},
+            context={"mock": mock, "tasks": tasks, "rehearsal": rehearsal, "results": results},
         )
 
     @app.get("/scenarios/{scenario_id}", response_class=HTMLResponse)
@@ -299,7 +323,7 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="scenario.html",
-            context={"scenario": manifest},
+            context={"scenario": manifest, "solved": solved_now(manifest)},
         )
 
     @app.get("/sessions/{session_id}", response_class=HTMLResponse)
@@ -309,7 +333,7 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="session.html",
-            context={"scenario": manifest, "session": snapshot},
+            context={"scenario": manifest, "session": snapshot, "solved": solved_now(manifest)},
         )
 
     @app.get("/api/health")
@@ -360,6 +384,19 @@ def create_app(
         )
 
     @app.post(
+        "/api/mocks/{mock_id}/rehearsal",
+        dependencies=[Depends(require_local_action)],
+    )
+    def start_rehearsal(mock_id: str) -> JSONResponse:
+        mock_or_404(mock_id)
+
+        def start() -> dict[str, Any]:
+            active_workspace.start_rehearsal(mock_id)
+            return {"redirect_url": f"/mocks/{mock_id}"}
+
+        return submit_job(kind="rehearsal", resource_key=f"mock:{mock_id}", operation=start)
+
+    @app.post(
         "/api/sessions/{session_id}/check",
         dependencies=[Depends(require_local_action)],
     )
@@ -368,7 +405,7 @@ def create_app(
         return submit_job(
             kind="check",
             resource_key=f"session:{session_id}",
-            operation=lambda: _report_json(active_workspace.check(session_id)),
+            operation=lambda: _learner_report_json(active_workspace.check(session_id)),
         )
 
     @app.post(

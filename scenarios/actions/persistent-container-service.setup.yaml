@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-offline-worker-image
+  - action_id: build-the-worker-image
     target: node2
     timeout_seconds: 120
     arguments:
@@ -10,17 +10,52 @@ actions:
       - -c
       - |
         set -euo pipefail
-        systemctl disable --now lal-worker.service >/dev/null 2>&1 || true
-        rm -f /etc/containers/systemd/lal-worker.container /etc/systemd/system/lal-worker.service
-        podman rm -f lal-worker >/dev/null 2>&1 || true
-        podman rmi localhost/lal-worker:1 >/dev/null 2>&1 || true
-        root=/tmp/lal-worker-rootfs
+        root=$(mktemp -d)
+        install -d "$root/usr/local/bin" "$root/data"
+        for program in /usr/bin/bash /usr/bin/sleep; do
+          cp --parents "$program" "$root"
+          ldd "$program" | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
+            while read -r library; do cp --parents --dereference "$library" "$root"; done
+        done
+        ln -s usr/bin "$root/bin"
+        cat > "$root/usr/local/bin/lal-worker" <<'WORKER'
+        #!/usr/bin/bash
+        # The report worker: records a heartbeat for its site in /data every 10 seconds.
+        trap 'exit 0' TERM INT
+        if [[ -z "${WORKER_SITE:-}" ]]; then
+          echo "lal-worker: WORKER_SITE is not set" >&2
+          exit 2
+        fi
+        echo "lal-worker: reporting for site $WORKER_SITE"
+        while :; do
+          if ! error=$({ printf 'site=%s\nwritten=%(%FT%T%z)T\n' "$WORKER_SITE" -1 > /data/heartbeat; } 2>&1); then
+            echo "lal-worker: cannot write /data/heartbeat: ${error##*: }" >&2
+            exit 1
+          fi
+          sleep 10 & wait $!
+        done
+        WORKER
+        chmod 0755 "$root/usr/local/bin/lal-worker"
+        podman rmi --force localhost/lal-worker:1 >/dev/null 2>&1 || true
+        tar -C "$root" -cf - . | podman import --quiet \
+          --change 'CMD=["/usr/local/bin/lal-worker"]' \
+          --change 'LABEL=org.opencontainers.image.title=lal-worker' - localhost/lal-worker:1 >/dev/null
         rm -rf "$root"
-        install -d "$root/bin" "$root/lib64" "$root/usr/lib64"
-        cp --parents /bin/bash "$root"
-        ldd /bin/bash | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
-          while read -r library; do cp --parents "$library" "$root"; done
-        tar -C "$root" -cf - . | podman import - localhost/lal-worker:1
-        rm -rf "$root" /srv/worker-data
-        install -d -m 0770 /srv/worker-data /etc/containers/systemd
-        systemctl daemon-reload
+  - action_id: start-the-worker-by-hand
+    target: node2
+    timeout_seconds: 60
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -m 0750 /srv/worker-data
+        podman run --detach --name lal-worker --restart=always \
+          --env WORKER_SITE=amman --volume /srv/worker-data:/data:Z localhost/lal-worker:1 >/dev/null
+        for _ in $(seq 20); do [[ -s /srv/worker-data/heartbeat ]] && break; sleep 0.5; done
+        grep -qx site=amman /srv/worker-data/heartbeat
+  - action_id: stop-it-as-the-reboot-did
+    target: node2
+    arguments: [sudo, --, podman, stop, --time, "15", lal-worker]

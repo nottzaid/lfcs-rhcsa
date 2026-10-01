@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-configuration-history
+  - action_id: build-the-configuration-history
     target: node2
     arguments:
       - sudo
@@ -9,22 +9,54 @@ actions:
       - -c
       - |
         set -euo pipefail
-        rm -rf /etc/lal-app
         install -d -m 0755 /etc/lal-app
-        git -C /etc/lal-app init --quiet --initial-branch=main
-        git -C /etc/lal-app config user.name 'Operations Team'
-        git -C /etc/lal-app config user.email 'ops@lab.invalid'
-        printf 'workers=8\n' > /etc/lal-app/app.conf
-        git -C /etc/lal-app add app.conf
-        git -C /etc/lal-app commit --quiet -m 'Approve worker configuration'
-        git -C /etc/lal-app tag approved-v1
-        printf 'Configuration is managed in Git.\n' > /etc/lal-app/README
-        git -C /etc/lal-app add README
-        git -C /etc/lal-app commit --quiet -m 'Document configuration ownership'
-        git -C /etc/lal-app tag docs-update
-        printf 'workers=2\n' > /etc/lal-app/app.conf
-        git -C /etc/lal-app add app.conf
-        git -C /etc/lal-app commit --quiet -m 'Apply rejected worker setting'
-  - action_id: make-repository-administrable
+        cd /etc/lal-app
+        git init --quiet --initial-branch=main
+        git config user.name 'Operations Team'
+        git config user.email 'ops@lab.invalid'
+        printf 'workers=8\nqueue=ingest\n' > app.conf
+        printf '# lal-app\n\nWorker settings are reviewed before release.\n' > README
+        git add app.conf README
+        git commit --quiet -m 'Approve worker configuration'
+        git tag approved-v1
+        printf 'workers=2\nqueue=ingest\n' > app.conf
+        printf '\nOn-call contact: platform-oncall@lab.invalid\n' >> README
+        git commit --quiet -am 'Incident: shed load and record on-call contact'
+        install -d docs
+        printf 'Logs are kept for 14 days.\n' > docs/retention.md
+        git add docs/retention.md
+        git commit --quiet -m 'Document log retention'
+        install -d -m 0755 /usr/share/lal-app
+        git rev-parse HEAD > /usr/share/lal-app/published-tip
+  - action_id: run-the-service-on-the-rejected-settings
     target: node2
-    arguments: [sudo, --, chown, -R, labadmin:labadmin, /etc/lal-app]
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cat > /usr/local/sbin/lal-app <<'EOF'
+        #!/bin/bash
+        set -eu
+        . /etc/lal-app/app.conf
+        printf '%s\n' "$workers" > /run/lal-app/workers
+        echo "lal-app started with $workers workers on queue $queue"
+        exec sleep infinity
+        EOF
+        chmod 0755 /usr/local/sbin/lal-app
+        cat > /etc/systemd/system/lal-app.service <<'EOF'
+        [Unit]
+        Description=lal-app worker pool
+
+        [Service]
+        ExecStart=/usr/local/sbin/lal-app
+        RuntimeDirectory=lal-app
+        RuntimeDirectoryPreserve=yes
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+        systemctl enable --now lal-app.service

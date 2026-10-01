@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: address-router-differently
+    target: router
+    arguments: [sudo, --, bash, -c, "nmcli connection add type ethernet ifname lan0 con-name uplink ipv4.method manual ipv4.addresses 10.99.0.1/24 ipv6.method disabled autoconnect yes && nmcli connection up uplink && printf 'net.ipv4.ip_forward   =   1\\n' > /etc/sysctl.d/80-probe.conf && mkdir -p /mnt/probe && printf 'tmpfs   /mnt/probe   tmpfs   mode=0750,size=16m   0 0\\n' >> /etc/fstab && systemctl daemon-reload && mount /mnt/probe"]

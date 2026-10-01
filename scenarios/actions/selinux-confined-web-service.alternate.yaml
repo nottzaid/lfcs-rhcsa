@@ -1,15 +1,14 @@
 schema_version: 1
 actions:
-  - action_id: install-persistent-selinux-policy
+  - action_id: label-the-port-for-web-servers
     target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - >-
-        semanage fcontext -a -t httpd_sys_content_t '/srv/lal-web(/.*)?';
-        restorecon -RF /srv/lal-web;
-        semanage port -a -p tcp -t http_port_t 8088;
-        systemctl enable nginx;
-        systemctl restart nginx
+    arguments: [sudo, --, semanage, port, -a, -t, http_port_t, -p, tcp, "8088"]
+  - action_id: label-like-the-standard-web-root
+    target: node2
+    arguments: [sudo, --, semanage, fcontext, -a, -e, /var/www, /srv/lal-web]
+  - action_id: apply-the-policy-labels
+    target: node2
+    arguments: [sudo, --, restorecon, -RFv, /srv/lal-web]
+  - action_id: restart-nginx
+    target: node2
+    arguments: [sudo, --, systemctl, restart, nginx.service]

@@ -3,8 +3,12 @@
 - Authority: Linux Foundation Education
 - Retrieved: 2026-08-11
 - Certification page last modified by publisher: 2026-08-06
+- Rechecked: 2026-10-01 against the live pages (certification page modified 2026-08-31).
+  Domains, weights, all 34 competency titles, the task count, the duration, and the passing
+  score are unchanged. The instructions now call the base host `base` instead of `node-1`,
+  and state its firewall rule as the three ports that must stay open.
 - Machine-readable record: [`curricula/lfcs-2026-08.yaml`](../../curricula/lfcs-2026-08.yaml)
-- Machine-checked portfolio: [`curricula/lfcs-2026-08-portfolio.yaml`](../../curricula/lfcs-2026-08-portfolio.yaml)
+- Coverage: every competency has a focused scenario; `tests/contract/test_scenarios.py` derives this from the scenario manifests.
 
 ## Published domains
 
@@ -25,15 +29,17 @@ The page states that the exam is distribution-independent and performance-based.
 The Linux Foundation's current
 [LFCS instructions](https://docs.linuxfoundation.org/tc-docs/certification/instructions-lfcs-and-lfce)
 specify 17–20 command-line performance tasks, two hours, and a 67% passing score. Tasks name
-their designated host. The environment can direct candidates from `node-1` to containers or
-remote nodes over SSH; root access is available with `sudo -i`; `node-1` must not be rebooted,
+their designated host. The environment can direct candidates from `base` to containers or
+remote nodes over SSH; root access is available with `sudo -i`; `base` must not be rebooted,
 while other nodes may be rebooted. Allowed in-terminal resources include man pages,
 distribution-installed documentation, and distribution packages.
 
-The instructions also say candidates should return to `node-1` instead of nesting SSH
-connections, must not manipulate the firewall on `node-1`, and must not block TCP ports 8080,
-4505, or 4506. Lab scenarios therefore use designated secondary nodes for reboot and firewall
-work, and reserve the controller role for access and grading.
+The instructions also say candidates should return to `base` instead of nesting SSH
+connections, that every task is done on its designated SSH host (`base` has none of the
+exam's tools installed), and that no firewall configuration, in files or interactive, may
+block incoming TCP ports 8080, 4505, or 4506. Lab scenarios therefore use designated
+secondary nodes for reboot and firewall work, and reserve the controller role for access and
+grading.
 
 The official
 [scoring guidance](https://docs.linuxfoundation.org/tc-docs/certification/lf-handbook2/exam-scoring-and-notification)

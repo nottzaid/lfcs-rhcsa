@@ -1,17 +1,72 @@
 schema_version: 1
 scenario_id: resource-bottleneck-investigation
-version: 1
+version: 2
 status: verified
-title: An indexing worker is starving interactive services
-summary: Identify a managed CPU workload and constrain it without disabling the work.
-estimated_minutes: 30
+title: Something keeps the search node's CPU pinned
+summary: A single-CPU host is sluggish and one of its services is the cause.
+estimated_minutes: 25
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  Interactive work on node2 is slow because one managed background workload consumes an
-  entire CPU. Diagnose the running processes and services. Keep the indexing workload
-  running and enabled, but constrain it to at most 25% of one CPU and set its process nice
-  level to 10. Do not constrain sshd or change the VM's CPU count.
+task: |
+  The search node **node2** has one CPU, and interactive work on it has become painfully
+  slow. Nothing new was deployed; three search services run there, and the team needs all
+  of them.
+
+  Find what is consuming the CPU and tame it without stopping it: from now on, and after
+  every restart or reboot, it may use at most a quarter of one CPU and must yield to
+  interactive work.
+requirements:
+  - "The service consuming the CPU keeps running and stays enabled."
+  - "It uses no more than 25% of one CPU, measured while it runs, and this survives restarts and reboots."
+  - "Its processes run at nice level `10`, also after restarts and reboots."
+  - "The other services are not constrained."
+hints:
+  - "`top` (press `P` to sort by CPU) or `ps -eo pid,ni,pcpu,unit,cmd --sort=-pcpu | head` shows the heaviest process. The process name may not match the service name; `systemctl status PID` tells you which unit owns a PID."
+  - "`renice` changes one running process and is forgotten on restart. systemd starts services, so persistent scheduling and CPU limits belong in the unit: see `Nice=` in `systemd.exec(5)` and `CPUQuota=` in `systemd.resource-control(5)`."
+  - "`systemctl edit UNIT` creates a drop-in. Changing `Nice=` takes effect at the next start of the service."
+debrief: |
+  ## What was wrong
+
+  `lal-search-indexer.service` runs `/usr/local/libexec/lal-search/reindex`, which never
+  sleeps. On a one-CPU machine, a process that is always runnable at the same priority as
+  your shell gets roughly half of every scheduling decision.
+
+  ## A clean fix
+
+  ```bash
+  ps -eo pid,ni,pcpu,unit,cmd --sort=-pcpu | head -3
+  sudo systemctl edit lal-search-indexer.service
+  #   [Service]
+  #   CPUQuota=25%
+  #   Nice=10
+  sudo systemctl restart lal-search-indexer.service
+  ```
+
+  `CPUQuota=25%` asks the kernel's cgroup CPU controller to give the unit at most 25 ms of
+  CPU time in every 100 ms period, however idle the machine is. `Nice=10` lowers its
+  priority, so interactive work wins whenever both are runnable. The drop-in lives in
+  `/etc/systemd/system/lal-search-indexer.service.d/` and applies to every start.
+
+  `systemctl set-property lal-search-indexer.service CPUQuota=25%` writes an equivalent,
+  persistent drop-in under `/etc/systemd/system.control/` and applies it immediately. It
+  handles resource-control settings only, so `Nice=` still needs a drop-in.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl show lal-search-indexer -p CPUQuotaPerSecUSec -p Nice
+  ps -o pid,ni,pcpu,cmd -p "$(systemctl show -p MainPID --value lal-search-indexer)"
+  systemd-cgtop
+  ```
+
+  ## Tempting but wrong
+
+  - **`renice 10 PID` plus `systemctl set-property --runtime`.** Both work until the
+    service restarts or the host reboots; `--runtime` changes live under `/run`.
+  - **Stopping or disabling the indexer.** The CPU is free, and the search index goes
+    stale.
+  - **Capping the whole `system.slice`.** It throttles every service, including the ones
+    that were never the problem.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -21,53 +76,72 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: systemd resource-control documentation
-    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.resource-control.html
   - kind: man-page
-    title: systemd.resource-control manual
+    title: CPUQuota= and other cgroup limits
     man_page: systemd.resource-control(5)
   - kind: man-page
-    title: ps manual
+    title: Nice= and other execution settings
+    man_page: systemd.exec(5)
+  - kind: man-page
+    title: Process listing, including the owning unit
     man_page: ps(1)
+  - kind: man-page
+    title: Live process and CPU view
+    man_page: top(1)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
-  - check_id: indexer-remains-operational
+  - check_id: workload-still-running
     kind: service
     target: node2
-    description: The indexing worker remains running and enabled.
-    parameters:
-      name: lal-indexer.service
-      active: true
-      enabled: true
-  - check_id: cpu-budget-applied
+    description: The service consuming the CPU keeps running and stays enabled.
+    parameters: {name: lal-search-indexer.service, active: true, enabled: true}
+  - check_id: cpu-capped
     kind: command
     target: node2
-    description: systemd enforces a 25 percent CPU quota for the worker.
+    description: It uses no more than 25% of one CPU while it runs.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - test "$(systemctl show -p CPUQuotaPerSecUSec --value lal-indexer.service)" = 250ms
-  - check_id: scheduling-priority-applied
+      timeout_seconds: 20
+      script: |
+        systemctl is-active --quiet lal-search-indexer.service || fail "the indexer is not running"
+        before=$(unit_value lal-search-indexer.service CPUUsageNSec)
+        sleep 4
+        after=$(unit_value lal-search-indexer.service CPUUsageNSec)
+        percent=$(( (after - before) / 40000000 ))
+        (( percent <= 28 )) || fail "the indexer used ${percent}% of a CPU over the last 4 seconds"
+  - check_id: runs-at-lower-priority
     kind: command
     target: node2
-    description: The running worker has nice level 10.
+    description: Its processes run at nice level 10.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(systemctl show -p Nice --value lal-indexer.service)" -eq 10 &&
-          pid=$(systemctl show -p MainPID --value lal-indexer.service) &&
-          test "$(ps -o ni= -p "$pid" | tr -d ' ')" -eq 10
+      script: |
+        pids=$(systemctl show --property=ControlGroup --value lal-search-indexer.service)
+        pids=$(cat "/sys/fs/cgroup$pids/cgroup.procs" 2>/dev/null) || fail "the indexer is not running"
+        for pid in $pids; do
+          expect_eq "$(ps -o ni= -p "$pid" | tr -d ' ')" 10 "the nice level of indexer process $pid"
+        done
+  - check_id: others-unconstrained
+    kind: command
+    target: node2
+    description: The other services are not constrained.
+    parameters:
+      script: |
+        for unit in lal-search-api.service lal-search-cache.service system.slice; do
+          expect_eq "$(unit_value "$unit" CPUQuotaPerSecUSec)" infinity "the CPU quota of $unit"
+        done
+        for unit in lal-search-api.service lal-search-cache.service; do
+          systemctl is-active --quiet "$unit" || fail "$unit is not running"
+        done
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [node2]
 setup: actions/resource-bottleneck-investigation.setup.yaml
 reference_solution: actions/resource-bottleneck-investigation.solution.yaml
 alternate_solutions: [actions/resource-bottleneck-investigation.alternate.yaml]
+rejected_solutions:
+  - actions/resource-bottleneck-investigation.rejected-runtime-only.yaml
+  - actions/resource-bottleneck-investigation.rejected-throttle-everything.yaml

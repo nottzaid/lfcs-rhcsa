@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: define-collector-service
+  - action_id: write-and-enable-the-unit
     target: node2
     arguments:
       - sudo
@@ -8,20 +8,18 @@ actions:
       - bash
       - -c
       - |
+        set -euo pipefail
         cat > /etc/systemd/system/lal-collector.service <<'EOF'
         [Unit]
-        Description=Linux Admin Lab collector
-        After=local-fs.target
+        Description=Metrics collector
 
         [Service]
-        Type=simple
         User=collector
         Group=collector
-        WorkingDirectory=/var/lib/lal-collector
         EnvironmentFile=/etc/lal-collector.conf
+        WorkingDirectory=/var/lib/lal-collector
         ExecStart=/opt/lal/bin/collector
         Restart=on-failure
-        RestartSec=2s
 
         [Install]
         WantedBy=multi-user.target

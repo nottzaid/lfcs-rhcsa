@@ -1,6 +1,37 @@
 schema_version: 1
 actions:
-  - action_id: create-unconstrained-capacity-load
+  - action_id: run-a-peer-on-the-lab-network
+    target: labpeer
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lab0 con-name lab ipv4.method manual \
+          ipv4.addresses 10.88.0.5/24 ipv6.method disabled >/dev/null
+        nmcli connection up lab >/dev/null
+        install -d /srv/peer
+        echo lab-peer > /srv/peer/index.html
+        cat > /etc/systemd/system/peer-web.service <<'UNIT'
+        [Unit]
+        Description=Lab peer status page
+        After=network-online.target
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -m http.server 8080 --directory /srv/peer
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now peer-web.service
+        firewall-cmd --quiet --permanent --add-port=8080/tcp
+        firewall-cmd --quiet --reload
+  - action_id: build-the-utility-appliance
     target: node2
     timeout_seconds: 120
     arguments:
@@ -10,34 +41,42 @@ actions:
       - -c
       - |
         set -euo pipefail
-        disk=/dev/disk/by-id/virtio-lal-capacityio
-        umount /srv/capacity-io >/dev/null 2>&1 || true
-        wipefs -a "$disk"
-        mkfs.xfs -f -L LAL_CAP_IO "$disk" >/dev/null
-        install -d /srv/capacity-io
-        sed -i '\#/srv/capacity-io#d' /etc/fstab
-        printf 'LABEL=LAL_CAP_IO /srv/capacity-io xfs defaults 0 0\n' >> /etc/fstab
-        mount /srv/capacity-io
-        cat > /etc/systemd/system/lal-capacity-cpu.service <<'EOF'
-        [Service]
-        ExecStart=/usr/bin/stress-ng --cpu 1
-        Restart=always
-        [Install]
-        WantedBy=multi-user.target
-        EOF
-        cat > /etc/systemd/system/lal-capacity-io.service <<'EOF'
-        [Service]
-        ExecStart=/usr/bin/stress-ng --hdd 1 --hdd-bytes 128M --temp-path /srv/capacity-io
-        Restart=always
-        [Install]
-        WantedBy=multi-user.target
-        EOF
-        rm -rf /etc/systemd/system/lal-capacity-{cpu,io}.service.d
-        systemctl daemon-reload
-        systemctl enable --now lal-capacity-cpu.service lal-capacity-io.service
-        sysctl -w vm.swappiness=60 >/dev/null
-        rm -f /etc/sysctl.d/80-lal-capacity.conf
-  - action_id: remove-capacity-network-and-guest
+        # A minimal appliance: node2's kernel and an initramfs whose init reports its data disk.
+        root=$(mktemp -d)
+        install -d "$root/dev" "$root/proc" "$root/sys"
+        for program in /usr/bin/bash /usr/bin/sleep /usr/bin/mount /usr/bin/kmod; do
+          cp --parents "$program" "$root"
+          ldd "$program" | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
+            while read -r library; do cp --parents --dereference "$library" "$root"; done
+        done
+        ln -s usr/bin "$root/bin"
+        ln -s kmod "$root/usr/bin/insmod"
+        cp "/lib/modules/$(uname -r)/kernel/drivers/block/virtio_blk.ko.xz" "$root/virtio_blk.ko.xz"
+        cat > "$root/init" <<'INIT'
+        #!/usr/bin/bash
+        mount -t proc proc /proc
+        mount -t sysfs sysfs /sys
+        mount -t devtmpfs devtmpfs /dev
+        exec </dev/console >/dev/console 2>&1
+        insmod /virtio_blk.ko.xz
+        echo "lal-utility: appliance booted"
+        for _ in {1..20}; do [[ -b /dev/vda ]] && break; sleep 0.5; done
+        if [[ ! -b /dev/vda ]]; then
+          echo "lal-utility: no data disk attached"
+        elif read -r magic id < /dev/vda && [[ $magic == LAL-UTILITY-DATA ]]; then
+          echo "lal-utility: data disk $id online"
+        else
+          echo "lal-utility: /dev/vda holds no lal-utility data"
+        fi
+        while :; do sleep 3600; done
+        INIT
+        chmod 0755 "$root/init"
+        install -d /var/lib/libvirt/boot
+        cp "/boot/vmlinuz-$(uname -r)" /var/lib/libvirt/boot/lal-utility-vmlinuz
+        (cd "$root" && find . | cpio --quiet -o -H newc | gzip -1) > /var/lib/libvirt/boot/lal-utility-initrd.img
+        rm -rf "$root"
+        restorecon -R /var/lib/libvirt
+  - action_id: bring-the-vm-host-to-its-knees
     target: node2
     arguments:
       - sudo
@@ -45,10 +84,58 @@ actions:
       - bash
       - -c
       - |
-        for con in lal-capacity-port lal-capacity-bridge; do nmcli con delete "$con" >/dev/null 2>&1 || true; done
-        ip link delete br-lab >/dev/null 2>&1 || true
-        ip link delete lab-port >/dev/null 2>&1 || true
-        systemctl enable --now virtqemud.socket
-        virsh -c qemu:///system destroy capacity-guest >/dev/null 2>&1 || true
-        virsh -c qemu:///system undefine capacity-guest --nvram >/dev/null 2>&1 || true
-        rm -f /var/lib/libvirt/images/capacity-guest.qcow2
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lab0 con-name lab ipv4.method manual \
+          ipv4.addresses 10.88.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up lab >/dev/null
+        virtualization=qemu
+        [[ -c /dev/kvm ]] && virtualization=kvm
+        cat > /tmp/lal-utility.xml <<XML
+        <domain type='$virtualization'>
+          <name>lal-utility</name>
+          <description>Utility appliance for the lab network.</description>
+          <memory unit='MiB'>256</memory>
+          <vcpu>1</vcpu>
+          <os>
+            <type arch='x86_64' machine='q35'>hvm</type>
+            <kernel>/var/lib/libvirt/boot/lal-utility-vmlinuz</kernel>
+            <initrd>/var/lib/libvirt/boot/lal-utility-initrd.img</initrd>
+            <cmdline>console=ttyS0 quiet</cmdline>
+          </os>
+          <features><acpi/></features>
+          <cpu mode='maximum'/>
+          <on_poweroff>destroy</on_poweroff>
+          <devices>
+            <interface type='network'>
+              <source network='default'/>
+              <model type='virtio'/>
+            </interface>
+            <serial type='pty'/>
+            <console type='pty'/>
+          </devices>
+        </domain>
+        XML
+        virsh -q define /tmp/lal-utility.xml >/dev/null
+        rm -f /tmp/lal-utility.xml
+        virsh -q start lal-utility >/dev/null
+        cat > /usr/local/bin/lal-reindex <<'JOB'
+        #!/usr/bin/bash
+        # Nightly search reindex: CPU-bound, one worker per CPU.
+        for _ in $(seq "$(nproc)"); do
+          (while :; do :; done) &
+        done
+        wait
+        JOB
+        chmod 0755 /usr/local/bin/lal-reindex
+        cat > /etc/systemd/system/lal-reindex.service <<'UNIT'
+        [Unit]
+        Description=Search reindex batch job
+
+        [Service]
+        ExecStart=/usr/local/bin/lal-reindex
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now lal-reindex.service

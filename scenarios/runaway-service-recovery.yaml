@@ -1,103 +1,122 @@
 schema_version: 1
 scenario_id: runaway-service-recovery
-version: 1
+version: 2
 status: verified
-title: A retired collector is stealing cycles from its replacement
-summary: Remove an unwanted workload and recover its failed systemd-managed replacement.
-estimated_minutes: 25
+title: The retired collector keeps coming back
+summary: After a migration the host is sluggish, the new service is down, and the old one refuses to die.
+estimated_minutes: 30
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  On node2, the retired lal-legacy-spin workload is still running and must be stopped. Its
-  replacement, lal-metrics.service, is enabled but failing because its environment is wrong.
-  Configure BATCH_SIZE=50 in /etc/sysconfig/lal-metrics, make lal-metrics.service active and
-  enabled, and ensure its running main process has nice value 10. The retired workload must
-  remain absent after node2 reboots. Do not reboot node1; it is not part of this scenario.
+task: |
+  Last week **node2** was migrated from the old metrics collector (v1) to
+  `lal-metrics.service`. Since then the host has been sluggish and no metrics arrive.
+  Someone already "killed the old collector", twice.
+
+  Finish the migration. The v1 collector is retired: stop it, and make sure nothing brings
+  it back, reboots included. Get `lal-metrics` running with the batch size the migration
+  runbook specifies: `BATCH_SIZE=50`.
+requirements:
+  - "No process of the v1 collector is running, and none starts again after node2 reboots."
+  - "`lal-metrics.service` is running and enabled, working with a batch size of 50."
+hints:
+  - "Find the busy process with `top` or `ps -eo pid,pcpu,unit,cmd --sort=-pcpu`, then ask systemd who owns it: `systemctl status PID`. `kill` alone is not enough when systemd restarts what it supervises."
+  - "`systemctl disable` removes a unit's boot-time links, but anything can still *start* a disabled unit. Look for other places that start things at boot: `/etc/cron.d`, crontabs, and `systemctl list-dependencies`. `systemctl mask` blocks every start."
+  - "`systemctl status lal-metrics` and `journalctl -u lal-metrics` say why it exits. In a unit, `EnvironmentFile=` values override `Environment=` values."
+debrief: |
+  ## What was wrong
+
+  The v1 collector ran as `lal-collector-v1.service` with `Restart=always`, so killing its
+  process only made systemd start a new one. It was also enabled, and an old
+  `/etc/cron.d/legacy-collector` entry ran `systemctl start lal-collector-v1` at every
+  boot. Meanwhile `lal-metrics` exited immediately:
+
+  ```text
+  lal-metrics: BATCH_SIZE must be between 10 and 100 (got 5)
+  ```
+
+  because `/etc/sysconfig/lal-metrics` still said `BATCH_SIZE=5`.
+
+  ## A clean fix
+
+  ```bash
+  sudo systemctl mask --now lal-collector-v1.service
+  sudo rm /etc/cron.d/legacy-collector
+  sudo sed -i 's/^BATCH_SIZE=.*/BATCH_SIZE=50/' /etc/sysconfig/lal-metrics
+  sudo systemctl restart lal-metrics
+  ```
+
+  `mask` links the unit to `/dev/null`, so neither boot, nor another unit, nor the cron job
+  can start it. `disable --now` plus removing the cron entry is equally good. After several
+  quick failures systemd may refuse to start `lal-metrics` for a moment ("start request
+  repeated too quickly"); `systemctl reset-failed lal-metrics` clears that.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl status lal-collector-v1 lal-metrics
+  pgrep -af collect-v1                # nothing
+  cat /run/lal-metrics/last
+  ```
+
+  ## Tempting but wrong
+
+  - **`kill -9` the busy process.** systemd restarts it within a second.
+  - **`systemctl disable --now` only.** It stays down until the next boot, when the cron
+    entry starts it again.
+  - **`Environment=BATCH_SIZE=50` in a drop-in.** `EnvironmentFile=` is applied after
+    `Environment=`, so the file's `BATCH_SIZE=5` still wins.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: operations.processes-services
     title: Diagnose, identify, manage, and troubleshoot processes and services
-  - track: professional
-    version: v1
-    objective_id: retire-runaway-workload-and-recover-managed-service
-    title: Replace an unmanaged workload with a constrained, persistent service
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: systemd service unit documentation
-    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.service.html
-  - kind: upstream
-    title: systemd execution environment documentation
-    url: https://www.freedesktop.org/software/systemd/man/latest/systemd.exec.html
   - kind: man-page
-    title: systemctl manual
+    title: stop, disable, mask, and reset-failed
     man_page: systemctl(1)
   - kind: man-page
-    title: ps manual
-    man_page: ps(1)
+    title: Environment= and EnvironmentFile= precedence
+    man_page: systemd.exec(5)
+  - kind: man-page
+    title: Restart= and start limits
+    man_page: systemd.service(5)
+  - kind: man-page
+    title: System crontab files
+    man_page: crontab(5)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: legacy-workload-absent
+  - check_id: collector-retired
     kind: command
     target: node2
-    description: The retired lal-legacy-spin process is absent.
+    description: No process of the v1 collector is running.
     parameters:
-      arguments: [pgrep, --full, --exact, lal-legacy-spin]
-      expected_exit_code: 1
-  - check_id: metrics-environment
-    kind: file
-    target: node2
-    description: The managed worker has the required batch size.
-    parameters:
-      path: /etc/sysconfig/lal-metrics
-      kind: file
-      owner: root
-      group: root
-      mode: "0644"
-      contains: BATCH_SIZE=50
-  - check_id: metrics-service
-    kind: service
-    target: node2
-    description: The replacement metrics worker is active and enabled.
-    parameters:
-      name: lal-metrics.service
-      active: true
-      enabled: true
-  - check_id: metrics-process
+      timeout_seconds: 20
+      script: |
+        sleep 3   # anything that restarts it has had time to do so
+        running=$(pgrep -af '^/usr/bin/python3 /opt/legacy/bin/collect-v1' | head -n 1)
+        [[ -z "$running" ]] || fail "the v1 collector is running: $running"
+  - check_id: metrics-running
     kind: command
     target: node2
-    description: The service owns a running lal-metrics-worker process.
+    description: lal-metrics.service is running and enabled, working with a batch size of 50.
     parameters:
-      arguments:
-        - sh
-        - -c
-        - >-
-          pid=$(systemctl show --property MainPID --value lal-metrics.service) &&
-          test "$pid" -gt 1 && tr '\0' '\n' < "/proc/$pid/cmdline" | head -n 1
-      stdout_equals: lal-metrics-worker
-  - check_id: metrics-priority
-    kind: command
-    target: node2
-    description: The running service process has nice value 10.
-    parameters:
-      arguments:
-        - sh
-        - -c
-        - >-
-          pid=$(systemctl show --property MainPID --value lal-metrics.service) &&
-          ps -o ni= -p "$pid" | tr -d ' '
-      stdout_equals: "10"
+      script: |
+        systemctl is-active --quiet lal-metrics.service ||
+          fail "lal-metrics is $(systemctl is-active lal-metrics.service): $(journalctl -u lal-metrics.service -o cat --no-pager | grep '^lal-metrics:' | tail -n 1)"
+        systemctl is-enabled --quiet lal-metrics.service || fail "lal-metrics is not enabled at boot"
+        expect_eq "$(sed -n 's/^batch_size=//p' /run/lal-metrics/last 2>/dev/null)" 50 "the batch size lal-metrics is using"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/runaway-service-recovery.setup.yaml
 reference_solution: actions/runaway-service-recovery.solution.yaml
 alternate_solutions: [actions/runaway-service-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/runaway-service-recovery.rejected-kill.yaml
+  - actions/runaway-service-recovery.rejected-disable-only.yaml
+  - actions/runaway-service-recovery.rejected-environment-drop-in.yaml

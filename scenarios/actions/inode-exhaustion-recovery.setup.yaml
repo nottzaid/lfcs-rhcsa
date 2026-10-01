@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-inode-limited-cache
+  - action_id: create-the-cache-filesystem
     target: node2
     arguments:
       - sudo
@@ -10,12 +10,108 @@ actions:
       - |
         set -euo pipefail
         disk=/dev/disk/by-id/virtio-lal-cache
-        umount /var/lib/lal-cache >/dev/null 2>&1 || true
-        wipefs -a "$disk"
-        mkfs.ext4 -q -F -N 1024 -L LAL_CACHE "$disk"
-        rm -rf /var/lib/lal-cache
+        mkfs.ext4 -q -F -N 2048 -L LAL_CACHE "$disk"
         install -d /var/lib/lal-cache
-        mount "$disk" /var/lib/lal-cache
-        install -d /var/lib/lal-cache/stale /var/lib/lal-cache/keep
-        printf 'retain me\n' > /var/lib/lal-cache/keep/important.record
-        for number in $(seq 1 900); do : > "/var/lib/lal-cache/stale/item-$number"; done
+        printf 'LABEL=LAL_CACHE /var/lib/lal-cache ext4 defaults 0 2\n' >> /etc/fstab
+        systemctl daemon-reload
+        mount /var/lib/lal-cache
+        useradd --system --no-create-home --shell /sbin/nologin lalsess
+        install -d -o lalsess -g lalsess -m 0750 /var/lib/lal-cache/sessions
+        install -d -m 0755 /var/lib/lal-cache/tmp
+        cat > /var/lib/lal-cache/README <<'EOF'
+        lal-cache layout
+        ================
+        sessions/  Live user sessions. Never delete: users are logged out.
+        tmp/       Render scratch space. Everything here is disposable.
+        EOF
+        install -d -m 0755 /usr/share/lal-cache
+        findmnt -n -o UUID /var/lib/lal-cache > /usr/share/lal-cache/filesystem-uuid
+        df --output=itotal /var/lib/lal-cache | tail -n 1 | tr -dc 0-9 > /usr/share/lal-cache/inode-count
+  - action_id: create-live-sessions
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /var/lib/lal-cache/sessions
+        for number in $(seq -w 1 150); do
+          printf 'user=member%s\nexpires=2026-12-31\n' "$number" > "sess-$number"
+        done
+        chown lalsess:lalsess sess-*
+        sha256sum sess-* > /usr/share/lal-cache/sessions.sha256
+  - action_id: install-the-services
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cat > /usr/local/bin/lal-thumbnailer <<'EOF'
+        #!/bin/bash
+        batch=/var/lib/lal-cache/tmp/thumbs/$(date +%Y/%m/%d/%H%M%S%N)
+        mkdir -p "$batch" 2>/dev/null || { echo "lal-thumbnailer: cannot create $batch" >&2; exit 1; }
+        for number in $(seq 1 250); do
+          : > "$batch/thumb-$number.png" 2>/dev/null ||
+            { echo "lal-thumbnailer: cache full after $number thumbnails" >&2; exit 1; }
+        done
+        EOF
+        cat > /usr/local/bin/lal-sessions <<'EOF'
+        #!/bin/bash
+        while :; do
+          : > "/var/lib/lal-cache/sessions/sess-$(date +%s%N)" 2>/dev/null ||
+            echo "lal-sessions: cannot create session file: No space left on device" >&2
+          sleep 20
+        done
+        EOF
+        chmod 0755 /usr/local/bin/lal-thumbnailer /usr/local/bin/lal-sessions
+        cat > /etc/systemd/system/lal-thumbnailer.service <<'EOF'
+        [Unit]
+        Description=Render thumbnails into the cache
+
+        [Service]
+        Type=oneshot
+        ExecStart=/usr/local/bin/lal-thumbnailer
+        EOF
+        cat > /etc/systemd/system/lal-thumbnailer.timer <<'EOF'
+        [Unit]
+        Description=Render thumbnails every minute
+
+        [Timer]
+        OnBootSec=1min
+        OnUnitActiveSec=1min
+
+        [Install]
+        WantedBy=timers.target
+        EOF
+        cat > /etc/systemd/system/lal-sessions.service <<'EOF'
+        [Unit]
+        Description=Web session store
+        RequiresMountsFor=/var/lib/lal-cache
+
+        [Service]
+        User=lalsess
+        ExecStart=/usr/local/bin/lal-sessions
+        Restart=on-failure
+
+        [Install]
+        WantedBy=multi-user.target
+        EOF
+        systemctl daemon-reload
+  - action_id: let-the-thumbnailer-fill-the-cache
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        while /usr/local/bin/lal-thumbnailer 2>/dev/null; do :; done
+        systemctl enable --now lal-thumbnailer.timer lal-sessions.service
+        sleep 1

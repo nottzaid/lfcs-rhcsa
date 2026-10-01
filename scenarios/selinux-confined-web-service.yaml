@@ -1,18 +1,76 @@
 schema_version: 1
 scenario_id: selinux-confined-web-service
-version: 1
+version: 2
 status: verified
-title: SELinux blocks the web service's custom content and port
-summary: Define persistent file and port labels while keeping SELinux enforcing.
-estimated_minutes: 35
-task_type: fix
+title: The relocated intranet site will not come up
+summary: A web server moved to a new directory and port fails, although its configuration and file permissions are correct.
+estimated_minutes: 30
+task_type: troubleshoot
 difficulty: advanced
-task: >-
-  Nginx on node2 must serve /srv/lal-web at TCP port 8088, but SELinux denies the custom
-  content path and port. Keep SELinux enforcing. Define a persistent file-context rule for
-  /srv/lal-web and its descendants using the appropriate read-only web content type, restore
-  the labels, label TCP port 8088 for HTTP, and start and enable nginx. Do not use chcon or
-  setenforce 0 as the solution.
+task: |
+  The intranet site on **node2** was moved: nginx now serves `/srv/lal-web` on TCP port
+  **8088**. Since the move, nginx does not start:
+
+  ```text
+  nginx: [emerg] bind() to 0.0.0.0:8088 failed (13: Permission denied)
+  nginx: configuration file /etc/nginx/nginx.conf test failed
+  ```
+
+  Two colleagues have checked the nginx configuration and the file permissions; both are
+  correct. Get the site serving again, with every security control left on, in a way that
+  survives reboots and filesystem relabels.
+requirements:
+  - "nginx is running and enabled, and `http://127.0.0.1:8088/index.html` returns the site."
+  - "SELinux stays enforcing, and the web server's domain is not made permissive."
+  - "The fix is part of the SELinux policy: relabeling `/srv/lal-web` would change nothing, and the port label is persistent."
+  - "The site still works after node2 reboots."
+hints:
+  - "Permission denied although the permissions are right usually means mandatory access control. `sudo ausearch -m AVC -ts recent` shows the denials; `sudo sealert -a /var/log/audit/audit.log` explains them in plain language."
+  - "There are two separate denials, one per change the move made: a new port and a new directory. `semanage port -l | grep http` lists the ports web servers may use; `ls -Z` shows a file's label."
+  - "`chcon` changes labels only until the next relabel. `semanage fcontext` records the rule in the policy, and `restorecon` applies it."
+debrief: |
+  ## What was wrong
+
+  SELinux confines nginx to the `httpd_t` domain, which may bind only to ports labeled
+  `http_port_t` and read only files with web content types. The move broke both:
+
+  ```text
+  SELinux is preventing /usr/sbin/nginx from name_bind access on the tcp_socket port 8088.
+  SELinux is preventing /usr/sbin/nginx from getattr access on the file /srv/lal-web/index.html.
+  ```
+
+  Port 8088 had no web label, and `/srv/lal-web` inherited `var_t` from `/srv`.
+
+  ## A clean fix
+
+  ```bash
+  sudo semanage port -a -t http_port_t -p tcp 8088
+  sudo semanage fcontext -a -t httpd_sys_content_t '/srv/lal-web(/.*)?'
+  sudo restorecon -Rv /srv/lal-web
+  sudo systemctl restart nginx
+  ```
+
+  `semanage fcontext` adds a rule to the local policy; `restorecon` applies whatever the
+  policy says, now and during any future relabel. `semanage fcontext -a -e /var/www
+  /srv/lal-web` is an elegant alternative: it makes `/srv/lal-web` label exactly like the
+  standard web root.
+
+  ## Check it yourself
+
+  ```bash
+  getenforce
+  sudo restorecon -Rnv /srv/lal-web      # prints nothing when labels match the policy
+  sudo semanage port -l -C
+  curl http://127.0.0.1:8088/index.html
+  ```
+
+  ## Tempting but wrong
+
+  - **`setenforce 0`.** Everything works, with SELinux off for the entire machine.
+  - **`chcon -R -t httpd_sys_content_t /srv/lal-web`.** It works until the next
+    `restorecon` or full relabel silently puts `var_t` back.
+  - **`semanage permissive -a httpd_t`.** `getenforce` still says Enforcing, but the web
+    server's domain, the one most exposed to the network, is no longer confined.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,58 +80,61 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: distribution
-    title: Red Hat SELinux changing file contexts
-    url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/using_selinux/changing-selinux-states-and-modes
   - kind: man-page
-    title: semanage-fcontext manual
-    man_page: semanage-fcontext(8)
+    title: Manage file contexts, ports, and permissive domains
+    man_page: semanage(8)
   - kind: man-page
-    title: semanage-port manual
-    man_page: semanage-port(8)
+    title: Apply policy labels
+    man_page: restorecon(8)
+  - kind: man-page
+    title: Search audit records for denials
+    man_page: ausearch(8)
+  - kind: man-page
+    title: Explain denials in plain language
+    man_page: sealert(8)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: selinux-enforcing
+  - check_id: site-serving
     kind: command
     target: node2
-    description: SELinux remains enforcing.
-    parameters: {arguments: [getenforce], stdout_equals: Enforcing}
-  - check_id: web-content-label
+    description: nginx is running and enabled, and serves the site on port 8088.
+    parameters:
+      script: |
+        systemctl is-active --quiet nginx.service || fail "nginx is not running"
+        systemctl is-enabled --quiet nginx.service || fail "nginx is not enabled at boot"
+        body=$(curl --silent --show-error --max-time 5 --fail http://127.0.0.1:8088/index.html 2>&1) ||
+          fail "${body%%$'\n'*}"
+        expect_eq "$body" selinux-ready "the page served"
+  - check_id: selinux-fully-enforcing
     kind: command
     target: node2
-    description: The custom tree currently has the persistent web content label.
+    description: SELinux is enforcing, and httpd_t is not permissive.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          matchpathcon -V /srv/lal-web /srv/lal-web/index.html >/dev/null &&
-          test "$(stat -c %C /srv/lal-web/index.html | cut -d: -f3)" = httpd_sys_content_t
-  - check_id: web-port-label
+      script: |
+        expect_eq "$(getenforce)" Enforcing "the SELinux mode"
+        ! permissive_domain httpd_t || fail "the httpd_t domain is permissive"
+  - check_id: fix-lives-in-policy
     kind: command
     target: node2
-    description: TCP 8088 is assigned to the HTTP port type.
+    description: Relabeling /srv/lal-web would change nothing, and port 8088 is labeled in policy.
     parameters:
+      timeout_seconds: 60
       sudo: true
-      arguments: [bash, -c, 'semanage port -l | awk ''$1=="http_port_t" && $2=="tcp" && $0 ~ /(^|,| )8088(,| |$)/ {ok=1} END {exit !ok}''']
-  - check_id: confined-web-running
-    kind: service
-    target: node2
-    description: Nginx is running and enabled.
-    parameters: {name: nginx.service, active: true, enabled: true}
-  - check_id: confined-content-served
-    kind: command
-    target: node2
-    description: Nginx serves the required content through the labeled port.
-    parameters: {arguments: [curl, --fail, --silent, http://127.0.0.1:8088/index.html], stdout_equals: selinux-ready}
+      script: |
+        drift=$(restorecon -R -n -v /srv/lal-web | head -n 1)
+        [[ -z "$drift" ]] || fail "a relabel would change labels: $drift"
+        semanage port -l -C | awk '$1 == "http_port_t" && $2 == "tcp"' | grep -qw 8088 ||
+          fail "port 8088 is not labeled http_port_t in the local policy"
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [node2]
 setup: actions/selinux-confined-web-service.setup.yaml
 reference_solution: actions/selinux-confined-web-service.solution.yaml
 alternate_solutions: [actions/selinux-confined-web-service.alternate.yaml]
+rejected_solutions:
+  - actions/selinux-confined-web-service.rejected-setenforce.yaml
+  - actions/selinux-confined-web-service.rejected-chcon.yaml
+  - actions/selinux-confined-web-service.rejected-permissive-domain.yaml

@@ -32,9 +32,6 @@ class CheckKind(StrEnum):
     COMMAND = "command"
     FILE = "file"
     SERVICE = "service"
-    NETWORK = "network"
-    LIBVIRT = "libvirt"
-    CUSTOM = "custom"
 
 
 class ScenarioStatus(StrEnum):
@@ -55,6 +52,10 @@ class ScenarioDifficulty(StrEnum):
     ADVANCED = "advanced"
     EXAM = "exam"
 
+    @property
+    def rank(self) -> int:
+        return list(ScenarioDifficulty).index(self)
+
 
 class ObjectiveRef(StrictModel):
     track: Track
@@ -67,7 +68,7 @@ class SourceRef(StrictModel):
     kind: SourceKind
     title: str = Field(min_length=1)
     url: HttpUrl | None = None
-    man_page: str | None = None
+    man_page: str | None = Field(default=None, pattern=r"^[A-Za-z0-9_.+:-]+\([0-9a-z]+\)$")
 
     @model_validator(mode="after")
     def require_locator(self) -> Self:
@@ -82,23 +83,45 @@ class DiskSpec(StrictModel):
     role: str = Field(min_length=1)
 
 
+INTERFACE_NAME_PATTERN = re.compile(r"^[a-z][a-z0-9]{0,14}$")
+
+
 class NicSpec(StrictModel):
+    """An extra NIC on a scenario network, named predictably inside the guest."""
+
     network: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
+    name: str = Field(pattern=INTERFACE_NAME_PATTERN.pattern)
+
+    @model_validator(mode="after")
+    def avoid_kernel_names(self) -> Self:
+        if self.name.startswith(("eth", "en", "wl", "lo")):
+            raise ValueError(f"interface name {self.name} collides with kernel naming schemes")
+        return self
 
 
 class HostSpec(StrictModel):
     name: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
     image: str = Field(min_length=1)
-    memory_mib: int = Field(default=1024, ge=256)
+    memory_mib: int = Field(default=1024, ge=1024)
     vcpus: int = Field(default=1, ge=1)
-    nested_virtualization: bool = False
     nics: tuple[NicSpec, ...] = ()
     disks: tuple[DiskSpec, ...] = ()
 
+    @model_validator(mode="after")
+    def unique_devices(self) -> Self:
+        nic_names = [nic.name for nic in self.nics]
+        if len(nic_names) != len(set(nic_names)):
+            raise ValueError(f"interface names on {self.name} must be unique")
+        disk_names = [disk.name for disk in self.disks]
+        if len(disk_names) != len(set(disk_names)):
+            raise ValueError(f"disk names on {self.name} must be unique")
+        return self
+
 
 class NetworkSpec(StrictModel):
+    """An isolated layer-2 segment: no host address, no DHCP, no route off the segment."""
+
     name: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
-    isolated: bool = True
     cidr: str | None = None
 
 
@@ -148,6 +171,9 @@ class ScenarioManifest(StrictModel):
     task_type: ScenarioTaskType
     difficulty: ScenarioDifficulty
     task: str = Field(min_length=1)
+    requirements: tuple[str, ...] = ()
+    hints: tuple[str, ...] = ()
+    debrief: str | None = Field(default=None, min_length=1)
     objectives: tuple[ObjectiveRef, ...] = Field(min_length=1)
     sources: tuple[SourceRef, ...] = Field(min_length=1)
     topology: TopologySpec
@@ -156,6 +182,26 @@ class ScenarioManifest(StrictModel):
     setup: str = Field(min_length=1)
     reference_solution: str = Field(min_length=1)
     alternate_solutions: tuple[str, ...] = ()
+    rejected_solutions: tuple[str, ...] = ()
+
+    @property
+    def integrated(self) -> bool:
+        """Exam-difficulty scenarios are multi-competency incidents rather than focused drills."""
+        return self.difficulty is ScenarioDifficulty.EXAM
+
+    @property
+    def primary_objective(self) -> ObjectiveRef:
+        return next(
+            (objective for objective in self.objectives if objective.track is Track.LFCS),
+            self.objectives[0],
+        )
+
+    @property
+    def reboot_hosts(self) -> tuple[str, ...]:
+        """Hosts whose persistence is proven by rebooting them, in topology order."""
+        if not self.persistence.reboot:
+            return ()
+        return self.persistence.hosts or tuple(host.name for host in self.topology.hosts)
 
     @model_validator(mode="after")
     def validate_references(self) -> Self:

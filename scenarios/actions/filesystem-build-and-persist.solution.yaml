@@ -1,18 +1,17 @@
 schema_version: 1
 actions:
-  - action_id: create-archive-filesystem
-    target: node2
-    arguments: [sudo, --, mkfs.xfs, -f, -L, LAL_ARCHIVE, /dev/disk/by-id/virtio-lal-archive]
-  - action_id: configure-uuid-mount
+  - action_id: create-mount-and-share-by-label
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        uuid=$(blkid -s UUID -o value /dev/disk/by-id/virtio-lal-archive);
-        printf 'UUID=%s /srv/archive xfs defaults 0 0\n' "$uuid" >> /etc/fstab;
-        mount /srv/archive;
-        chown root:archivists /srv/archive;
+      - |
+        set -euo pipefail
+        mkfs.xfs -q -L LAL_ARCHIVE /dev/disk/by-id/virtio-lal-archive
+        printf 'LABEL=LAL_ARCHIVE /srv/archive xfs defaults 0 0\n' >> /etc/fstab
+        systemctl daemon-reload
+        mount /srv/archive
+        chown root:archivists /srv/archive
         chmod 2770 /srv/archive

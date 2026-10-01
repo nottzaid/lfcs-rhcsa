@@ -1,13 +1,18 @@
 schema_version: 1
 actions:
-  - action_id: repair-and-mount-nfs-client
+  - action_id: point-at-node1-and-align-the-account
     target: node2
+    timeout_seconds: 90
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        sed -i '\#/mnt/teamshare#d' /etc/fstab;
-        printf '{{host.node1.address}}:/srv/teamshare /mnt/teamshare nfs4 rw,_netdev 0 0\n' >> /etc/fstab;
+      - |
+        set -euo pipefail
+        sed -i '\#/mnt/teamshare#d' /etc/fstab
+        printf '{{host.node1.address}}:/srv/teamshare /mnt/teamshare nfs4 defaults,_netdev 0 0\n' >> /etc/fstab
+        systemctl daemon-reload
         mount /mnt/teamshare
+        groupmod -g 2200 appshare
+        usermod -u 2200 -g 2200 appshare

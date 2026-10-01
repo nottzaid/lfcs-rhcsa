@@ -1,17 +1,79 @@
 schema_version: 1
 scenario_id: autofs-project-share
-version: 1
+version: 2
 status: verified
-title: The project share should mount only when used
-summary: Repair an on-demand AutoFS map backed by a live NFS server.
+title: The project share never appears when someone opens it
+summary: An on-demand NFS mount no longer triggers, and it must stay on-demand once repaired.
 estimated_minutes: 35
 task_type: fix
 difficulty: advanced
-task: >-
-  node1 exports /srv/projects to node2. Configure autofs on node2 so accessing
-  /shares/projects mounts node1:/srv/projects using NFSv4, while the share remains eligible
-  for automatic expiry when idle. Keep autofs enabled and use a persistent master/map
-  configuration. Do not add a conventional always-mounted /etc/fstab entry.
+task: |
+  Developers on **node2** open `/shares/projects` to reach the project export on **node1**
+  (`/srv/projects`). The share used to appear the moment anyone looked, and to disappear
+  again after a few idle minutes. Now:
+
+  ```text
+  $ ls /shares/projects
+  ls: cannot access '/shares/projects': No such file or directory
+  ```
+
+  Restore the on-demand behavior. The share must not be mounted permanently or at boot;
+  it should mount only when someone uses it and let go when idle, as before.
+requirements:
+  - "Accessing `/shares/projects` on node2 mounts node1's `/srv/projects` over NFSv4 and shows its `status.txt`."
+  - "The automounter serves `/shares/projects`, and the automounter is running and enabled."
+  - "Idle mounts are released after at most 5 minutes."
+  - "No `/etc/fstab` entry mounts the share."
+  - "All of this still works after node2 reboots."
+hints:
+  - "Is anything answering for `/shares` at all? `systemctl status autofs` and `findmnt -t autofs` show whether the automounter is running and which directories it serves."
+  - "The master map (`/etc/auto.master` and `/etc/auto.master.d/*.autofs`) names a directory and a map file; the map file says what to mount for each key under it. `sudo automount -m` prints what the automounter currently reads."
+  - "`showmount -e NODE1_ADDRESS` confirms what node1 exports. The idle timeout is the `--timeout` option in the master map line."
+debrief: |
+  ## What was wrong
+
+  The automounter was stopped and disabled, so nothing answered for `/shares`, and its map
+  still pointed at the retired file server `192.0.2.99`:
+
+  ```text
+  # /etc/auto.master.d/projects.autofs
+  /shares  /etc/auto.projects  --timeout=900
+  # /etc/auto.projects
+  projects  -fstype=nfs4,ro  192.0.2.99:/srv/projects
+  ```
+
+  The idle timeout had also crept up to 15 minutes.
+
+  ## A clean fix
+
+  ```bash
+  sudo sed -i 's#192\.0\.2\.99#NODE1_ADDRESS#' /etc/auto.projects
+  sudo sed -i 's#--timeout=900#--timeout=300#' /etc/auto.master.d/projects.autofs
+  sudo systemctl enable --now autofs
+  sudo systemctl reload autofs
+  ls /shares/projects
+  ```
+
+  With an **indirect** map, autofs owns `/shares` and mounts `/shares/<key>` the first time
+  someone looks it up. After `--timeout` seconds without use it unmounts it again. A
+  **direct** map (`/-` in the master map, full paths as keys) makes `/shares/projects` itself
+  the trigger; both are valid here. `systemctl reload autofs` rereads the maps without
+  unmounting anything that is in use.
+
+  ## Check it yourself
+
+  ```bash
+  findmnt -t autofs -o TARGET,OPTIONS     # the timeout= the kernel is using
+  ls /shares/projects && findmnt /shares/projects
+  sudo automount -m
+  ```
+
+  ## Tempting but wrong
+
+  - **An `/etc/fstab` entry.** The share is always mounted, at boot too, and boot waits on
+    node1 being reachable.
+  - **`systemctl start autofs` without `enable`.** Correct until the reboot.
+  - **`--timeout=0`.** Mounts are never released.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,54 +84,66 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: auto.master manual
+    title: Master map syntax and --timeout
     man_page: auto.master(5)
   - kind: man-page
-    title: autofs manual
+    title: Map file syntax, direct and indirect maps
     man_page: autofs(5)
+  - kind: man-page
+    title: Dump the maps autofs is using (-m)
+    man_page: automount(8)
 topology:
   hosts:
-    - name: node1
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: automounter-running
-    kind: service
-    target: node2
-    description: autofs is running and enabled.
-    parameters: {name: autofs.service, active: true, enabled: true}
-  - check_id: project-share-triggerable
+  - check_id: access-mounts-the-share
     kind: command
     target: node2
-    description: Accessing the path triggers the designated NFSv4 share.
+    description: Accessing /shares/projects mounts node1's /srv/projects over NFSv4.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          timeout 10 cat /shares/projects/status.txt | grep -qx project-share-ready &&
-          test "$(findmnt -n -o FSTYPE /shares/projects)" = nfs4 &&
-          test "$(findmnt -n -o SOURCE /shares/projects)" = '{{host.node1.address}}:/srv/projects'
-      timeout_seconds: 20
-  - check_id: persistent-autofs-map
+      timeout_seconds: 30
+      script: |
+        status=$(timeout 15 cat /shares/projects/status.txt 2>/dev/null) || fail "accessing /shares/projects does not reach the share"
+        expect_eq "$status" project-share-ready "the content of status.txt"
+        read -r fstype source < <(findmnt -n -o FSTYPE,SOURCE --mountpoint /shares/projects | tail -n 1)
+        expect_eq "$fstype" nfs4 "the filesystem type at /shares/projects"
+        expect_eq "$source" '{{host.node1.address}}:/srv/projects' "the mounted export"
+  - check_id: automounter-serves-the-path
     kind: command
     target: node2
-    description: The active autofs maps reference node1 without an fstab mount.
+    description: The automounter serves /shares/projects and is running and enabled.
     parameters:
-      sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          automount -m | grep -Fq '{{host.node1.address}}:/srv/projects' &&
-          ! grep -Eq '^[^#]+[[:space:]]+/shares/projects[[:space:]]' /etc/fstab
+      script: |
+        systemctl is-active --quiet autofs.service || fail "autofs is not running"
+        systemctl is-enabled --quiet autofs.service || fail "autofs is not enabled at boot"
+        trigger=$(findmnt -n -t autofs -o TARGET | grep -Ex '/shares|/shares/projects' | tail -n 1)
+        [[ -n "$trigger" ]] || fail "no autofs mount point serves /shares/projects"
+  - check_id: idle-mounts-released
+    kind: command
+    target: node2
+    description: Idle mounts are released after at most 5 minutes.
+    parameters:
+      script: |
+        trigger=$(findmnt -n -t autofs -o TARGET | grep -Ex '/shares|/shares/projects' | tail -n 1)
+        [[ -n "$trigger" ]] || fail "no autofs mount point serves /shares/projects"
+        timeout=$(option_value "$(findmnt -n -o OPTIONS --mountpoint "$trigger" | head -n 1)" timeout)
+        (( timeout > 0 )) || fail "the automounter never releases idle mounts (timeout=0)"
+        (( timeout <= 300 )) || fail "idle mounts are kept for $timeout seconds; at most 300 are allowed"
+  - check_id: no-static-mount
+    kind: command
+    target: node2
+    description: No /etc/fstab entry mounts the share.
+    parameters:
+      script: |
+        static=$(findmnt --fstab -n -o TARGET | grep -E '^/shares(/|$)') && fail "/etc/fstab mounts $static"
+        true
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [node2]
 setup: actions/autofs-project-share.setup.yaml
 reference_solution: actions/autofs-project-share.solution.yaml
 alternate_solutions: [actions/autofs-project-share.alternate.yaml]
+rejected_solutions:
+  - actions/autofs-project-share.rejected-static-mount.yaml
+  - actions/autofs-project-share.rejected-started-not-enabled.yaml

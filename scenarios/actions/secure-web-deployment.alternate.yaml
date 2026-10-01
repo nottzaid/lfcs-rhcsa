@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: apply-persistent-security-policy
+  - action_id: fix-labels-the-other-way
     target: node2
     arguments:
       - sudo
@@ -8,12 +8,14 @@ actions:
       - bash
       - -c
       - |
-        semanage fcontext -a -t httpd_sys_content_t '/srv/lal-secure(/.*)?'
-        restorecon -RF /srv/lal-secure
-        semanage port -a -t http_port_t -p tcp 8443
-        firewall-cmd --permanent --add-port=8443/tcp
-        firewall-cmd --reload
-  - action_id: replace-server-block-and-reload
+        set -euo pipefail
+        restorecon -RFv /etc/lal-pki
+        semanage fcontext -a -e /var/www /srv/lal-secure
+        restorecon -RFv /srv/lal-secure
+  - action_id: append-the-issuer-to-the-certificate
+    target: node2
+    arguments: [sudo, --, bash, -c, "cat /etc/lal-pki/issuing-ca.crt >> /etc/lal-pki/service.crt"]
+  - action_id: open-the-port-to-the-intranet-only
     target: node2
     arguments:
       - sudo
@@ -21,8 +23,9 @@ actions:
       - bash
       - -c
       - |
-        sed -i 's/listen 8088;/listen 8443 ssl;/' /etc/nginx/conf.d/lal-secure.conf
-        sed -i '/server_name/a\    ssl_certificate /etc/lal-pki/service.crt;\n    ssl_certificate_key /etc/lal-pki/private/service.key;' /etc/nginx/conf.d/lal-secure.conf
-        nginx -t
-        systemctl enable nginx.service
-        systemctl restart nginx.service
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --add-rich-rule='rule family="ipv4" source address="10.45.0.0/24" port port="8443" protocol="tcp" accept'
+        firewall-cmd --quiet --reload
+  - action_id: restart-nginx
+    target: node2
+    arguments: [sudo, --, bash, -c, "nginx -t && systemctl restart nginx.service"]

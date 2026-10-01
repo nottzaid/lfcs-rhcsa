@@ -1,18 +1,84 @@
 schema_version: 1
 scenario_id: ldap-sssd-client-recovery
-version: 1
+version: 2
 status: verified
-title: Directory users disappeared from the application node
-summary: Repair an SSSD LDAP identity-provider configuration against a live directory.
-estimated_minutes: 45
-task_type: fix
+title: Directory users do not exist on the application node
+summary: Directory accounts resolve everywhere except one client, where the identity service will not start.
+estimated_minutes: 35
+task_type: troubleshoot
 difficulty: advanced
-task: >-
-  node1 hosts the session's LDAP directory with base dc=lab,dc=internal. SSSD on node2 has
-  a stale LDAP URI. Configure the lab domain to use node1 over LDAP, restore online identity
-  lookup, and keep SSSD enabled. `getent passwd ldapdev` must return UID 2300 with home
-  /home/ldapdev and shell /bin/bash; `getent group ldapops` must return GID 2300. Keep
-  /etc/sssd/sssd.conf private and do not create local passwd/group entries for these names.
+task: |
+  Developers sign in to **node2** with directory accounts served by the LDAP server on
+  **node1** (base `dc=lab,dc=internal`). Since last week's configuration push, node2 no
+  longer knows any of them:
+
+  ```text
+  $ id ldapdev
+  id: 'ldapdev': no such user
+  ```
+
+  The directory itself is healthy and other clients still read it. Make node2 resolve
+  directory users and groups through SSSD again, and keep it that way across reboots.
+requirements:
+  - "On node2, `ldapdev` resolves through SSSD with UID `2300`, home `/home/ldapdev`, and shell `/bin/bash`, and `ldapops` resolves with GID `2300`."
+  - "SSSD's `lab` domain is online against node1, and `sssd.service` is running and enabled."
+  - "`/etc/sssd/sssd.conf` stays root-owned and unreadable by other users."
+  - "Neither name exists as a local account or group in `/etc/passwd` or `/etc/group`."
+  - "Directory lookups still work after node2 reboots."
+hints:
+  - "Ask the service why it is unhappy: `systemctl status sssd` and `journalctl -u sssd -b`. SSSD writes more detail to `/var/log/sssd/`."
+  - "SSSD refuses a configuration file that other users can read. After that, compare where the `lab` domain looks for its server with where the directory actually is."
+  - "`sssctl config-check` validates the configuration, `sssctl domain-status lab` reports online or offline, and `sss_cache -E` drops stale cached answers. Look up node1's address in the lab session panel."
+debrief: |
+  ## What was wrong
+
+  Two faults stacked up. The configuration push left `/etc/sssd/sssd.conf` readable by
+  everyone, and SSSD refuses to start with it:
+
+  ```text
+  [access_check_file] Unexpected access to '/etc/sssd/sssd.conf' by other users
+  Can't read config: 'File ownership and permissions check failed'
+  ```
+
+  The file exists to hold bind credentials, so SSSD treats a world-readable copy as a
+  security failure. Behind that, `ldap_uri` pointed at `192.0.2.99`, an address with no
+  directory, so even a running SSSD would stay offline and resolve nobody.
+
+  ## A clean fix
+
+  ```bash
+  sudo chmod 0600 /etc/sssd/sssd.conf
+  sudo sed -i 's#^ldap_uri *=.*#ldap_uri = ldap://NODE1_ADDRESS#' /etc/sssd/sssd.conf
+  sudo sss_cache -E
+  sudo systemctl enable sssd
+  sudo systemctl restart sssd
+  getent -s sss passwd ldapdev
+  ```
+
+  On Rocky Linux 10, SSSD runs as the unprivileged `sssd` user. Its unit changes
+  `/etc/sssd` to `root:sssd` and adds group read before starting, which is why the file
+  ends up `0640 root:sssd`; it never removes access for others.
+
+  A drop-in works equally well: `/etc/sssd/conf.d/50-directory.conf` containing
+  `[domain/lab]` and the corrected `ldap_uri`, mode `0600`. Snippets override the main file,
+  and the same permission rules apply to them.
+
+  ## Check it yourself
+
+  ```bash
+  sudo sssctl domain-status lab        # Online status: Online
+  getent -s sss passwd ldapdev         # -s sss proves the answer came from SSSD
+  id ldapdev
+  ```
+
+  ## Tempting but wrong
+
+  - **Creating local `ldapdev` and `ldapops` entries.** `id` works, but the account is a
+    local copy that will drift from the directory, and a local entry shadows the directory
+    one because `files` comes first in `/etc/nsswitch.conf`.
+  - **Fixing the address but not the permissions.** SSSD still refuses to start, and
+    nothing resolves.
+  - **`chmod 0644` to "let SSSD read it".** That is exactly what SSSD rejects.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -23,78 +89,91 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: upstream
-    title: SSSD LDAP provider manual
+    title: SSSD documentation
     url: https://sssd.io/docs/introduction.html
   - kind: distribution
-    title: Red Hat configuring SSSD to use LDAP
+    title: Configuring SSSD to use LDAP on RHEL 10
     url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/configuring_authentication_and_authorization_in_rhel/configuring-sssd-to-use-ldap-and-require-tls-authentication
   - kind: man-page
-    title: sssd-ldap manual
+    title: The SSSD LDAP provider and its options
     man_page: sssd-ldap(5)
+  - kind: man-page
+    title: SSSD configuration file format and permissions
+    man_page: sssd.conf(5)
+  - kind: man-page
+    title: SSSD troubleshooting tool
+    man_page: sssctl(8)
 topology:
   hosts:
     - name: node1
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1536
       vcpus: 2
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
 checks:
-  - check_id: directory-client-running
-    kind: service
-    target: node2
-    description: SSSD is running and enabled.
-    parameters: {name: sssd.service, active: true, enabled: true}
-  - check_id: directory-user-visible
+  - check_id: directory-user-resolves
     kind: command
     target: node2
-    description: NSS resolves ldapdev with the required directory attributes.
+    description: ldapdev resolves through SSSD with UID 2300, home /home/ldapdev, and shell /bin/bash.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          entry=$(getent passwd ldapdev) &&
-          test "$(cut -d: -f3 <<<"$entry")" = 2300 &&
-          test "$(cut -d: -f6 <<<"$entry")" = /home/ldapdev &&
-          test "$(cut -d: -f7 <<<"$entry")" = /bin/bash
-  - check_id: directory-group-visible
+      timeout_seconds: 30
+      script: |
+        entry=$(getent -s sss passwd ldapdev) || fail "SSSD does not resolve ldapdev"
+        IFS=: read -r _ _ uid _ _ home shell <<<"$entry"
+        expect_eq "$uid" 2300 "the ldapdev UID"
+        expect_eq "$home" /home/ldapdev "the ldapdev home"
+        expect_eq "$shell" /bin/bash "the ldapdev shell"
+  - check_id: directory-group-resolves
     kind: command
     target: node2
-    description: NSS resolves the ldapops directory group.
+    description: ldapops resolves through SSSD with GID 2300.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          entry=$(getent group ldapops) && test "$(cut -d: -f3 <<<"$entry")" = 2300
-  - check_id: directory-domain-online
+      timeout_seconds: 30
+      script: |
+        entry=$(getent -s sss group ldapops) || fail "SSSD does not resolve ldapops"
+        expect_eq "$(cut -d: -f3 <<<"$entry")" 2300 "the ldapops GID"
+  - check_id: domain-online
     kind: command
     target: node2
-    description: SSSD reports the lab domain online against node1.
+    description: SSSD reports the lab domain online.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          sssctl domain-status lab --online >/dev/null &&
-          grep -Eq '^ldap_uri[[:space:]]*=[[:space:]]*ldap://{{host.node1.address}}' /etc/sssd/sssd.conf
-  - check_id: sssd-policy-private
-    kind: file
+      timeout_seconds: 30
+      script: |
+        status=$(sssctl domain-status lab 2>&1) || fail "sssctl cannot query the lab domain: ${status##*$'\n'}"
+        grep -q '^Online status: Online' <<<"$status" || fail "the lab domain is offline"
+  - check_id: identity-service-persistent
+    kind: service
     target: node2
-    description: SSSD configuration remains root-owned and private.
-    parameters: {path: /etc/sssd/sssd.conf, kind: file, owner: root, group: sssd, mode: "0640"}
-  - check_id: no-shadow-local-identities
+    description: sssd.service is running and enabled.
+    parameters: {name: sssd.service, active: true, enabled: true}
+  - check_id: configuration-private
     kind: command
     target: node2
-    description: The directory identities were not duplicated locally.
+    description: sssd.conf is owned by root and unreadable by other users.
     parameters:
-      arguments: [bash, -c, '! grep -qE ''^(ldapdev|ldapops):'' /etc/passwd /etc/group']
+      sudo: true
+      script: |
+        expect_eq "$(stat -c %U /etc/sssd/sssd.conf)" root "the owner of sssd.conf"
+        mode=$(stat -c %a /etc/sssd/sssd.conf)
+        (( (8#$mode & 8#7) == 0 )) || fail "sssd.conf mode is $mode; other users can access it"
+  - check_id: no-local-copies
+    kind: command
+    target: node2
+    description: Neither ldapdev nor ldapops exists as a local account or group.
+    parameters:
+      script: |
+        ! getent -s files passwd ldapdev >/dev/null || fail "ldapdev is also a local account"
+        ! getent -s files group ldapops >/dev/null || fail "ldapops is also a local group"
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [node2]
 setup: actions/ldap-sssd-client-recovery.setup.yaml
 reference_solution: actions/ldap-sssd-client-recovery.solution.yaml
 alternate_solutions: [actions/ldap-sssd-client-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/ldap-sssd-client-recovery.rejected-local-copies.yaml
+  - actions/ldap-sssd-client-recovery.rejected-address-only.yaml

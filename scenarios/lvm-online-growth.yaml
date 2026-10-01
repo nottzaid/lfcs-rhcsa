@@ -1,17 +1,66 @@
 schema_version: 1
 scenario_id: lvm-online-growth
-version: 1
+version: 2
 status: verified
-title: The logs logical volume is nearly full
-summary: Grow an active LVM logical volume and its filesystem without downtime.
-estimated_minutes: 35
-task_type: configure
+title: The log volume is 96% full and its volume group has no room left
+summary: Grow a busy logical volume onto a newly attached disk without taking it offline.
+estimated_minutes: 30
+task_type: fix
 difficulty: intermediate
-task: >-
-  /srv/logs on node2 is an ext4 filesystem on vgdata/lvlogs. Grow the logical volume to
-  exactly 768 MiB and expand the filesystem online to use the new space. Keep the existing
-  contents, mount point, and persistent mount configuration intact. Do not recreate the
-  filesystem or reboot node2.
+task: |
+  Monitoring on **node2** reports `/srv/logs` at 96% and climbing. It is an ext4 filesystem
+  on the logical volume `vgdata/lvlogs`, and its volume group has no free space left. A
+  second disk, `/dev/disk/by-id/virtio-lal-spare`, was attached this morning for exactly this.
+
+  Give `/srv/logs` at least 1 GiB of capacity while it stays mounted and in use: the log
+  shippers write there around the clock.
+requirements:
+  - "The filesystem mounted at `/srv/logs` offers at least 1 GiB, and the logical volume under it has grown to match."
+  - "The spare disk is part of `vgdata`."
+  - "`/srv/logs` is never unmounted and node2 is not rebooted while you work."
+  - "Every existing log file is intact, and `/etc/fstab` still mounts `/srv/logs`."
+hints:
+  - "Walk the stack from the bottom up: `lsblk`, then `pvs`, `vgs`, and `lvs`. The `VFree` column of `vgs` tells you whether the group can grow a volume."
+  - "A volume group grows by adding physical volumes: `pvcreate` prepares a disk, and `vgextend` adds it to the group."
+  - "Growing a logical volume does not grow the filesystem inside it. `lvextend -r` does both; `resize2fs` grows a mounted ext4 filesystem on its own."
+debrief: |
+  ## What was wrong
+
+  `lvlogs` used every extent in `vgdata`, and the filesystem inside it was nearly full.
+  Nothing could grow until the group had more space, and the new disk was not part of any
+  group yet.
+
+  ## A clean fix
+
+  ```bash
+  sudo pvcreate /dev/disk/by-id/virtio-lal-spare
+  sudo vgextend vgdata /dev/disk/by-id/virtio-lal-spare
+  sudo lvextend -r -L 1G vgdata/lvlogs
+  df -h /srv/logs
+  ```
+
+  LVM stacks three layers: physical volumes (disks), volume groups (pools of extents), and
+  logical volumes (block devices carved out of a pool). `vgextend` adds the new disk's
+  extents to the pool. `lvextend` enlarges the block device, and `-r` then runs the right
+  filesystem tool for you: `resize2fs` for ext4 or `xfs_growfs` for XFS. Both grow a mounted
+  filesystem online. ext4 can also shrink, but only while unmounted; XFS cannot shrink at
+  all.
+
+  ## Check it yourself
+
+  ```bash
+  sudo pvs; sudo vgs vgdata; sudo lvs vgdata
+  df -h /srv/logs
+  ```
+
+  ## Tempting but wrong
+
+  - **`lvextend` without `-r` and without `resize2fs`.** `lvs` shows the larger volume, but
+    `df` still shows the old filesystem, and the disk still fills up.
+  - **Unmounting to resize.** Resizing works offline too, but the log shippers lose their
+    files for the duration. Here it was also unnecessary.
+  - **A new logical volume on the spare disk, mounted somewhere else.** The capacity exists,
+    but not where the logs are written.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -21,58 +70,80 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: LVM lvextend manual
-    url: https://man7.org/linux/man-pages/man8/lvextend.8.html
   - kind: man-page
-    title: lvextend manual
+    title: Add physical volumes to a volume group
+    man_page: vgextend(8)
+  - kind: man-page
+    title: Grow a logical volume, and its filesystem with -r
     man_page: lvextend(8)
   - kind: man-page
-    title: resize2fs manual
+    title: Grow a mounted ext4 filesystem
     man_page: resize2fs(8)
+  - kind: man-page
+    title: LVM concepts
+    man_page: lvm(8)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
       disks:
-        - name: data
-          size_mib: 2048
-          role: LVM training disk
+        - {name: data, size_mib: 512, role: current LVM disk}
+        - {name: spare, size_mib: 1024, role: newly attached disk}
 checks:
-  - check_id: logical-volume-size
+  - check_id: capacity-available
     kind: command
     target: node2
-    description: lvlogs is exactly 768 MiB.
+    description: /srv/logs offers at least 1 GiB, and the logical volume has grown to match.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - test "$(lvs --noheadings --units m --nosuffix -o lv_size vgdata/lvlogs | awk '{printf "%d", $1}')" -eq 768
-  - check_id: filesystem-expanded
+      script: |
+        lv_bytes=$(lvs --noheadings --units b --nosuffix -o lv_size vgdata/lvlogs | tr -d ' ')
+        (( lv_bytes >= 1073741824 )) || fail "lvlogs is $((lv_bytes / 1048576)) MiB; it needs at least 1024 MiB"
+        # The filesystem's own block count; df leaves out the journal and metadata.
+        header=$(dumpe2fs -h /dev/vgdata/lvlogs 2>/dev/null)
+        fs_bytes=$(( $(sed -n 's/^Block count: *//p' <<<"$header") * $(sed -n 's/^Block size: *//p' <<<"$header") ))
+        (( lv_bytes - fs_bytes < 4194304 )) ||
+          fail "the filesystem spans $((fs_bytes / 1048576)) MiB of a $((lv_bytes / 1048576)) MiB volume; grow the filesystem too"
+  - check_id: spare-disk-in-group
     kind: command
     target: node2
-    description: The mounted ext4 filesystem uses the enlarged device.
+    description: The spare disk is part of vgdata.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(findmnt -n -o FSTYPE /srv/logs)" = ext4 &&
-          test "$(findmnt -n -o SOURCE /srv/logs)" = /dev/mapper/vgdata-lvlogs &&
-          test "$(df -BM --output=size /srv/logs | tail -1 | tr -dc '0-9')" -ge 700
-  - check_id: existing-data-preserved
-    kind: file
+      sudo: true
+      script: |
+        device=$(readlink -f /dev/disk/by-id/virtio-lal-spare)
+        group=$(pvs --noheadings -o vg_name "$device" 2>/dev/null | tr -d ' ')
+        expect_eq "${group:-none}" vgdata "the volume group of the spare disk"
+  - check_id: grown-online
+    kind: command
     target: node2
-    description: Existing log data remains available.
+    description: /srv/logs was never unmounted and node2 was not rebooted.
     parameters:
-      path: /srv/logs/retain.log
-      kind: file
-      contains: preserve this record
+      sudo: true
+      script: |
+        expect_eq "$(cat /proc/sys/kernel/random/boot_id)" "$(cat /usr/share/lal-logs/boot-id)" "the boot ID (node2 was rebooted)"
+        device=$(findmnt -n -o SOURCE --mountpoint /srv/logs) || fail "/srv/logs is not mounted"
+        mounted_at=$(tune2fs -l "$device" | sed -n 's/^Last mount time: *//p')
+        expect_eq "$mounted_at" "$(cat /usr/share/lal-logs/mounted-at)" "the last mount time of /srv/logs (it was unmounted and mounted again)"
+  - check_id: logs-and-mount-kept
+    kind: command
+    target: node2
+    description: Every existing log file is intact, and /etc/fstab still mounts /srv/logs.
+    parameters:
+      timeout_seconds: 60
+      sudo: true
+      script: |
+        cd /srv/logs || fail "/srv/logs is gone"
+        damaged=$(sha256sum --check --quiet /usr/share/lal-logs/logs.sha256 2>/dev/null | wc -l)
+        (( damaged == 0 )) || fail "$damaged existing log files are missing or changed"
+        [[ -n "$(fstab_field /srv/logs SOURCE)" ]] || fail "/etc/fstab no longer mounts /srv/logs"
 persistence:
   reboot: false
 setup: actions/lvm-online-growth.setup.yaml
 reference_solution: actions/lvm-online-growth.solution.yaml
 alternate_solutions: [actions/lvm-online-growth.alternate.yaml]
+rejected_solutions:
+  - actions/lvm-online-growth.rejected-volume-only.yaml
+  - actions/lvm-online-growth.rejected-offline-resize.yaml

@@ -145,3 +145,85 @@ def test_report_rejects_checker_error_in_expected_broken_phase() -> None:
     report = ScenarioVerifier(ErroringInitialDriver()).verify(manifest)
 
     assert not report.passed
+
+
+class ReplayDriver(FakeDriver):
+    """Solutions named runtime-only survive the live check but not a reboot."""
+
+    def apply_solution(
+        self, session: LabSession, manifest: ScenarioManifest, solution: str
+    ) -> None:
+        self.calls.append(f"solve:{solution}")
+        self.phase = {"runtime-only": "solved-until-reboot", "wrong": "broken"}.get(
+            solution.split("/")[-1].removesuffix(".yaml"), "solved"
+        )
+
+    def run_checks(
+        self, session: LabSession, manifest: ScenarioManifest
+    ) -> tuple[CheckObservation, ...]:
+        passed = self.phase in {"solved", "rebooted", "solved-until-reboot"}
+        return tuple(
+            CheckObservation(check.check_id, passed, self.phase) for check in manifest.checks
+        )
+
+    def reboot(self, session: LabSession, hosts: tuple[str, ...]) -> None:
+        self.calls.append(f"reboot:{','.join(hosts)}")
+        self.phase = "broken" if self.phase == "solved-until-reboot" else "rebooted"
+
+
+def persistent(rejected: list[str]) -> ScenarioManifest:
+    raw = minimal_manifest()
+    raw["persistence"] = {"reboot": True, "hosts": ["node1"]}
+    raw["alternate_solutions"] = []
+    raw["rejected_solutions"] = rejected
+    return ScenarioManifest.model_validate(raw)
+
+
+def test_rejected_solutions_must_not_be_solved_even_if_the_live_state_passes() -> None:
+    manifest = persistent(["actions/runtime-only.yaml", "actions/wrong.yaml"])
+
+    report = ScenarioVerifier(ReplayDriver()).verify(manifest)
+
+    assert report.passed
+    assert [phase.phase for phase in report.phases[:3]] == [
+        VerificationPhase.INITIAL,
+        VerificationPhase.SOLVED,
+        VerificationPhase.REBOOTED,
+    ]
+    assert [(phase.phase, phase.passed, phase.expected) for phase in report.phases[3:]] == [
+        (VerificationPhase.RESET, False, False),
+        (VerificationPhase.REJECTED, True, None),
+        (VerificationPhase.REJECTED_REBOOTED, False, False),
+        (VerificationPhase.RESET, False, False),
+        (VerificationPhase.REJECTED, False, False),
+    ]
+
+
+def test_a_rejected_solution_that_the_grader_accepts_fails_verification() -> None:
+    class AcceptEverything(ReplayDriver):
+        def apply_solution(
+            self, session: LabSession, manifest: ScenarioManifest, solution: str
+        ) -> None:
+            self.phase = "solved"
+
+    report = ScenarioVerifier(AcceptEverything()).verify(persistent(["actions/wrong.yaml"]))
+
+    assert not report.passed
+    assert [phase.phase for phase in report.phases if not phase.accepted] == [
+        VerificationPhase.REJECTED_REBOOTED
+    ]
+
+
+def test_a_check_that_produces_no_observation_cannot_pass_a_phase() -> None:
+    class SilentCheckDriver(FakeDriver):
+        def run_checks(
+            self, session: LabSession, manifest: ScenarioManifest
+        ) -> tuple[CheckObservation, ...]:
+            return super().run_checks(session, manifest)[1:]  # one check never reports
+
+    raw = minimal_manifest()
+    raw["checks"] = [*raw["checks"], {**raw["checks"][0], "check_id": "second-check"}]
+    manifest = ScenarioManifest.model_validate(raw)
+    report = ScenarioVerifier(SilentCheckDriver()).verify(manifest)
+    solved = next(phase for phase in report.phases if phase.phase.value == "solved")
+    assert not solved.passed and not report.passed

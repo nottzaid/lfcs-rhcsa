@@ -1,13 +1,15 @@
 schema_version: 1
 actions:
-  - action_id: repair-indirect-project-map
+  - action_id: repoint-the-map-and-run-the-automounter
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        printf 'projects -fstype=nfs4,ro {{host.node1.address}}:/srv/projects\n' > /etc/auto.lal;
-        systemctl enable --now autofs.service;
-        systemctl restart autofs.service
+      - |
+        set -euo pipefail
+        sed -i 's#192\.0\.2\.99#{{host.node1.address}}#' /etc/auto.projects
+        sed -i 's#--timeout=900#--timeout=300#' /etc/auto.master.d/projects.autofs
+        systemctl enable --now autofs.service
+        systemctl reload autofs.service

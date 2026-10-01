@@ -1,0 +1,28 @@
+schema_version: 1
+actions:
+  - action_id: create-the-policy-where-firewalld-insists
+    target: router
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --new-policy office-out
+        firewall-cmd --quiet --permanent --policy office-out --set-target ACCEPT
+        firewall-cmd --quiet --reload
+  - action_id: configure-the-running-firewall-only
+    target: router
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --zone=internal --change-interface=lan0
+        firewall-cmd --quiet --zone=external --change-interface=wan0
+        firewall-cmd --quiet --zone=external --add-forward-port=port=80:proto=tcp:toport=8080
+        firewall-cmd --quiet --policy office-out --add-ingress-zone internal
+        firewall-cmd --quiet --policy office-out --add-egress-zone external

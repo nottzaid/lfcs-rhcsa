@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: configure-project-export
+  - action_id: export-the-projects-from-node1
     target: node1
     timeout_seconds: 120
     arguments:
@@ -8,27 +8,26 @@ actions:
       - --
       - bash
       - -c
-      - >-
-        install -d -m 0755 /srv/projects;
-        printf 'project-share-ready\n' > /srv/projects/status.txt;
-        printf '/srv/projects {{host.node2.address}}/32(ro,sync,no_subtree_check,root_squash)\n'
-        > /etc/exports.d/lal-projects.exports;
-        setsebool -P nfs_export_all_ro 1;
-        systemctl enable --now nfs-server;
-        exportfs -ra;
-        firewall-cmd --quiet --permanent --add-service=nfs;
+      - |
+        set -euo pipefail
+        install -d -m 0755 /srv/projects
+        printf 'project-share-ready\n' > /srv/projects/status.txt
+        printf '/srv/projects {{host.node2.address}}/32(ro,sync,no_subtree_check,root_squash)\n' \
+          > /etc/exports.d/lal-projects.exports
+        setsebool -P nfs_export_all_ro 1
+        systemctl enable --now nfs-server.service
+        exportfs -ra
+        firewall-cmd --quiet --permanent --add-service=nfs
         firewall-cmd --quiet --reload
-  - action_id: install-stale-automount-map
+  - action_id: leave-a-stale-map-and-a-stopped-automounter
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        umount -l /shares/projects >/dev/null 2>&1 || true;
-        rm -rf /shares;
-        install -d /etc/auto.master.d;
-        printf '/shares /etc/auto.lal --timeout=30\n' > /etc/auto.master.d/lal.autofs;
-        printf 'projects -fstype=nfs4,ro 192.0.2.99:/srv/projects\n' > /etc/auto.lal;
-        systemctl disable --now autofs >/dev/null 2>&1 || true
+      - |
+        set -euo pipefail
+        printf '/shares  /etc/auto.projects  --timeout=900\n' > /etc/auto.master.d/projects.autofs
+        printf 'projects  -fstype=nfs4,ro  192.0.2.99:/srv/projects\n' > /etc/auto.projects
+        systemctl disable --now autofs.service

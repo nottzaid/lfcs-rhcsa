@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: issue-api-certificate-with-extension-file
+  - action_id: request-extensions-in-the-csr-and-copy-them
     target: node2
     arguments:
       - sudo
@@ -9,11 +9,12 @@ actions:
       - -c
       - |
         set -euo pipefail
-        openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:2048 -out /etc/lal-pki/private/api.key
-        openssl req -new -key /etc/lal-pki/private/api.key -subj /CN=api.internal -out /etc/lal-pki/api.csr
-        printf 'subjectAltName=DNS:api.internal,IP:127.0.0.1\n' > /etc/lal-pki/api.ext
-        openssl x509 -req -in /etc/lal-pki/api.csr -CA /etc/lal-pki/ca.crt \
-          -CAkey /etc/lal-pki/private/ca.key -CAcreateserial -days 365 -sha256 \
-          -extfile /etc/lal-pki/api.ext -out /etc/lal-pki/api.crt
-        chmod 0600 /etc/lal-pki/private/api.key
-        chmod 0644 /etc/lal-pki/api.crt
+        rm -f /etc/lal-pki/private/api.key
+        umask 077
+        openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out /etc/lal-pki/private/api.key
+        openssl req -new -key /etc/lal-pki/private/api.key -subj /CN=api.internal \
+          -addext 'subjectAltName=DNS:api.internal,IP:127.0.0.1' -out /root/api.csr
+        umask 022
+        openssl x509 -req -in /root/api.csr -CA /etc/lal-pki/ca.crt -CAkey /etc/lal-pki/private/ca.key \
+          -CAserial /root/api.srl -CAcreateserial -copy_extensions copy -days 730 -out /etc/lal-pki/api.crt
+        systemctl restart nginx.service

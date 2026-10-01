@@ -1,29 +1,28 @@
 schema_version: 1
 actions:
-  - action_id: edit-monitor-bind-address
-    target: node1
-    arguments:
-      - sudo
-      - --
-      - sed
-      - -i
-      - s/MONITOR_BIND=127\.0\.0\.1/MONITOR_BIND={{host.node1.address}}/
-      - /etc/systemd/system/lal-monitor.service
-  - action_id: reload-monitor-service
-    target: node1
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - systemctl daemon-reload && systemctl restart lal-monitor.service
-  - action_id: replace-client-host-entry
+  - action_id: replace-the-stale-entry
     target: node2
+    arguments: [sudo, --, bash, -c, "sed -i '/[[:space:]]monitor\\.internal\\([[:space:]]\\|$\\)/d' /etc/hosts && echo '10.35.0.8 monitor.internal' >> /etc/hosts"]
+  - action_id: bind-to-the-ops-address
+    target: mon
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        sed -i '/monitor\.internal/d' /etc/hosts;
-        echo '{{host.node1.address}} monitor.internal' >> /etc/hosts
+      - |
+        set -euo pipefail
+        printf '[Service]\nEnvironment=MONITOR_BIND=10.35.0.8\n' > /etc/systemd/system/lal-monitor.service.d/debug.conf
+        systemctl daemon-reload
+        systemctl restart lal-monitor.service
+  - action_id: open-the-dashboard-port-to-the-ops-network
+    target: mon
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --zone=public --add-rich-rule='rule family="ipv4" source address="10.35.0.0/24" port port="9180" protocol="tcp" accept'
+        firewall-cmd --quiet --reload

@@ -1,19 +1,89 @@
 schema_version: 1
 scenario_id: firewall-nat-redirection
-version: 1
+version: 2
 status: verified
-title: The lab router lost forwarding, NAT, and its public redirect
-summary: Restore stateful filtering, masquerading, and port redirection with nftables.
-estimated_minutes: 40
+title: The reinstalled router passes nothing
+summary: Restore routing, masquerading, and a port redirect on a router, without opening the office to the partner.
+estimated_minutes: 45
 task_type: fix
 difficulty: advanced
-task: >-
-  node2 is the router between lab-lan (10.60.0.0/24 on lan0) and lab-wan
-  (198.51.100.0/24 on wan0). Restore IPv4 forwarding and a persistent nftables policy that
-  permits established traffic, preserves SSH access to node2, forwards LAN traffic to WAN
-  with masquerading, and redirects TCP port 80 arriving on wan0 to node2's local service on
-  port 8080. Keep unsolicited forwarding denied. The namespace clients lal-lan and lal-wan
-  are already running for testing.
+task: |
+  **router** connects the office LAN to a partner's network. It was reinstalled from the
+  standard build yesterday, and everything it did as a router was lost:
+
+  | Network | Router interface | Router address | Other host |
+  | --- | --- | --- | --- |
+  | office LAN, 10.60.0.0/24 | `lan0` | 10.60.0.1 | **client**, 10.60.0.10 |
+  | partner, 198.51.100.0/24 | `wan0` | 198.51.100.1 | **partner**, 198.51.100.20 |
+
+  The partner's addressing plan has no room for our private range, so office traffic must
+  reach them as coming from the router itself. The router also publishes a web site to the
+  partner at `http://198.51.100.1/`; the site runs unprivileged as `lal-web.service` on
+  port 8080. And the partner's network routes 10.60.0.0/24 to us, so the router is the only
+  thing keeping partner traffic out of the office.
+
+  Make **router** do its job again. Work only on **router**.
+requirements:
+  - "From **client**, `http://198.51.100.20/` works, and the partner sees the request coming from 198.51.100.1."
+  - "From **partner**, `http://198.51.100.1/` (port 80) returns the router's site, which still listens on port 8080."
+  - "**partner** cannot open connections to office hosts, such as the office share at `http://10.60.0.10:8000/`."
+  - "All of this still holds after **router** reboots."
+hints:
+  - "Test from both sides as you go: `curl http://198.51.100.20/` on **client**, `curl http://198.51.100.1/` on **partner**. A router needs `net.ipv4.ip_forward`, and something to allow, translate, and redirect traffic: firewalld here, or nftables directly."
+  - "`firewall-cmd --get-active-zones` shows both router interfaces in `public`. firewalld's `internal` and `external` zones describe a router's two sides, and `external` masquerades. See `firewalld.zones(5)`."
+  - "Traffic between zones is governed by policies (`firewalld.policies(5)`); a zone's `--add-forward-port` redirects a port. Without `--permanent`, a change lasts until the next reload or reboot."
+debrief: |
+  ## What was wrong
+
+  The reinstall left firewalld running with both router interfaces in the `public` zone,
+  and forwarding off. The router accepted SSH, forwarded nothing, translated nothing, and
+  nothing answered on port 80.
+
+  ## A clean fix
+
+  ```bash
+  sudo firewall-cmd --permanent --zone=internal --change-interface=lan0
+  sudo firewall-cmd --permanent --zone=external --change-interface=wan0
+  sudo firewall-cmd --permanent --zone=external --add-forward-port=port=80:proto=tcp:toport=8080
+  sudo firewall-cmd --permanent --new-policy office-out
+  sudo firewall-cmd --permanent --policy office-out --add-ingress-zone internal
+  sudo firewall-cmd --permanent --policy office-out --add-egress-zone external
+  sudo firewall-cmd --permanent --policy office-out --set-target ACCEPT
+  sudo firewall-cmd --reload
+  ```
+
+  - The `external` zone masquerades whatever leaves through it, so the partner sees
+    198.51.100.1. firewalld turns on IPv4 forwarding itself when a zone masquerades.
+  - The policy lets new connections go from office to partner. Replies come back because
+    firewalld accepts traffic of established connections; new connections from the partner
+    into the office match no policy and are rejected.
+  - The forward port redirects port 80 arriving from the partner to the local port 8080,
+    and firewalld accepts the redirected traffic.
+  - For NetworkManager interfaces, `--change-interface --permanent` records the zone in
+    the connection profile, so it holds at boot.
+
+  A hand-written nftables ruleset loaded by `nftables.service`, with firewalld disabled,
+  works too: a forward chain with policy drop that accepts `lan0` to `wan0` and established
+  traffic, `masquerade` on `wan0`, `redirect to :8080` in prerouting, and
+  `net.ipv4.ip_forward = 1` in `/etc/sysctl.d/`.
+
+  ## Check it yourself
+
+  ```bash
+  sudo firewall-cmd --get-active-zones
+  sudo firewall-cmd --info-zone=external
+  sudo firewall-cmd --info-policy=office-out
+  sudo nft list ruleset | less      # what firewalld actually generated
+  ```
+
+  ## Tempting but wrong
+
+  - **Masquerade and `--add-forward` in `public`, the zone both interfaces are in.** The
+    office gets out, and the partner gets in: intra-zone forwarding works in both
+    directions, so any partner host can open connections to the office.
+  - **Forwarding without masquerading.** It works here only because the partner routes our
+    range back; they see 10.60.0.10, a private address from their point of view.
+  - **Runtime-only changes.** Everything works until the next reload or reboot.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -23,60 +93,82 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: nftables NAT documentation
-    url: https://wiki.nftables.org/wiki-nftables/index.php/Performing_Network_Address_Translation_(NAT)
   - kind: man-page
-    title: nft manual
+    title: Zones, forward ports, and masquerading
+    man_page: firewall-cmd(1)
+  - kind: man-page
+    title: The predefined zones
+    man_page: firewalld.zones(5)
+  - kind: man-page
+    title: Policies between zones
+    man_page: firewalld.policies(5)
+  - kind: man-page
+    title: nftables rules, NAT, and redirect
     man_page: nft(8)
 topology:
+  networks:
+    - {name: office, cidr: 10.60.0.0/24}
+    - {name: partner, cidr: 198.51.100.0/24}
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
+    - name: router
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
+      nics: [{network: office, name: lan0}, {network: partner, name: wan0}]
+    - name: client
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: office, name: lan0}]
+    - name: partner
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: partner, name: wan0}]
 checks:
-  - check_id: router-forwarding-live
+  - check_id: office-reaches-partner
     kind: command
-    target: node2
-    description: IPv4 forwarding is enabled.
-    parameters: {arguments: [sysctl, --values, net.ipv4.ip_forward], stdout_equals: "1"}
-  - check_id: lan-masquerade-path
-    kind: command
-    target: node2
-    description: The route and masquerade policy carries LAN traffic to the route-less WAN peer.
+    target: client
+    description: The office reaches the partner, masqueraded as 198.51.100.1.
     parameters:
-      sudo: true
-      arguments: [ip, netns, exec, lal-lan, ping, -c, "2", -W, "2", 198.51.100.2]
-  - check_id: public-port-redirect
+      script: |
+        answer=$(curl --silent --show-error --max-time 5 http://198.51.100.20/ 2>&1) ||
+          fail "client cannot reach the partner: ${answer##*: }"
+        expect_eq "$answer" "partner sees 198.51.100.1" "the partner's answer"
+  - check_id: partner-reaches-site
     kind: command
-    target: node2
-    description: WAN TCP port 80 reaches the local port-8080 service.
+    target: partner
+    description: The partner gets the router's site on port 80.
     parameters:
-      sudo: true
-      arguments: [ip, netns, exec, lal-wan, curl, --fail, --silent, --max-time, "5", http://198.51.100.1/]
-      stdout_equals: router-service
-  - check_id: nftables-policy-present
+      script: |
+        answer=$(curl --silent --show-error --max-time 5 http://198.51.100.1/ 2>&1) ||
+          fail "partner cannot reach http://198.51.100.1/: ${answer##*: }"
+        expect_eq "$answer" router-service "the page the partner gets"
+  - check_id: site-still-on-8080
     kind: command
-    target: node2
-    description: The loaded policy contains filtering, masquerade, and redirect rules.
+    target: router
+    description: lal-web.service still serves the site on port 8080.
     parameters:
-      sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          rules=$(nft list ruleset) &&
-          grep -qw masquerade <<<"$rules" &&
-          grep -Eq 'tcp dport 80 redirect to :8080' <<<"$rules" &&
-          grep -Eq 'ct state (established,related|related,established) accept' <<<"$rules"
-  - check_id: nftables-policy-persistent
-    kind: service
-    target: node2
-    description: nftables is running and enabled to restore the saved rules.
-    parameters: {name: nftables.service, active: true, enabled: true}
+      script: |
+        systemctl is-active --quiet lal-web.service || fail "lal-web.service is not running"
+        answer=$(curl --silent --max-time 5 http://127.0.0.1:8080/ 2>&1)
+        expect_eq "$answer" router-service "the site on port 8080"
+  - check_id: office-closed-to-partner
+    kind: command
+    target: partner
+    description: The partner cannot open connections to office hosts.
+    parameters:
+      script: |
+        if answer=$(curl --silent --max-time 4 http://10.60.0.10:8000/ 2>/dev/null); then
+          fail "partner opened http://10.60.0.10:8000/ in the office and got: $answer"
+        fi
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [router]
 setup: actions/firewall-nat-redirection.setup.yaml
 reference_solution: actions/firewall-nat-redirection.solution.yaml
 alternate_solutions: [actions/firewall-nat-redirection.alternate.yaml]
+rejected_solutions:
+  - actions/firewall-nat-redirection.rejected-one-zone.yaml
+  - actions/firewall-nat-redirection.rejected-no-masquerade.yaml
+  - actions/firewall-nat-redirection.rejected-runtime-only.yaml

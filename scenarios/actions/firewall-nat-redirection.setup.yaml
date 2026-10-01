@@ -1,7 +1,7 @@
 schema_version: 1
 actions:
-  - action_id: build-router-test-topology
-    target: node2
+  - action_id: address-the-office-client
+    target: client
     arguments:
       - sudo
       - --
@@ -9,41 +9,102 @@ actions:
       - -c
       - |
         set -euo pipefail
-        systemctl disable --now firewalld.service >/dev/null 2>&1 || true
-        systemctl disable --now nftables.service >/dev/null 2>&1 || true
-        nft delete table inet lal_filter >/dev/null 2>&1 || true
-        nft delete table ip lal_nat >/dev/null 2>&1 || true
-        ip netns delete lal-lan >/dev/null 2>&1 || true
-        ip netns delete lal-wan >/dev/null 2>&1 || true
-        ip link delete lan0 >/dev/null 2>&1 || true
-        ip link delete wan0 >/dev/null 2>&1 || true
-        ip netns add lal-lan
-        ip netns add lal-wan
-        ip link add lan0 type veth peer name lan-client
-        ip link add wan0 type veth peer name wan-client
-        ip link set lan-client netns lal-lan
-        ip link set wan-client netns lal-wan
-        ip address add 10.60.0.1/24 dev lan0
-        ip address add 198.51.100.1/24 dev wan0
-        ip link set lan0 up
-        ip link set wan0 up
-        ip netns exec lal-lan ip address add 10.60.0.2/24 dev lan-client
-        ip netns exec lal-lan ip link set lo up
-        ip netns exec lal-lan ip link set lan-client up
-        ip netns exec lal-lan ip route add default via 10.60.0.1
-        ip netns exec lal-wan ip address add 198.51.100.2/24 dev wan-client
-        ip netns exec lal-wan ip link set lo up
-        ip netns exec lal-wan ip link set wan-client up
-        install -d /srv/lal-router
-        printf 'router-service\n' > /srv/lal-router/index.html
-        cat > /etc/systemd/system/lal-router-http.service <<'EOF'
+        nmcli connection add type ethernet ifname lan0 con-name lan0 ipv4.method manual \
+          ipv4.addresses 10.60.0.10/24 ipv4.routes '198.51.100.0/24 10.60.0.1' ipv6.method disabled >/dev/null
+        nmcli connection up lan0 >/dev/null
+        install -d /srv/office
+        printf 'office-only\n' > /srv/office/index.html
+        cat > /etc/systemd/system/office-share.service <<'UNIT'
+        [Unit]
+        Description=Office file share (LAN only)
+        After=network-online.target
+
         [Service]
-        WorkingDirectory=/srv/lal-router
-        ExecStart=/usr/bin/python3 -m http.server 8080 --bind 0.0.0.0
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -m http.server 8000 --directory /srv/office
         Restart=always
-        EOF
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
         systemctl daemon-reload
-        systemctl restart lal-router-http.service
-        sysctl -w net.ipv4.ip_forward=0 >/dev/null
-        rm -f /etc/nftables/lal-router.nft
-        sed -i '\#lal-router.nft#d' /etc/sysconfig/nftables.conf
+        systemctl enable --now office-share.service
+        firewall-cmd --quiet --permanent --add-port=8000/tcp
+        firewall-cmd --quiet --reload
+  - action_id: address-the-partner-server
+    target: partner
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname wan0 con-name wan0 ipv4.method manual \
+          ipv4.addresses 198.51.100.20/24 ipv4.routes '10.60.0.0/24 198.51.100.1' ipv6.method disabled >/dev/null
+        nmcli connection up wan0 >/dev/null
+        install -d /opt/partner
+        cat > /opt/partner/whoami.py <<'PY'
+        """Partner web service: answers every request with the address it came from."""
+        from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+
+        class Handler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                body = f"partner sees {self.client_address[0]}\n".encode()
+                self.send_response(200)
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+
+
+        ThreadingHTTPServer(("0.0.0.0", 80), Handler).serve_forever()
+        PY
+        cat > /etc/systemd/system/partner-web.service <<'UNIT'
+        [Unit]
+        Description=Partner web service
+        After=network-online.target
+
+        [Service]
+        ExecStart=/usr/bin/python3 /opt/partner/whoami.py
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now partner-web.service
+        firewall-cmd --quiet --permanent --add-service=http
+        firewall-cmd --quiet --reload
+  - action_id: reinstall-the-router-without-routing
+    target: router
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan0 ipv4.method manual \
+          ipv4.addresses 10.60.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection add type ethernet ifname wan0 con-name wan0 ipv4.method manual \
+          ipv4.addresses 198.51.100.1/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan0 >/dev/null
+        nmcli connection up wan0 >/dev/null
+        install -d /srv/lal-web
+        printf 'router-service\n' > /srv/lal-web/index.html
+        cat > /etc/systemd/system/lal-web.service <<'UNIT'
+        [Unit]
+        Description=Public web service (unprivileged, port 8080)
+        After=network-online.target
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -m http.server 8080 --directory /srv/lal-web
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now lal-web.service

@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: repair-but-leave-the-orphan
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        e2fsck -f -y /dev/disk/by-id/virtio-lal-records
+        install -d /srv/records
+        printf 'LABEL=LAL_RECORDS /srv/records ext4 defaults 0 2\n' >> /etc/fstab
+        systemctl daemon-reload
+        mount /srv/records

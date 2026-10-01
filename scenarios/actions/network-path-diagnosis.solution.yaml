@@ -1,25 +1,11 @@
 schema_version: 1
 actions:
-  - action_id: make-monitor-remotely-listen
-    target: node1
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - >-
-        install -d /etc/systemd/system/lal-monitor.service.d;
-        printf '%s\n' '[Service]' 'Environment=MONITOR_BIND={{host.node1.address}}'
-        > /etc/systemd/system/lal-monitor.service.d/listen.conf;
-        systemctl daemon-reload;
-        systemctl restart lal-monitor.service
-  - action_id: repair-monitor-resolution
+  - action_id: resolve-the-dashboard-to-its-current-address
     target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - >-
-        sed -i '/[[:space:]]monitor\.internal\([[:space:]]\|$\)/d' /etc/hosts;
-        printf '{{host.node1.address}} monitor.internal\n' >> /etc/hosts
+    arguments: [sudo, --, sed, -i, 's/^10\.35\.0\.99\([[:space:]]\+monitor\.internal\)/10.35.0.8\1/', /etc/hosts]
+  - action_id: remove-the-debugging-override
+    target: mon
+    arguments: [sudo, --, bash, -c, "rm /etc/systemd/system/lal-monitor.service.d/debug.conf && systemctl daemon-reload && systemctl restart lal-monitor.service"]
+  - action_id: open-the-dashboard-port
+    target: mon
+    arguments: [sudo, --, bash, -c, "firewall-cmd --quiet --permanent --add-port=9180/tcp && firewall-cmd --quiet --reload"]

@@ -1,77 +1,182 @@
 schema_version: 1
 scenario_id: secure-web-deployment
-version: 1
+version: 2
 status: verified
-title: The internal web deployment is neither secure nor reachable
-summary: Recover a TLS web service without weakening SELinux or the host firewall.
+title: The intranet site went dark when it moved to HTTPS
+summary: A TLS migration left a site down behind four faults, across SELinux, the firewall, the certificate chain, and file labels.
 estimated_minutes: 60
-task_type: fix
+task_type: troubleshoot
 difficulty: exam
-task: >-
-  The supplied certificate and key on node2 belong to service.internal, but the deployment
-  was left serving plain HTTP on the wrong port. Configure nginx to serve the exact text
-  secure-ready from /srv/lal-secure on HTTPS port 8443 using /etc/lal-pki/service.crt and
-  /etc/lal-pki/private/service.key. Keep SELinux enforcing, create persistent SELinux rules
-  for the custom content tree and TCP port, permit 8443/tcp in firewalld's active zone, and
-  leave nginx enabled. The certificate must continue to verify against /etc/lal-pki/ca.crt.
+task: |
+  Yesterday the intranet site on **node2** moved to HTTPS: nginx now serves
+  `/srv/lal-secure` at `https://service.internal:8443/`, with a certificate from the
+  company's issuing CA. The new key was generated during the renewal and moved into
+  `/etc/lal-pki/private/`. Since then the site has been unreachable.
+
+  Company machines, such as **client** (10.45.0.50), trust only the company **root** CA,
+  and nobody will change that on every machine. node2 is 10.45.0.10 on the intranet.
+
+  Get the site working for clients again. Work on node2; security controls stay on.
+requirements:
+  - "From **client**, `https://service.internal:8443/` answers `secure-ready`, verified against the company root CA."
+  - "client is not changed: it trusts the same certificate authorities as before."
+  - "SELinux stays enforcing, and every label under `/etc/lal-pki` and `/srv/lal-secure` matches the policy, so a relabel changes nothing."
+  - "The private key stays owned by root and unreadable by other users."
+  - "nginx starts at boot, firewalld keeps running, and all of this still holds after node2 reboots."
+hints:
+  - "Follow one request from client to the page, and fix what stops it at each step: `curl -v https://service.internal:8443/` on client; `systemctl status nginx`, `nginx -t` and `sudo ausearch -m AVC -ts recent` on node2."
+  - "`ls -Z` shows labels. A file created elsewhere and moved keeps its old label; `restorecon` resets a file to what the policy says, and `semanage fcontext` changes what the policy says."
+  - "`openssl s_client -connect service.internal:8443 -showcerts` shows the chain the server sends. A client that trusts only the root needs the server to send the issuing CA certificate too: nginx's `ssl_certificate` file can hold the server certificate followed by its issuer."
+debrief: |
+  ## What was wrong
+
+  Four faults, met one after another along the request's path:
+
+  1. **The key's label.** Created in `/root` and moved, the key kept `admin_home_t`, which
+     nginx may not read, so nginx did not start:
+     `cannot load certificate key "/etc/lal-pki/private/service.key" ... Permission denied`.
+     `mv` keeps a file's label; `cp` would have given it the label of its new directory.
+  2. **The firewall.** Nothing allowed 8443, so client got `No route to host`.
+  3. **The chain.** nginx sent only the server certificate. client trusts the root CA, which
+     signed the issuing CA, which signed the server certificate; without the middle link
+     curl says `SSL certificate problem: unable to get local issuer certificate`.
+  4. **The content's label.** `/srv/lal-secure` inherited `var_t`, which nginx may not
+     read, so the page was `403 Forbidden`.
+
+  ## A clean fix
+
+  ```bash
+  sudo restorecon -Rv /etc/lal-pki
+  cat /etc/lal-pki/service.crt /etc/lal-pki/issuing-ca.crt | sudo tee /etc/lal-pki/service-chain.crt
+  #   ssl_certificate /etc/lal-pki/service-chain.crt;   in /etc/nginx/conf.d/lal-secure.conf
+  sudo semanage fcontext -a -t httpd_sys_content_t '/srv/lal-secure(/.*)?'
+  sudo restorecon -Rv /srv/lal-secure
+  sudo firewall-cmd --permanent --add-port=8443/tcp && sudo firewall-cmd --reload
+  sudo nginx -t && sudo systemctl restart nginx
+  ```
+
+  The order of the certificates matters: the server's own certificate first, then its
+  issuer. The root is not sent; clients must already have it. `semanage fcontext -a -e
+  /var/www /srv/lal-secure` labels the tree like the standard web root, and a rich rule
+  that opens 8443 only to 10.45.0.0/24 is a tighter firewall change.
+
+  ## Check it yourself
+
+  ```bash
+  curl https://service.internal:8443/                          # on client
+  openssl s_client -connect service.internal:8443 -showcerts </dev/null | grep -E '^ *[0-9] s:'
+  sudo restorecon -Rnv /etc/lal-pki /srv/lal-secure            # prints nothing
+  ```
+
+  ## Tempting but wrong
+
+  - **`chcon`.** The labels are right until the next relabel puts the old ones back.
+  - **Making client trust the issuing CA.** It fixes one machine; every other company
+    machine still fails, because the server still sends an incomplete chain.
 objectives:
-  - {track: lfcs, version: lfcs-2026-08, objective_id: operations.selinux, title: Create and enforce MAC using SELinux}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.packet-filtering, title: Implement packet filtering}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.proxies-load-balancers, title: Configure reverse proxies and load balancers}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.services, title: Manage services}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: essential-commands.tls-certificates, title: Work with SSL certificates}
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.selinux
+    title: Create and enforce MAC using SELinux
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.packet-filtering
+    title: Configure packet filtering, port redirection, and NAT
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.tls-certificates
+    title: Work with SSL certificates
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.services
+    title: Create, configure, and troubleshoot services
 sources:
-  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
-  - {kind: upstream, title: nginx HTTPS configuration, url: https://nginx.org/en/docs/http/configuring_https_servers.html}
-  - {kind: distribution, title: RHEL 10 SELinux file contexts, url: https://docs.redhat.com/en/documentation/red_hat_enterprise_linux/10/html/using_selinux/changing-selinux-states-and-modes}
-  - {kind: man-page, title: firewall-cmd manual, man_page: firewall-cmd(1)}
-  - {kind: man-page, title: semanage manual, man_page: semanage(8)}
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Inspect the chain a server sends
+    man_page: openssl-s_client(1ossl)
+  - kind: man-page
+    title: Reset labels to policy
+    man_page: restorecon(8)
+  - kind: man-page
+    title: Record file contexts in policy
+    man_page: semanage-fcontext(8)
+  - kind: upstream
+    title: nginx ssl_certificate and certificate chains
+    url: https://nginx.org/en/docs/http/configuring_https_servers.html#chains
 topology:
+  networks:
+    - {name: intranet, cidr: 10.45.0.0/24}
   hosts:
-    - {name: node2, image: rocky-10.2-lab-v1, memory_mib: 1280, vcpus: 1}
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: intranet, name: intra0}]
+    - name: client
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: intranet, name: intra0}]
 checks:
-  - check_id: mandatory-access-control-remains-enforcing
+  - check_id: client-gets-the-site
+    kind: command
+    target: client
+    description: client gets secure-ready over verified HTTPS.
+    parameters:
+      script: |
+        answer=$(curl --silent --show-error --max-time 5 https://service.internal:8443/ 2>&1) ||
+          { answer=${answer#curl: }; fail "client cannot fetch the site: ${answer%%$'\n'*}"; }
+        expect_eq "$answer" secure-ready "the page client gets"
+  - check_id: client-unchanged
+    kind: command
+    target: client
+    description: client trusts the same certificate authorities as before.
+    parameters:
+      script: |
+        [[ $(ls /etc/pki/ca-trust/source/anchors | sha256sum) == "$(cat /usr/share/lal-secure/anchors.sha256)" ]] ||
+          fail "client's trust anchors changed: $(ls /etc/pki/ca-trust/source/anchors | paste -sd' ' -)"
+  - check_id: labels-match-policy
     kind: command
     target: node2
-    description: SELinux remains enforcing.
-    parameters: {arguments: [getenforce], stdout_equals: Enforcing}
-  - check_id: secure-content-has-persistent-label
-    kind: command
-    target: node2
-    description: The custom content tree is persistently labeled for read-only web use.
+    description: SELinux is enforcing, and labels under /etc/lal-pki and /srv/lal-secure match policy.
     parameters:
       sudo: true
-      arguments: [bash, -c, 'matchpathcon -V /srv/lal-secure /srv/lal-secure/index.html >/dev/null && test "$(stat -c %C /srv/lal-secure/index.html | cut -d: -f3)" = httpd_sys_content_t']
-  - check_id: secure-port-has-http-label
+      script: |
+        expect_eq "$(getenforce)" Enforcing "the SELinux mode"
+        ! permissive_domain httpd_t || fail "the httpd_t domain is permissive"
+        drift=$(restorecon -R -n -v /etc/lal-pki /srv/lal-secure | head -n 1)
+        [[ -z $drift ]] || fail "a relabel would change labels: $drift"
+  - check_id: key-stays-private
     kind: command
     target: node2
-    description: TCP port 8443 has the persistent SELinux HTTP port type.
+    description: The private key is owned by root and unreadable by other users.
     parameters:
       sudo: true
-      arguments: [bash, -c, 'semanage port -l | awk ''$1=="http_port_t" && $2=="tcp" && $0 ~ /(^|,| )8443(,| |$)/ {ok=1} END {exit !ok}''']
-  - check_id: secure-port-is-allowed
-    kind: command
-    target: node2
-    description: firewalld permits HTTPS port 8443 in the active zone.
-    parameters: {sudo: true, arguments: [firewall-cmd, --query-port=8443/tcp]}
-  - check_id: web-service-is-persistent
+      script: |
+        key=/etc/lal-pki/private/service.key
+        [[ -f $key ]] || fail "$key is missing"
+        expect_eq "$(stat -c %U "$key")" root "the owner of $key"
+        mode=$(stat -c %a "$key")
+        (( (8#$mode & 8#007) == 0 )) || fail "$key is readable by other users (mode $mode)"
+  - check_id: nginx-running
     kind: service
     target: node2
-    description: nginx is running and enabled.
+    description: nginx runs and starts at boot.
     parameters: {name: nginx.service, active: true, enabled: true}
-  - check_id: certificate-remains-trusted
-    kind: command
+  - check_id: firewall-running
+    kind: service
     target: node2
-    description: The service certificate still verifies against the supplied CA.
-    parameters: {arguments: [openssl, verify, -CAfile, /etc/lal-pki/ca.crt, /etc/lal-pki/service.crt], stdout_contains: '/etc/lal-pki/service.crt: OK'}
-  - check_id: secure-service-behavior
-    kind: command
-    target: node2
-    description: The required name, certificate, TLS endpoint, and content work together.
-    parameters:
-      arguments: [curl, --fail, --silent, --cacert, /etc/lal-pki/ca.crt, --resolve, 'service.internal:8443:127.0.0.1', https://service.internal:8443/]
-      stdout_equals: secure-ready
-persistence: {reboot: true, hosts: [node2]}
+    description: firewalld keeps running.
+    parameters: {name: firewalld.service, active: true}
+persistence:
+  reboot: true
+  hosts: [node2]
 setup: actions/secure-web-deployment.setup.yaml
 reference_solution: actions/secure-web-deployment.solution.yaml
 alternate_solutions: [actions/secure-web-deployment.alternate.yaml]
+rejected_solutions:
+  - actions/secure-web-deployment.rejected-chcon.yaml
+  - actions/secure-web-deployment.rejected-client-trusts-the-issuer.yaml

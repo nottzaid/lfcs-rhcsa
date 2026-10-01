@@ -1,6 +1,9 @@
 schema_version: 1
 actions:
-  - action_id: deploy-nginx-reverse-proxy
+  - action_id: let-haproxy-connect-to-any-port
+    target: node2
+    arguments: [sudo, --, setsebool, -P, haproxy_connect_any, "1"]
+  - action_id: health-check-the-pool
     target: node2
     arguments:
       - sudo
@@ -8,19 +11,17 @@ actions:
       - bash
       - -c
       - |
-        systemctl disable --now haproxy.service
-        rm -f /etc/haproxy/haproxy.cfg
-        rm -f /etc/nginx/conf.d/*.conf
-        cat > /etc/nginx/conf.d/lal-application.conf <<'EOF'
-        server {
-            listen 8080;
-            location / {
-                proxy_pass http://{{host.node1.address}}:8081;
-                proxy_set_header Host $host;
-                proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            }
-        }
-        EOF
-        setsebool -P httpd_can_network_connect 1
-        nginx -t
-        systemctl enable --now nginx.service
+        set -euo pipefail
+        sed -i '/^backend app_servers$/,$d' /etc/haproxy/haproxy.cfg
+        cat >> /etc/haproxy/haproxy.cfg <<'CFG'
+        backend app_servers
+            balance roundrobin
+            option httpchk
+            http-check send meth GET uri /health
+            http-check expect status 200
+            default-server check inter 2s fall 2 rise 2
+            server app1 10.20.0.11:8081
+            server app2 10.20.0.12:8081
+        CFG
+        haproxy -c -q -f /etc/haproxy/haproxy.cfg
+        systemctl restart haproxy.service

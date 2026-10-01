@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from importlib import import_module
 from types import TracebackType
 from typing import Protocol, Self, cast
@@ -25,6 +26,8 @@ class RawDomain(Protocol):
     def undefineFlags(self, flags: int = 0) -> int: ...
 
     def interfaceAddresses(self, source: int, flags: int = 0) -> object: ...
+
+    def updateDeviceFlags(self, xml: str, flags: int = 0) -> int: ...
 
 
 class RawNetwork(Protocol):
@@ -63,6 +66,8 @@ class LibvirtApi(Protocol):
     VIR_ERR_NO_DOMAIN: int
     VIR_ERR_NO_NETWORK: int
     VIR_DOMAIN_XML_INACTIVE: int
+    VIR_DOMAIN_AFFECT_LIVE: int
+    VIR_DOMAIN_AFFECT_CONFIG: int
     VIR_DOMAIN_UNDEFINE_MANAGED_SAVE: int
     VIR_DOMAIN_UNDEFINE_SNAPSHOTS_METADATA: int
     VIR_DOMAIN_UNDEFINE_NVRAM: int
@@ -190,6 +195,28 @@ class LibvirtGateway:
         if kind is ResourceKind.DOMAIN:
             return _DomainResource(self._connection.defineXML(xml), self._api)
         return _NetworkResource(self._connection.networkDefineXML(xml))
+
+    def connect_interfaces(self, name: str, macs: tuple[str, ...]) -> None:
+        """Plug in a running domain's NICs, now and in its saved definition, by MAC."""
+        domain = self._connection.lookupByName(name)
+        for flags, scope in (
+            (0, self._api.VIR_DOMAIN_AFFECT_LIVE),
+            (self._api.VIR_DOMAIN_XML_INACTIVE, self._api.VIR_DOMAIN_AFFECT_CONFIG),
+        ):
+            interfaces = {
+                address.get("address", "").lower(): element
+                for element in ET.fromstring(domain.XMLDesc(flags)).iterfind("./devices/interface")
+                for address in element.iterfind("mac")
+            }
+            for mac in macs:
+                interface = interfaces.get(mac.lower())
+                if interface is None:
+                    raise LookupError(f"{name} has no interface with MAC {mac}")
+                link = interface.find("link")
+                if link is None:
+                    link = ET.SubElement(interface, "link")
+                link.set("state", "up")
+                domain.updateDeviceFlags(ET.tostring(interface, encoding="unicode"), scope)
 
     def domain_ipv4_addresses(self, name: str) -> tuple[str, ...]:
         """Return DHCP lease addresses for one explicitly named domain."""

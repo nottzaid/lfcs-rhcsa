@@ -1,16 +1,46 @@
 schema_version: 1
 actions:
-  - action_id: remove-lab-link-topology
+  - action_id: run-the-nas
+    target: nas
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname stor0 con-name storage ipv4.method manual \
+          ipv4.addresses 10.90.0.5/24 ipv6.method disabled >/dev/null
+        nmcli connection up storage >/dev/null
+        install -d /srv/nas
+        printf 'nas-ok\n' > /srv/nas/index.html
+        cat > /etc/systemd/system/nas-web.service <<'UNIT'
+        [Unit]
+        Description=NAS status page
+        After=network-online.target
+
+        [Service]
+        DynamicUser=yes
+        AmbientCapabilities=CAP_NET_BIND_SERVICE
+        ExecStart=/usr/bin/python3 -m http.server 80 --directory /srv/nas
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now nas-web.service
+        firewall-cmd --quiet --permanent --add-service=http
+        firewall-cmd --quiet --reload
+  - action_id: leave-node2-on-a-single-link
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        for connection in lal-bond-a lal-bond-b lal-bond lal-bridge-port lal-bridge; do
-          nmcli con delete "$connection" >/dev/null 2>&1 || true;
-        done;
-        for interface in bond-a bond-b bridge-port bond0 br0; do
-          ip link delete "$interface" >/dev/null 2>&1 || true;
-        done
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname stor0 con-name storage ipv4.method manual \
+          ipv4.addresses 10.90.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up storage >/dev/null

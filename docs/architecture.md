@@ -5,7 +5,7 @@
 The system must support a polished local website while remaining fully operable and
 verifiable without a browser. The application core therefore depends on interfaces for
 virtualization, guest execution, state checks, persistence, and reporting. Libvirt, SSH,
-QEMU guest-agent, SQLite, CLI, and web implementations sit outside that core.
+SQLite, CLI, and web implementations sit outside that core.
 
 ## Boundaries
 
@@ -14,7 +14,7 @@ Web UI ─────┐
             ├── Application services ── Scenario domain
 CLI ────────┘             │
                            ├── Hypervisor port ── system-libvirt adapter
-Verification harness ─────┼── Guest port ─────── SSH / QEMU-agent adapters
+Verification harness ─────┼── Guest port ─────── SSH adapter
                            ├── Check port ─────── behavioral check providers
                            └── Store port ─────── SQLite adapter
 ```
@@ -70,18 +70,35 @@ not loosen permissions on the libvirt socket. Access is inherited from the user'
 ## Checking model
 
 Checks are host-owned. A learner with root inside a guest cannot edit the grading contract.
-Check providers include:
+There are three kinds:
 
-- guest state inspection through SSH;
-- QEMU guest-agent fallback when networking is intentionally broken;
-- black-box network requests from another scenario VM;
-- libvirt state inspection for virtualization tasks;
-- reboot and reconnect orchestration;
-- file, service, process, mount, identity, security and protocol behavior.
+- **command** checks run arguments, or a bash script, in a named scenario VM over SSH;
+- **file** checks compare a path's type, owner, mode, and content;
+- **service** checks compare a systemd unit's state and boot enablement, and quote the
+  unit's own last log line when it failed.
 
-Shell checks are supported as an escape hatch, not as the default abstraction. All shell
-inputs are data, are executed without an implicit shell where possible, and have explicit
-timeouts and output limits.
+Most requirements are behavioral, so most checks are scripts: they act as the affected user,
+request a page from another VM, or measure a cgroup. The host prepends a small library to
+every script (`adapters/check_library.sh`: `fail`, `expect_eq`, `retry`, `unit_value`,
+`fstab_field`, `sysctl_configured`, `permissive_domain`, ...), and a script reports an unmet
+requirement as one learner-facing sentence. Every check has a timeout and output limits.
+
+A learner's check that passes live, for a scenario whose task requires persistence, reboots
+the scenario's persistence hosts, waits until their boot has finished (`systemctl
+is-system-running --wait`), and checks again. Only a pass after the reboot counts as solved.
+
+## Scenario networks
+
+A scenario can declare isolated networks, and its hosts NICs on them. Each session gets its
+own libvirt networks with no addresses, DHCP, or forwarding: the scenario's setup assigns
+addresses, so routers, gateways, and firewalls are real hosts. NICs get the names the
+manifest declares (a systemd `.link` file per MAC address), and NetworkManager does not
+create automatic profiles for them. Both take effect late in first boot, so scenario NICs
+start with their virtual cable unplugged and the platform plugs them in once cloud-init has
+finished; otherwise NetworkManager would try DHCP on them, and boot would wait a minute for
+it. The management NIC stays on libvirt's default network for SSH and is never part of a
+task. Before a machine is destroyed it hands that network's DHCP lease back; libvirt would
+otherwise hold it for an hour, and frequent resets would exhaust the network's addresses.
 
 ## Test layers
 
@@ -90,8 +107,8 @@ timeouts and output limits.
 3. **Contract:** every scenario manifest and adapter satisfies the same behavioral contract.
 4. **Live integration:** disposable libvirt networks, domains, disks and guest transports.
 5. **Scenario replay:** broken -> repair -> pass -> reboot -> pass -> reset -> broken.
-6. **Mutation:** representative incomplete or unsafe repairs must not receive a pass.
-7. **Web end-to-end:** the browser drives the same API after the engine is already proven.
+6. **Mutation:** every scenario ships rejected near-miss repairs, and the replay proves the
+   checks refuse each of them, live or after the reboot.
 
 ## Local web boundary
 

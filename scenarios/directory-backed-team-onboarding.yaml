@@ -1,88 +1,227 @@
 schema_version: 1
 scenario_id: directory-backed-team-onboarding
-version: 1
+version: 2
 status: verified
-title: A mixed local and directory team cannot use the application host
-summary: Recover LDAP identities, a local operator, SSH policy, profiles, limits, and shared ACLs.
-estimated_minutes: 50
+title: The platform team's first day on the new host
+summary: A half-finished onboarding leaves a mixed local and directory team without identities, shared files, settings, or logins.
+estimated_minutes: 60
 task_type: troubleshoot
 difficulty: exam
-task: >-
-  node1 provides LDAP base dc=lab,dc=internal and holds the teamlead SSH key. On node2,
-  repair SSSD so ldapdev (UID 2300, group ldapops GID 2300) resolves from node1 without a
-  shadowing local account. Repair the local teamlead account to UID 3100 with primary group
-  platform GID 3100. Both platform and ldapops members need read/write access to
-  /srv/platform, including inherited access on new content; other users get no access.
-  Export TEAM_REGION=amman system-wide and configure soft nofile 4096 for both groups.
-  Finally, run sshd on port 2222 with SELinux enforcing, permit members of these two groups
-  while retaining the lab controller's wheel-group access on port 22, install node1's supplied
-  public key for teamlead, and leave SSSD and sshd enabled.
+task: |
+  The platform team starts work on **node2** today. Its two members are:
+
+  | Member | Source | UID | Primary group |
+  | --- | --- | --- | --- |
+  | `teamlead` | local account on node2 | 3100 | `platform` (local, GID 3100) |
+  | `ldapdev` | the directory on **node1** (`dc=lab,dc=internal`) | 2300 | `ldapops` (directory, GID 2300) |
+
+  The onboarding ticket promised them:
+
+  - a shared tree, `/srv/platform`, where both teams read and write each other's files,
+    including files created later, and nobody else gets in;
+  - `TEAM_REGION=amman` in every login shell;
+  - a soft limit of 4096 open files for members of both groups;
+  - for `teamlead`, SSH logins from their workstation (node1) with their key.
+
+  It is 9:00 and the complaints have started: `ldapdev` is "the wrong user", `teamlead`
+  cannot open the team's files, and the SSH key "does nothing". node1 is 10.65.0.1 and
+  node2 10.65.0.20. Fix node2 so that everything on the ticket works.
+requirements:
+  - "`ldapdev` and `ldapops` come from the directory, with their directory IDs."
+  - "`teamlead` is the local account with UID 3100 and primary group `platform`."
+  - "In `/srv/platform`, both groups can read and write each other's files, existing and new; other users cannot even list it."
+  - "Login shells of both members get `TEAM_REGION=amman` and a soft limit of 4096 open files."
+  - "From node1, `teamlead` logs in to node2 with the key `~/.ssh/lal_teamlead`."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "Start from what each name resolves to: `getent passwd ldapdev` and `getent -s sss passwd ldapdev` (directory only) disagree. `/etc/nsswitch.conf` decides who wins."
+  - "`ls -ln` shows numeric owners; compare them with the roster. `usermod` changes a UID and the files in the home directory, nothing else. sshd's journal says why it refused a login."
+  - "Login shells source only `/etc/profile.d/*.sh`. In `limits.conf(5)`, a group is written `@group`. `getfacl` shows a directory's default ACL."
+debrief: |
+  ## What was wrong
+
+  1. **A stale local `ldapdev`** (UID 4300) from a trial before the directory existed.
+     `/etc/nsswitch.conf` lists `files` before `sss`, so the local account shadowed the
+     directory one.
+  2. **teamlead had UID 3099** and its own group, so the team files, owned by 3100, were
+     someone else's.
+  3. **`/srv/platform` was mode 0700 root**, with no ACLs.
+  4. **The profile snippet was `lal-team.conf`.** `/etc/profile` sources only `*.sh` files
+     from `/etc/profile.d/`.
+  5. **The limits line said `platform`**, which matches a user called platform; groups are
+     written `@platform`, and `ldapops` had no line at all.
+  6. **SSH followed from 2.** node2 admits SSH logins only from `wheel` and `platform`
+     (`AllowGroups` in `/etc/ssh/sshd_config.d/60-platform-host.conf`), and teamlead was not
+     in `platform`. sshd logged:
+     `User teamlead from 10.65.0.1 not allowed because none of user's groups are listed in AllowGroups`.
+     Fixing the account fixed the login; nothing in sshd needed to change.
+
+  ## A clean fix
+
+  ```bash
+  sudo userdel -r ldapdev && sudo sss_cache -E
+  sudo mkhomedir_helper ldapdev        # the directory account gets a home from /etc/skel
+  sudo usermod -u 3100 -g platform teamlead
+  sudo chgrp platform /srv/platform && sudo chmod 2770 /srv/platform
+  sudo setfacl -R -m g:platform:rwX,g:ldapops:rwX,o::--- /srv/platform
+  sudo find /srv/platform -type d -exec setfacl -m d:g:platform:rwX,d:g:ldapops:rwX,d:o::--- {} +
+  sudo mv /etc/profile.d/lal-team.conf /etc/profile.d/lal-team.sh
+  sudo sed -i 's/^platform\b/@platform/' /etc/security/limits.d/80-lal-team.conf
+  echo '@ldapops soft nofile 4096' | sudo tee -a /etc/security/limits.d/80-lal-team.conf
+  ```
+
+  The default ACL is what makes files created later shareable: new files inherit the
+  `ldapops` and `platform` entries, whatever the creator's umask.
+
+  ## Check it yourself
+
+  ```bash
+  id ldapdev; id teamlead
+  getfacl /srv/platform
+  sudo runuser -l ldapdev -c 'echo $TEAM_REGION; ulimit -Sn'
+  ssh -i ~/.ssh/lal_teamlead teamlead@10.65.0.20 id     # on node1, as teamlead
+  ```
+
+  ## Tempting but wrong
+
+  - **Renumbering the local `ldapdev` to 2300**, which `usermod` allows only with
+    `--non-unique` because the directory already has that UID. `id` looks right, and the
+    account is a local copy that will drift from the directory: password, groups, and
+    removal all happen in the wrong place.
+  - **`chmod 1777`.** Everyone can share files, including everyone outside the team.
 objectives:
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.openssh, title: Configure the OpenSSH server and client}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.local-accounts, title: Create and manage local user and group accounts}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.environment-profiles, title: Manage personal and system-wide environment profiles}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.resource-limits, title: Configure user resource limits}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.acls, title: Configure and manage ACLs}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: users-groups.ldap-accounts, title: Configure the system to use LDAP user and group accounts}
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.ldap-accounts
+    title: Configure the system to use LDAP user and group accounts
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.local-accounts
+    title: Create and manage local user and group accounts
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.acls
+    title: Configure and manage ACLs
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.environment-profiles
+    title: Manage personal and system-wide environment profiles
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.resource-limits
+    title: Configure user resource limits
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.openssh
+    title: Configure the OpenSSH server and client
 sources:
-  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
-  - {kind: upstream, title: SSSD LDAP provider documentation, url: https://sssd.io/docs/introduction.html}
-  - {kind: upstream, title: OpenSSH server manual, url: https://man.openbsd.org/sshd_config}
-  - {kind: man-page, title: limits.conf manual, man_page: limits.conf(5)}
-  - {kind: man-page, title: acl manual, man_page: acl(5)}
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Name service lookup order
+    man_page: nsswitch.conf(5)
+  - kind: man-page
+    title: Access and default ACLs
+    man_page: setfacl(1)
+  - kind: man-page
+    title: Group limits with @group
+    man_page: limits.conf(5)
+  - kind: man-page
+    title: AllowGroups
+    man_page: sshd_config(5)
 topology:
+  networks:
+    - {name: corp, cidr: 10.65.0.0/24}
   hosts:
-    - {name: node1, image: rocky-10.2-lab-v1, memory_mib: 1536, vcpus: 2}
-    - {name: node2, image: rocky-10.2-lab-v1, memory_mib: 1280, vcpus: 1}
+    - name: node1
+      image: rocky-10.2-lab-v2
+      memory_mib: 1536
+      vcpus: 2
+      nics: [{network: corp, name: corp0}]
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: corp, name: corp0}]
 checks:
-  - check_id: directory-identities-online
+  - check_id: directory-identities
     kind: command
     target: node2
-    description: SSSD resolves the required LDAP identity and group from node1.
+    description: ldapdev and ldapops come from the directory with their directory IDs.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        local_copy=$(getent -s files passwd ldapdev)
+        [[ -z $local_copy ]] || fail "ldapdev is a local account in /etc/passwd (UID $(cut -d: -f3 <<<"$local_copy")), shadowing the directory"
+        [[ -z $(getent -s files group ldapops) ]] || fail "ldapops is a local group, shadowing the directory"
+        expect_eq "$(getent passwd ldapdev | cut -d: -f3)" 2300 "ldapdev's UID"
+        expect_eq "$(id -gn ldapdev 2>/dev/null)" ldapops "ldapdev's primary group"
+        expect_eq "$(getent group ldapops | cut -d: -f3)" 2300 "ldapops's GID"
+  - check_id: local-teamlead
+    kind: command
+    target: node2
+    description: teamlead is local, UID 3100, primary group platform.
+    parameters:
+      script: |
+        [[ -n $(getent -s files passwd teamlead) ]] || fail "teamlead is not a local account"
+        expect_eq "$(id -u teamlead)" 3100 "teamlead's UID"
+        expect_eq "$(id -gn teamlead)" platform "teamlead's primary group"
+  - check_id: shared-tree
+    kind: command
+    target: node2
+    description: Both groups share /srv/platform, for new files too; others cannot list it.
     parameters:
       sudo: true
-      arguments: [bash, -c, 'u=$(getent passwd ldapdev) && g=$(getent group ldapops) && test "$(cut -d: -f3 <<<"$u")" = 2300 && test "$(cut -d: -f3 <<<"$g")" = 2300 && sssctl domain-status lab --online >/dev/null && grep -Eq ''^ldap_uri *= *ldap://{{host.node1.address}}'' /etc/sssd/sssd.conf && ! grep -q ''^ldapdev:'' /etc/passwd']
-  - check_id: local-team-lead-correct
+      timeout_seconds: 30
+      script: |
+        as() { runuser -u "$1" -- bash -c "$2" 2>/dev/null; }
+        trap 'rm -f /srv/platform/.check-teamlead /srv/platform/.check-ldapdev' EXIT
+        as teamlead 'echo plan >> /srv/platform/plan' || fail "teamlead cannot write /srv/platform/plan"
+        as ldapdev 'echo plan >> /srv/platform/plan' || fail "ldapdev cannot write /srv/platform/plan"
+        as teamlead 'umask 022; echo a > /srv/platform/.check-teamlead' || fail "teamlead cannot create files in /srv/platform"
+        as ldapdev 'echo b >> /srv/platform/.check-teamlead' || fail "ldapdev cannot write a file teamlead created"
+        as ldapdev 'umask 022; echo c > /srv/platform/.check-ldapdev' || fail "ldapdev cannot create files in /srv/platform"
+        as teamlead 'echo d >> /srv/platform/.check-ldapdev' || fail "teamlead cannot write a file ldapdev created"
+        ! as nobody 'ls /srv/platform' >/dev/null || fail "users outside both teams can list /srv/platform"
+        ! as nobody 'cat /srv/platform/plan' >/dev/null || fail "users outside both teams can read /srv/platform/plan"
+  - check_id: login-environment
     kind: command
     target: node2
-    description: The local operator has the exact local UID and primary group.
-    parameters: {arguments: [bash, -c, 'test "$(id -u teamlead)" = 3100 && test "$(id -g teamlead)" = 3100 && test "$(getent group 3100 | cut -d: -f1)" = platform']}
-  - check_id: shared-tree-policy
-    kind: command
-    target: node2
-    description: Existing and inherited ACLs grant both teams access and deny others.
+    description: Login shells of both members get TEAM_REGION=amman and 4096 open files.
     parameters:
       sudo: true
-      arguments: [bash, -c, 'runuser -u teamlead -- test -w /srv/platform/plan && runuser -u ldapdev -- test -w /srv/platform/plan && getfacl -cp /srv/platform | grep -qx ''default:group:platform:rwx'' && getfacl -cp /srv/platform | grep -qx ''default:group:ldapops:rwx'' && getfacl -cp /srv/platform | grep -qx ''default:other::---''']
-  - check_id: shared-login-environment
-    kind: command
-    target: node2
-    description: Both local and directory login shells receive the team region.
-    parameters: {sudo: true, arguments: [bash, -c, 'test "$(runuser -l teamlead -c ''printf %s "$TEAM_REGION"'')" = amman && test "$(runuser -l ldapdev -c ''printf %s "$TEAM_REGION"'')" = amman']}
-  - check_id: group-limits-configured
-    kind: command
-    target: node2
-    description: Both groups have the required soft file-descriptor limit.
-    parameters: {arguments: [bash, -c, 'awk ''$1=="@platform" && $2=="soft" && $3=="nofile" && $4==4096 {p=1} $1=="@ldapops" && $2=="soft" && $3=="nofile" && $4==4096 {l=1} END {exit !(p&&l)}'' /etc/security/limits.d/80-lal-team.conf']}
-  - check_id: identity-services-persistent
-    kind: service
-    target: node2
-    description: SSSD and OpenSSH are running and enabled.
-    parameters: {name: sssd.service, active: true, enabled: true}
-  - check_id: ssh-service-persistent
-    kind: service
-    target: node2
-    description: OpenSSH remains running and enabled.
-    parameters: {name: sshd.service, active: true, enabled: true}
-  - check_id: teamlead-key-login
+      timeout_seconds: 30
+      script: |
+        for member in teamlead ldapdev; do
+          read -r region files <<<"$(runuser -l "$member" -c 'printf "%s %s\n" "${TEAM_REGION:-unset}" "$(ulimit -Sn)"' 2>/dev/null | tail -n 1)"
+          expect_eq "$region" amman "TEAM_REGION in $member's login shell"
+          expect_eq "$files" 4096 "the soft open-files limit in $member's login shell"
+        done
+  - check_id: teamlead-ssh
     kind: command
     target: node1
-    description: The supplied client key authenticates teamlead to node2 on the required port.
+    description: From node1, teamlead logs in to node2 with their key.
     parameters:
       sudo: true
-      arguments: [runuser, -u, teamlead, --, ssh, -F, /dev/null, -i, /home/teamlead/.ssh/lal_teamlead, -p, '2222', -o, IdentitiesOnly=yes, -o, StrictHostKeyChecking=no, -o, UserKnownHostsFile=/dev/null, 'teamlead@{{host.node2.address}}', id, -u]
-      stdout_equals: '3100'
-persistence: {reboot: false}
+      timeout_seconds: 30
+      script: |
+        errors=$(mktemp)
+        output=$(runuser -u teamlead -- ssh -i /home/teamlead/.ssh/lal_teamlead -o BatchMode=yes -o IdentitiesOnly=yes \
+          -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR -o ConnectTimeout=5 teamlead@10.65.0.20 id -un 2>"$errors") ||
+          fail "teamlead's key login fails: $(tr -d '\r' <"$errors" | tail -n 1)"
+        expect_eq "$output" teamlead "the user the key logs in as"
+  - check_id: identity-service
+    kind: service
+    target: node2
+    description: SSSD runs and starts at boot.
+    parameters: {name: sssd.service, active: true, enabled: true}
+persistence:
+  reboot: true
+  hosts: [node2]
 setup: actions/directory-backed-team-onboarding.setup.yaml
 reference_solution: actions/directory-backed-team-onboarding.solution.yaml
 alternate_solutions: [actions/directory-backed-team-onboarding.alternate.yaml]
+rejected_solutions:
+  - actions/directory-backed-team-onboarding.rejected-renumber-the-local-copy.yaml
+  - actions/directory-backed-team-onboarding.rejected-open-to-everyone.yaml

@@ -1,5 +1,5 @@
 schema_version: 1
-image_id: rocky-10.2-lab-v1
+image_id: rocky-10.2-lab-v2
 distribution: Rocky Linux
 release: "10.2"
 architecture: x86_64

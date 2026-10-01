@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: grow-the-volume-but-not-the-filesystem
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        vgextend vgdata /dev/disk/by-id/virtio-lal-spare
+        lvextend -L 1G vgdata/lvlogs

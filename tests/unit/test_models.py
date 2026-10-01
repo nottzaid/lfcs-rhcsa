@@ -54,8 +54,27 @@ def test_unknown_check_host_is_rejected() -> None:
 
 def test_undeclared_network_is_rejected() -> None:
     raw = minimal_manifest()
-    raw["topology"]["hosts"][0]["nics"] = [{"network": "missing-net"}]  # type: ignore[index]
+    raw["topology"]["hosts"][0]["nics"] = [  # type: ignore[index]
+        {"network": "missing-net", "name": "lan0"}
+    ]
     with pytest.raises(ValidationError, match="undeclared topology networks"):
+        ScenarioManifest.model_validate(raw)
+
+
+@pytest.mark.parametrize(
+    ("nics", "message"),
+    [
+        ([{"network": "lan", "name": "eth1"}], "collides with kernel naming"),
+        ([{"network": "lan", "name": "enp2s0"}], "collides with kernel naming"),
+        ([{"network": "lan", "name": "lan0"}, {"network": "lan", "name": "lan0"}], "unique"),
+        ([{"network": "lan", "name": "a-very-long-interface"}], "should match pattern"),
+    ],
+)
+def test_scenario_interfaces_have_predictable_names(nics: list, message: str) -> None:
+    raw = minimal_manifest()
+    raw["topology"]["networks"] = [{"name": "lan", "cidr": "10.70.0.0/24"}]  # type: ignore[index]
+    raw["topology"]["hosts"][0]["nics"] = nics  # type: ignore[index]
+    with pytest.raises(ValidationError, match=message):
         ScenarioManifest.model_validate(raw)
 
 

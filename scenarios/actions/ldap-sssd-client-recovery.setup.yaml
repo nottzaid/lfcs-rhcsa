@@ -1,8 +1,8 @@
 schema_version: 1
 actions:
-  - action_id: create-directory-server
+  - action_id: publish-the-directory-on-node1
     target: node1
-    timeout_seconds: 180
+    timeout_seconds: 240
     arguments:
       - sudo
       - --
@@ -67,17 +67,17 @@ actions:
         ldapmodify -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-anonymous-posix-read.ldif
         firewall-cmd --quiet --permanent --add-service=ldap
         firewall-cmd --quiet --reload
-  - action_id: install-stale-directory-client
+  - action_id: push-the-broken-client-configuration
     target: node2
+    timeout_seconds: 90
     arguments:
       - sudo
       - --
       - bash
       - -c
       - |
-        userdel -r ldapdev >/dev/null 2>&1 || true
-        groupdel ldapops >/dev/null 2>&1 || true
-        authselect select sssd with-mkhomedir --force
+        set -euo pipefail
+        authselect select sssd with-mkhomedir --force >/dev/null
         cat > /etc/sssd/sssd.conf <<'EOF'
         [sssd]
         services = nss, pam
@@ -90,9 +90,9 @@ actions:
         ldap_search_base = dc=lab,dc=internal
         ldap_id_use_start_tls = false
         cache_credentials = true
-        enumerate = true
         EOF
-        chmod 0600 /etc/sssd/sssd.conf
+        chown root:root /etc/sssd/sssd.conf
+        chmod 0644 /etc/sssd/sssd.conf
         sss_cache -E || true
         systemctl enable sssd.service
         systemctl restart sssd.service || true

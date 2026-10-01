@@ -1,16 +1,16 @@
 schema_version: 1
 actions:
-  - action_id: repair-local-repository
+  - action_id: fix-the-repository-and-trust-its-key
     target: node2
+    timeout_seconds: 120
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        printf '%s\n' '[lal-training]' 'name=Linux Admin Lab training repository'
-        'baseurl=file:///srv/lal-repo' 'enabled=1' 'gpgcheck=0'
-        > /etc/yum.repos.d/lal-training.repo
-  - action_id: install-approved-package
-    target: node2
-    arguments: [sudo, --, dnf, --disablerepo=*, --enablerepo=lal-training, install, -y, lal-release-notes]
+      - |
+        set -euo pipefail
+        printf '%s\n' '[lal-training]' 'name=Internal release packages' \
+          'baseurl=file:///srv/lal-repo' 'enabled=1' 'gpgcheck=1' \
+          'gpgkey=file:///srv/lal-repo/RPM-GPG-KEY-lal-release' > /etc/yum.repos.d/lal-training.repo
+        dnf -y install lal-release-notes

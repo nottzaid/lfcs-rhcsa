@@ -1,79 +1,153 @@
 schema_version: 1
 scenario_id: queued-handoff-job
-version: 1
+version: 2
 status: verified
 title: The handoff must happen once, not every night
-summary: Queue a one-time unattended job under the correct service identity.
+summary: Queue a one-time job for a service account that is not currently allowed to queue jobs.
 estimated_minutes: 20
 task_type: configure
 difficulty: foundation
-task: >-
-  The release team needs a one-time handoff exactly one hour from now on node2. As the
-  handoff user, queue a job with at(1) that writes the single line "approved" to
-  /var/lib/handoff/ready. The atd service must be running and enabled. Do not use cron,
-  a systemd timer, sleep, or an interactive process; the handoff must remain queued if
-  you disconnect.
+task: |
+  Tomorrow's release on **node2** is approved. At the next **06:00 UTC**, and only then,
+  the `handoff` account must write the single line `approved` to
+  `/var/lib/handoff/ready`, which triggers the release tooling.
+
+  Queue that one-time job as `handoff`. Nobody will be logged in at 06:00, so the job must
+  not depend on anyone's session, and it must never run again.
+requirements:
+  - "The at daemon is running and enabled."
+  - "Exactly one job is queued for `handoff`, due at the next 06:00 UTC."
+  - "Run as queued, the job writes the single line `approved` to `/var/lib/handoff/ready`, owned by `handoff`."
+  - "Nothing schedules it again: no cron entry for `handoff`."
+hints:
+  - "`at` queues commands for one run; `atq` lists the queue and `at -c JOB` shows exactly what will run. `sudo -iu handoff` gives you a login shell as the account."
+  - "If `at` refuses with a permission error, read `at.allow(5)`: `/etc/at.allow` and `/etc/at.deny` decide who may use it."
+  - "`at` records the current directory and environment when the job is queued, and the job starts there. Queue it from a directory `handoff` can enter."
+debrief: |
+  ## What was wrong
+
+  `atd` was stopped and disabled, and a hardening template had listed `handoff` in
+  `/etc/at.deny`:
+
+  ```text
+  $ sudo -iu handoff at 06:00
+  You do not have permission to use at.
+  ```
+
+  ## A clean fix
+
+  ```bash
+  sudo sed -i '/^handoff$/d' /etc/at.deny
+  sudo systemctl enable --now atd
+  sudo -iu handoff
+  echo 'echo approved > /var/lib/handoff/ready' | at 06:00
+  atq
+  ```
+
+  `at 06:00` means the next 06:00, today or tomorrow, in the system time zone, which is UTC
+  here. `at 06:00 tomorrow` is wrong when it is still before 06:00 today. The job belongs to
+  whoever queued it, and `at -c` shows that it replays the queuing shell's environment and
+  first changes to its working directory. That is why `sudo -iu handoff`, which starts in
+  `handoff`'s home, matters: queued from a directory `handoff` cannot enter, the job would
+  fail at 06:00 with "Execution directory inaccessible".
+
+  ## Check it yourself
+
+  ```bash
+  sudo atq
+  sudo at -c "$(sudo atq | awk '$NF == "handoff" {print $1}')" | tail -n 3
+  ```
+
+  ## Tempting but wrong
+
+  - **Queuing it as root.** The file would be owned by root, and the release tooling reads
+    only files `handoff` wrote.
+  - **A cron entry.** It runs every day at 06:00, not once.
+  - **`sudo -u handoff at` from your own home directory.** `at` accepts it, and at 06:00 the
+    job fails because `handoff` cannot enter that directory.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: operations.scheduled-jobs
-    title: Manage scheduling of jobs and services
+    title: Manage or schedule jobs for executing commands
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: at manual
+    title: Queue, list, and inspect one-time jobs
     man_page: at(1)
   - kind: man-page
-    title: atd manual
+    title: Who may use at
+    man_page: at.allow(5)
+  - kind: man-page
+    title: The at daemon
     man_page: atd(8)
 topology:
   hosts:
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: scheduler-ready
+  - check_id: scheduler-running
     kind: service
     target: node2
-    description: The one-time job scheduler is running and enabled.
-    parameters:
-      name: atd.service
-      active: true
-      enabled: true
-  - check_id: one-handoff-job
+    description: The at daemon is running and enabled.
+    parameters: {name: atd.service, active: true, enabled: true}
+  - check_id: one-job-at-the-next-0600
     kind: command
     target: node2
-    description: Exactly one queued job belongs to the handoff account.
+    description: Exactly one job is queued for handoff, due at the next 06:00 UTC.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(atq | awk '$NF == "handoff" {count++} END {print count+0}')" -eq 1
-  - check_id: correct-handoff-state
+      script: |
+        jobs=$(atq | awk '$NF == "handoff"')
+        expect_eq "$(grep -c . <<<"$jobs")" 1 "the number of jobs queued for handoff"
+        read -r _ weekday month day time year _ <<<"$jobs"
+        due=$(date -u -d "$weekday $month $day $time $year" +%s)
+        expect_eq "$(date -u -d "@$due" +%H:%M)" 06:00 "the job's run time (UTC)"
+        now=$(date +%s)
+        (( due > now && due - now <= 86400 )) || fail "the job is due $(date -u -d "@$due"), not at the next 06:00 UTC"
+  - check_id: job-writes-the-handoff
     kind: command
     target: node2
-    description: The queued or completed job writes the required state as handoff.
+    description: Run as queued, the job writes the single line approved to /var/lib/handoff/ready as handoff.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          if test -f /var/lib/handoff/ready; then
-            test "$(cat /var/lib/handoff/ready)" = approved &&
-            test "$(stat -c %U /var/lib/handoff/ready)" = handoff;
+      script: |
+        job=$(atq | awk '$NF == "handoff" {print $1}' | head -n 1)
+        [[ -n "$job" ]] || fail "no job is queued for handoff"
+        # Run the job exactly as atd would, but inside a private mount namespace where
+        # /var/lib/handoff is a scratch tmpfs, so the dry run changes nothing real.
+        result=$(unshare --mount --propagation private bash -c '
+          mount -t tmpfs tmpfs /var/lib/handoff || exit 90
+          chown handoff:handoff /var/lib/handoff
+          error=$(at -c "$1" | runuser -u handoff -- sh 2>&1 >/dev/null | tail -n 1)
+          if [ -f /var/lib/handoff/ready ]; then
+            printf "%s %s" "$(stat -c %U /var/lib/handoff/ready)" "$(base64 -w0 /var/lib/handoff/ready)"
           else
-            job=$(atq | awk '$NF == "handoff" {print $1}');
-            test -n "$job" &&
-            at -c "$job" | grep -Fq "/usr/bin/printf 'approved\\n' > /var/lib/handoff/ready";
-          fi
+            printf "none %s" "$(printf %s "$error" | base64 -w0)"
+          fi' _ "$job")
+        read -r owner payload <<<"$result"
+        if [[ "$owner" == none ]]; then
+          fail "run now, the job writes nothing: $(base64 -d <<<"$payload")"
+        fi
+        expect_eq "$owner" handoff "the owner of the file the job writes"
+        expect_eq "$(base64 -d <<<"$payload")" approved "what the job writes"
+        expect_eq "$(base64 -d <<<"$payload" | wc -l)" 1 "the number of lines the job writes"
+  - check_id: runs-only-once
+    kind: command
+    target: node2
+    description: No cron entry for handoff schedules it again.
+    parameters:
+      sudo: true
+      script: |
+        entries=$(crontab -u handoff -l 2>/dev/null | grep -Ev '^[[:space:]]*(#|$)')
+        [[ -z "$entries" ]] || fail "handoff has a cron entry: $entries"
 persistence:
   reboot: false
 setup: actions/queued-handoff-job.setup.yaml
 reference_solution: actions/queued-handoff-job.solution.yaml
 alternate_solutions: [actions/queued-handoff-job.alternate.yaml]
+rejected_solutions:
+  - actions/queued-handoff-job.rejected-queued-by-root.yaml
+  - actions/queued-handoff-job.rejected-cron.yaml
+  - actions/queued-handoff-job.rejected-unreachable-directory.yaml

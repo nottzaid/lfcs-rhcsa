@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: install-routes-and-forwarding
+  - action_id: correct-the-datacenter-address-and-route-the-vips
     target: node2
     arguments:
       - sudo
@@ -8,11 +8,13 @@ actions:
       - bash
       - -c
       - |
-        ip netns exec lal-branch ip route replace 172.20.0.0/24 via 10.70.0.1
-        ip netns exec lal-dc ip route replace 10.70.0.0/24 via 172.20.0.1
-        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/80-lal-forwarding.conf
-        sysctl --system >/dev/null
-  - action_id: install-branch-filter
+        set -euo pipefail
+        nmcli connection modify dc ipv4.addresses 172.20.0.1/24 ipv4.routes '172.21.0.0/24 172.20.0.2'
+        nmcli connection up dc
+  - action_id: forward-ipv4
+    target: node2
+    arguments: [sudo, --, bash, -c, "echo 'net.ipv4.ip_forward = 1' > /etc/sysctl.d/90-router.conf && sysctl --quiet --load /etc/sysctl.d/90-router.conf"]
+  - action_id: allow-only-the-order-service
     target: node2
     arguments:
       - sudo
@@ -20,16 +22,14 @@ actions:
       - bash
       - -c
       - |
-        install -d /etc/nftables
-        cat > /etc/nftables/lal-branch.nft <<'EOF'
-        table inet lal_branch {
-          chain forward {
-            type filter hook forward priority 0; policy drop;
-            ct state established,related accept
-            ip saddr 10.70.0.0/24 ip daddr 172.20.0.0/24 tcp dport 8080 accept
-          }
-        }
-        EOF
-        nft delete table inet lal_branch
-        nft -f /etc/nftables/lal-branch.nft
-        grep -qF 'include "/etc/nftables/lal-branch.nft"' /etc/sysconfig/nftables.conf || printf 'include "/etc/nftables/lal-branch.nft"\n' >> /etc/sysconfig/nftables.conf
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --new-zone=branch
+        firewall-cmd --quiet --permanent --new-zone=datacenter
+        firewall-cmd --quiet --permanent --zone=branch --change-interface=branch0
+        firewall-cmd --quiet --permanent --zone=datacenter --change-interface=dc0
+        firewall-cmd --quiet --permanent --new-policy branch-to-orders
+        firewall-cmd --quiet --permanent --policy branch-to-orders --add-ingress-zone branch
+        firewall-cmd --quiet --permanent --policy branch-to-orders --add-egress-zone datacenter
+        firewall-cmd --quiet --permanent --policy branch-to-orders \
+          --add-rich-rule='rule family="ipv4" destination address="172.21.0.10" port port="8080" protocol="tcp" accept'
+        firewall-cmd --quiet --reload

@@ -1,23 +1,21 @@
 schema_version: 1
 actions:
-  - action_id: recover-identity-stack
+  - action_id: fix-the-accounts
     target: node2
-    timeout_seconds: 120
+    timeout_seconds: 180
     arguments:
       - sudo
       - --
       - bash
       - -c
       - |
-        sed -i '/^ldap_uri/c\ldap_uri = ldap://{{host.node1.address}}' /etc/sssd/sssd.conf
-        chown root:root /etc/sssd/sssd.conf
-        chmod 0600 /etc/sssd/sssd.conf
-        usermod --uid 3100 --gid 3100 teamlead
-        systemctl enable --now sssd.service
-        sss_cache -E
+        set -euo pipefail
+        userdel --remove ldapdev
         systemctl restart sssd.service
-        for try in $(seq 1 30); do id ldapdev >/dev/null 2>&1 && break; sleep 1; done
-  - action_id: apply-shared-access-environment-and-limits
+        usermod --uid 3100 teamlead
+        usermod --gid platform teamlead
+        find / -xdev -uid 3099 -exec chown -h teamlead {} +
+  - action_id: share-the-tree-with-explicit-entries
     target: node2
     arguments:
       - sudo
@@ -25,20 +23,12 @@ actions:
       - bash
       - -c
       - |
-        chgrp -R platform /srv/platform
-        find /srv/platform -type d -exec chmod 2770 {} +
-        find /srv/platform -type f -exec chmod 0660 {} +
-        setfacl -Rm g:platform:rwX,g:ldapops:rwX,m::rwX,o::--- /srv/platform
-        setfacl -m d:g:platform:rwx,d:g:ldapops:rwx,d:m::rwx,d:o::--- /srv/platform
-        cat > /etc/profile.d/lal-team.sh <<'EOF'
-        TEAM_REGION=amman
-        export TEAM_REGION
-        EOF
-        cat > /etc/security/limits.d/80-lal-team.conf <<'EOF'
-        @platform soft nofile 4096
-        @ldapops soft nofile 4096
-        EOF
-  - action_id: authorize-and-enable-team-ssh
+        set -euo pipefail
+        chown root:platform /srv/platform
+        chmod 0770 /srv/platform
+        setfacl -m g:ldapops:rwx,d:u::rwx,d:g::rwx,d:g:platform:rwx,d:g:ldapops:rwx,d:m::rwx,d:o::--- /srv/platform
+        setfacl -m g:platform:rw,g:ldapops:rw /srv/platform/plan
+  - action_id: settings-in-new-files
     target: node2
     arguments:
       - sudo
@@ -46,13 +36,8 @@ actions:
       - bash
       - -c
       - |
-        cp /tmp/lal_teamlead.pub /home/teamlead/.ssh/authorized_keys
-        chown teamlead:platform /home/teamlead/.ssh/authorized_keys
-        chmod 0600 /home/teamlead/.ssh/authorized_keys
-        semanage port -a -t ssh_port_t -p tcp 2222
-        printf '%s\n' 'Port 2222' 'Port 22' 'PubkeyAuthentication yes' 'AllowGroups platform ldapops wheel' > /etc/ssh/sshd_config.d/80-lal-team.conf
-        sshd -t
-        firewall-cmd --quiet --permanent --add-port=2222/tcp
-        firewall-cmd --quiet --reload
-        systemctl enable --now sshd.service
-        systemctl restart sshd.service
+        set -euo pipefail
+        rm /etc/profile.d/lal-team.conf
+        echo 'export TEAM_REGION=amman' > /etc/profile.d/team-region.sh
+        rm /etc/security/limits.d/80-lal-team.conf
+        printf '@platform soft nofile 4096\n@ldapops soft nofile 4096\n' > /etc/security/limits.d/90-team.conf

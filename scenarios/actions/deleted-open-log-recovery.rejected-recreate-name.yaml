@@ -1,0 +1,7 @@
+schema_version: 1
+actions:
+  # On a full filesystem this fails with "No space left on device", as it would for a learner.
+  - action_id: recreate-an-empty-log-with-the-old-name
+    target: node2
+    expected_exit_codes: [0, 1]
+    arguments: [sudo, --, install, -o, lalingest, -g, lalingest, -m, "0644", /dev/null, /var/log/lal/ingest/ingest.log]

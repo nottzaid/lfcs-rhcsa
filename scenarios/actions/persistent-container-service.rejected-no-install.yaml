@@ -1,0 +1,25 @@
+schema_version: 1
+actions:
+  - action_id: define-a-quadlet-without-install
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cat > /etc/containers/systemd/lal-worker.container <<'QUADLET'
+        [Unit]
+        Description=Report worker
+
+        [Container]
+        Image=localhost/lal-worker:1
+        ContainerName=lal-worker
+        Environment=WORKER_SITE=amman
+        Volume=/srv/worker-data:/data:Z
+        QUADLET
+        systemctl daemon-reload
+  - action_id: start-the-worker-service
+    target: node2
+    arguments: [sudo, --, systemctl, start, lal-worker.service]

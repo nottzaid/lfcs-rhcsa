@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: address-client
+    target: client
+    arguments: [sudo, --, bash, -c, "nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual ipv4.addresses 10.99.0.2/24 ipv6.method disabled && nmcli connection up lan"]

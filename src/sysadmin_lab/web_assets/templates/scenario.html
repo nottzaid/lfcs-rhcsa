@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_scenario.html" as parts %}
 {% block title %}{{ scenario.title }} · Linux Admin Lab{% endblock %}
 {% block content %}
   <nav class="crumbs" aria-label="Breadcrumb">
@@ -11,6 +12,7 @@
           <span class="tag tag-type">{{ scenario.task_type.value }}</span>
           <span class="tag tag-level">{{ scenario.difficulty.value }}</span>
           <span class="tag">~{{ scenario.estimated_minutes }} min</span>
+          {% if solved %}<span class="tag tag-solved">solved</span>{% endif %}
         </div>
         <h1>{{ scenario.title }}</h1>
         <p>{{ scenario.summary }}</p>
@@ -24,30 +26,25 @@
     </header>
 
     <div class="detail-grid">
-      <section class="task-card">
-        <p class="eyebrow">Your task</p>
-        <p class="task-copy">{{ scenario.task }}</p>
-      </section>
-      <aside class="machine-card">
-        <p class="eyebrow">Machines</p>
-        {% for host in scenario.topology.hosts %}
-          <div class="machine-spec">
-            <strong>{{ host.name }}</strong>
-            <span>{{ host.image }}</span>
-            <small>{{ host.vcpus }} vCPU · {{ host.memory_mib }} MiB</small>
-          </div>
-        {% endfor %}
-        <p class="aside-note">The VM appears in virt-manager after launch. SSH and console credentials are shown when it is ready.</p>
+      <div>
+        {{ parts.brief(scenario) }}
+        {{ parts.competencies(scenario) }}
+      </div>
+      <aside>
+        <section class="machine-card">
+          <p class="eyebrow">Machines</p>
+          {% for host in scenario.topology.hosts %}
+            <div class="machine-spec">
+              <strong>{{ host.name }}</strong>
+              <span>{{ host.image }}</span>
+              <small>{{ host.vcpus }} vCPU · {{ host.memory_mib }} MiB{% for disk in host.disks %} · extra {{ disk.size_mib }} MiB disk{% endfor %}</small>
+              {{ parts.interfaces(scenario, host.name) }}
+            </div>
+          {% endfor %}
+          <p class="aside-note">The machines appear in virt-manager after launch. SSH and console credentials are shown when they are ready.{% if scenario.topology.networks %} Every machine also has a management NIC for your SSH connection and the checker; leave it alone.{% endif %}</p>
+        </section>
+        {{ parts.references(scenario) }}
       </aside>
     </div>
-
-    <section class="objective-section">
-      <p class="eyebrow">Mapped competencies</p>
-      <ul class="objective-list">
-        {% for objective in scenario.objectives %}
-          <li><span>{{ objective.track.value }}</span><strong>{{ objective.title }}</strong></li>
-        {% endfor %}
-      </ul>
-    </section>
   </article>
 {% endblock %}
