@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: fix-the-accounts-and-settings
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        userdel -r ldapdev && sss_cache -E
+        usermod -u 3100 -g platform teamlead
+        mv /etc/profile.d/lal-team.conf /etc/profile.d/lal-team.sh
+        printf '@platform soft nofile 4096\n@ldapops soft nofile 4096\n' > /etc/security/limits.d/80-lal-team.conf
+  - action_id: open-the-tree-to-everyone
+    target: node2
+    arguments: [sudo, --, bash, -c, "chmod 1777 /srv/platform && chmod 0666 /srv/platform/plan"]
