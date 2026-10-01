@@ -123,7 +123,11 @@ class ScenarioSessionService:
             self._actions.run(setup, endpoints)
             report = self._checks.run(provisioned.state.session_id, manifest)
             if report.has_errors:
-                raise ScenarioLaunchError("fresh scenario produced a checker error")
+                failed = next(r.observation for r in report.results if r.observation.error)
+                raise ScenarioLaunchError(
+                    "fresh scenario produced a checker error in "
+                    f"{failed.check_id}: {failed.message}"
+                )
             if report.required_passed:
                 raise ScenarioLaunchError("fresh scenario already satisfies every required check")
         except Exception:

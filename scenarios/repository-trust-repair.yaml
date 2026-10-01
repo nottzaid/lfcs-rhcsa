@@ -109,6 +109,7 @@ checks:
     target: node2
     description: lal-release-notes is installed from the lal-training repository.
     parameters:
+      timeout_seconds: 60
       sudo: true
       script: |
         rpm -q lal-release-notes >/dev/null || fail "lal-release-notes is not installed"
@@ -119,6 +120,7 @@ checks:
     target: node2
     description: lal-training is enabled, verifies signatures, and trusts the release team's key.
     parameters:
+      timeout_seconds: 60
       sudo: true
       script: |
         settings=$(dnf config-manager --dump lal-training 2>/dev/null) || fail "dnf does not know a repository called lal-training"
@@ -140,6 +142,7 @@ checks:
     target: node2
     description: Signature checking stays on in the global dnf configuration.
     parameters:
+      timeout_seconds: 60
       sudo: true
       script: |
         expect_eq "$(dnf config-manager --dump main 2>/dev/null | sed -n 's/^gpgcheck = //p')" 1 "the global gpgcheck"

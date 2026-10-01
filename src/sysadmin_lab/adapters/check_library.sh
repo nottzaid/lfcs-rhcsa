@@ -73,3 +73,10 @@ sysctl_assignment() {
 sysctl_configured() {
     systemd-analyze cat-config sysctl.d 2>/dev/null | sysctl_assignment "${1//\//.}"
 }
+
+# permissive_domain DOMAIN: true when `semanage permissive -a DOMAIN` made DOMAIN permissive.
+# It installs a policy module called permissive_DOMAIN; looking for it in the module store is
+# instant, while `semanage permissive -l` loads the whole policy and takes seconds after a boot.
+permissive_domain() {
+    compgen -G "/var/lib/selinux/*/active/modules/*/permissive_$1" >/dev/null
+}

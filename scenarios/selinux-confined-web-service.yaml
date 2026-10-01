@@ -115,12 +115,13 @@ checks:
       sudo: true
       script: |
         expect_eq "$(getenforce)" Enforcing "the SELinux mode"
-        ! semanage permissive -l 2>/dev/null | grep -qw httpd_t || fail "the httpd_t domain is permissive"
+        ! permissive_domain httpd_t || fail "the httpd_t domain is permissive"
   - check_id: fix-lives-in-policy
     kind: command
     target: node2
     description: Relabeling /srv/lal-web would change nothing, and port 8088 is labeled in policy.
     parameters:
+      timeout_seconds: 60
       sudo: true
       script: |
         drift=$(restorecon -R -n -v /srv/lal-web | head -n 1)
