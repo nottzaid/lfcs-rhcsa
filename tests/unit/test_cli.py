@@ -387,3 +387,121 @@ def test_every_command_explains_an_unreachable_lab(
     result = runner.invoke(app, [part.format(**values) for part in command])
     assert result.exit_code == code
     assert f"{message}: cannot connect to qemu:///system" in result.stderr
+
+
+def test_image_fetch_reuses_a_verified_download_and_refuses_a_tampered_one(
+    tmp_path: Path,
+) -> None:
+    payload = b"installation media"
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        yaml.safe_dump(image_manifest(payload).model_dump(mode="json")), encoding="utf-8"
+    )
+    cache = tmp_path / "isos"
+    cache.mkdir()
+    (cache / "source.iso").write_bytes(payload)  # already downloaded: no network needed
+
+    reused = runner.invoke(app, ["image", "fetch", str(manifest), str(cache)])
+    assert reused.exit_code == 0
+    assert reused.stdout.strip() == f"ready rocky-10.2-test-v1: {cache / 'source.iso'}"
+
+    (cache / "source.iso").write_bytes(b"tampered")
+    refused = runner.invoke(app, ["image", "fetch", str(manifest), str(cache)])
+    assert refused.exit_code == 1
+    assert "mismatch" in refused.stderr
+    assert (cache / "source.iso").read_bytes() == b"tampered"  # never overwritten
+
+
+def test_verify_prints_each_phase_and_the_checks_behind_a_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from sysadmin_lab.application.verification import (
+        PhaseResult,
+        VerificationPhase,
+        VerificationReport,
+    )
+
+    def seen(passed: bool, error: bool = False, message: str = "") -> tuple[CheckObservation]:
+        return (CheckObservation("site-serving", passed, message, error),)
+
+    phases = (
+        PhaseResult(VerificationPhase.INITIAL, seen(False), False, expected=False),
+        PhaseResult(VerificationPhase.SOLVED, seen(True), True, "solution.yaml", expected=True),
+        PhaseResult(VerificationPhase.RESET, seen(True), True, expected=False),
+        PhaseResult(
+            VerificationPhase.REJECTED, seen(True), True, "rejected-chcon.yaml", expected=None
+        ),
+        PhaseResult(
+            VerificationPhase.ALTERNATE_SOLVED,
+            seen(False, message="nginx is not running"),
+            False,
+            "alternate.yaml",
+            expected=True,
+        ),
+        PhaseResult(
+            VerificationPhase.ALTERNATE_REBOOTED,
+            seen(False, error=True, message="process exceeded 10 second timeout"),
+            False,
+            "alternate.yaml",
+            expected=True,
+        ),
+    )
+
+    class CannedVerifier:
+        def __init__(self, _driver: object) -> None:
+            pass
+
+        def verify(self, manifest: object) -> VerificationReport:
+            return VerificationReport("selinux-confined-web-service", phases)
+
+    monkeypatch.setattr("sysadmin_lab.cli.ScenarioVerifier", CannedVerifier)
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _root: FakeRuntime(tmp_path))
+    monkeypatch.setattr("sysadmin_lab.cli._scenario_launch_inputs", lambda *_args: (None, None, {}))
+
+    result = runner.invoke(app, ["scenario", "verify", "selinux-confined-web-service"])
+    assert result.exit_code == 1
+    assert result.stdout.splitlines() == [
+        "PASS initial: checks fail as designed",
+        "PASS solved (solution.yaml): checks pass",
+        "FAIL reset: checks should fail but pass",
+        "PASS rejected (rejected-chcon.yaml): live state passes; the reboot must expose it",
+        "FAIL alternate-solved (alternate.yaml): checks should pass but fail",
+        "  CHECK site-serving: nginx is not running",
+        "FAIL alternate-rebooted (alternate.yaml): a check errored",
+        "  ERROR site-serving: process exceeded 10 second timeout",
+    ]
+
+
+@pytest.mark.parametrize(
+    ("live_passes", "extra", "expected_lines"),
+    [
+        (True, {"unreachable_host": "node2"}, ["node2 did not come back over SSH"]),
+        (True, {}, ["persistence not proven: rerun without --skip-reboot to reboot node2"]),
+        (False, {}, ["once the live state passes, the check reboots node2 to prove persistence"]),
+        (True, {"after_reboot": "failing"}, ["after rebooting node2:", "not solved yet"]),
+    ],
+)
+def test_scenario_check_says_what_the_reboot_proved(
+    live_passes: bool,
+    extra: dict[str, object],
+    expected_lines: list[str],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = FakeRuntime(tmp_path)
+    check = fake.manifest.checks[0]
+
+    def report(passed: bool) -> CheckReport:
+        return CheckReport((CheckResult(check, CheckObservation(check.check_id, passed, "x")),))
+
+    if extra.get("after_reboot") == "failing":
+        extra = {"after_reboot": report(False)}
+    learner = LearnerCheckReport(report(live_passes), ("node2",), **extra)  # type: ignore[arg-type]
+    fake.scenarios.check = lambda *_args, **_kwargs: learner
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _root: fake)
+    monkeypatch.setattr("sysadmin_lab.cli.find_scenario", lambda *_args: fake.manifest)
+
+    result = runner.invoke(app, ["scenario", "check", str(SESSION_ID)])
+    assert result.exit_code == 1
+    for line in expected_lines:
+        assert any(output.startswith(line) for output in result.stdout.splitlines()), line
