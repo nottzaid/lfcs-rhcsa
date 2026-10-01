@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: rebuild-client-foundation
+  - action_id: rewrite-the-map-and-start-autofs
     target: node2
     arguments:
       - sudo
@@ -8,34 +8,38 @@ actions:
       - bash
       - -c
       - |
-        cat > /etc/chrony.conf <<'EOF'
-        server {{host.node1.address}} iburst
-        driftfile /var/lib/chrony/drift
-        makestep 1.0 3
-        rtcsync
-        logdir /var/log/chrony
-        EOF
-        systemctl enable --now chronyd.service
-        systemctl restart chronyd.service
-        chronyc waitsync 30 0.5
-        echo 'tmpfs /run/lal-data-cache tmpfs rw,size=98304k,mode=0750 0 0' >> /etc/fstab
-        mount -t tmpfs -o size=98304k,mode=0750 tmpfs /run/lal-data-cache
-        mkswap --label LAL_REMOTE_SWAP /dev/disk/by-id/virtio-lal-remoteswap
-        echo 'LABEL=LAL_REMOTE_SWAP none swap defaults,pri=50 0 0' >> /etc/fstab
-        swapon -p 50 /dev/disk/by-id/virtio-lal-remoteswap
-  - action_id: install-indirect-nfs-map
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - |
-        install -d /etc/auto.master.d
-        cat > /etc/auto.master.d/lal-data.autofs <<'EOF'
-        /data /etc/auto.lal-data
-        EOF
-        echo 'projects -ro,fstype=nfs {{host.node1.address}}:/srv/lal-data/projects' > /etc/auto.lal-data
+        set -euo pipefail
+        echo 'projects -fstype=nfs4,rw 10.80.0.1:/srv/lal-data/projects' > /etc/auto.data
         systemctl enable autofs.service
         systemctl restart autofs.service
-        test "$(cat /data/projects/status.txt)" = remote-data-ready
+  - action_id: fix-the-tmpfs-and-swap-entries
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkswap -q /dev/disk/by-id/virtio-lal-remoteswap
+        uuid=$(blkid -s UUID -o value /dev/disk/by-id/virtio-lal-remoteswap)
+        sed -i '\#/run/lal-data-cache#d; /^UUID=5d1b7c1e-0f3a-4c55-9a0e-2f6c1b7a9e44 /d' /etc/fstab
+        echo 'tmpfs /run/lal-data-cache tmpfs size=96m,uid=analyst,gid=analyst,mode=0750 0 0' >> /etc/fstab
+        echo "UUID=$uuid none swap defaults,pri=50 0 0" >> /etc/fstab
+        systemctl daemon-reload
+        umount /run/lal-data-cache
+        mount /run/lal-data-cache
+        swapon -a
+  - action_id: follow-the-site-time-server
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i '/^server ntp\.old\.invalid /d' /etc/chrony.conf
+        echo 'server 10.80.0.1 iburst prefer' >> /etc/chrony.conf
+        systemctl restart chronyd.service
+        chronyc waitsync 30 0.5 0 1 >/dev/null

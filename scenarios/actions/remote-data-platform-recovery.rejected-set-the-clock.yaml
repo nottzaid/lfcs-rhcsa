@@ -1,0 +1,22 @@
+schema_version: 1
+actions:
+  - action_id: fix-storage-and-set-the-clock-by-hand
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i 's/files\.old\.invalid:/10.80.0.1:/' /etc/auto.data
+        systemctl enable --now autofs.service
+        sed -i 's#^tmpfs /run/lal-data-cache tmpfs size=96,#tmpfs /run/lal-data-cache tmpfs size=96M,#' /etc/fstab
+        mkswap -q -L LAL_REMOTE_SWAP /dev/disk/by-id/virtio-lal-remoteswap
+        sed -i 's#^UUID=5d1b7c1e-0f3a-4c55-9a0e-2f6c1b7a9e44 none swap#LABEL=LAL_REMOTE_SWAP none swap#' /etc/fstab
+        systemctl daemon-reload
+        mount -o remount /run/lal-data-cache
+        swapon -a
+        systemctl stop chronyd.service
+        chronyd -q 'server 10.80.0.1 iburst' >/dev/null 2>&1
+        systemctl start chronyd.service

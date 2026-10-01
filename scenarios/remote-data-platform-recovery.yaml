@@ -1,110 +1,229 @@
 schema_version: 1
 scenario_id: remote-data-platform-recovery
-version: 1
+version: 2
 status: verified
-title: The remote data client lost time, cache, swap, and project access
-summary: Recover a persistent client using Chrony, tmpfs, swap, NFS, and autofs.
+title: The rebuilt analysis host fails every job
+summary: A host rebuilt from last year's configuration fails its jobs on stale mounts, a mistyped tmpfs, a missing swap disk, and a drifting clock.
 estimated_minutes: 65
 task_type: troubleshoot
 difficulty: exam
-task: >-
-  node1 is the session's time and NFS server. On node2, use node1 as the only configured
-  Chrony server with iburst. Configure /run/lal-data-cache as a persistent 96 MiB tmpfs with
-  mode 0750. Turn the unused disk /dev/disk/by-id/virtio-lal-remoteswap into labeled swap
-  LAL_REMOTE_SWAP, active at priority 50 and persistent by UUID or label. Finally configure
-  autofs so reading /data/projects mounts node1:/srv/lal-data/projects there and exposes
-  status.txt containing remote-data-ready. Do not put the NFS share directly in fstab.
+task: |
+  **node2** is the analysts' compute host. Last night it was rebuilt from the standard
+  image, and configuration management restored its settings, unfortunately from a backup
+  taken before the file server and node2's swap disk were replaced. Since then every job
+  fails, for example:
+
+  ```bash
+  sudo -iu analyst lal-crunch alpha
+  ```
+
+  The analysis runbook says node2 must have:
+
+  - the project share, node1's `/srv/lal-data/projects`, at `/data/projects`, mounted on
+    demand by autofs, never at boot, because the file server has maintenance windows;
+  - a 96 MiB tmpfs scratch area at `/run/lal-data-cache` for `analyst`, mode 0750;
+  - its dedicated swap disk, `/dev/disk/by-id/virtio-lal-remoteswap`, in use at priority 50;
+  - time from the site time server only.
+
+  **node1** (10.80.0.1 on the data network) is both the file server and the site time
+  server. Work on node2.
+requirements:
+  - "As `analyst`, `lal-crunch alpha` completes and writes its report."
+  - "`/data/projects` is mounted on demand by autofs from node1's `/srv/lal-data/projects`, and `/etc/fstab` mounts no NFS share; autofs starts at boot."
+  - "`/run/lal-data-cache` is a 96 MiB tmpfs owned by `analyst`, mode 0750."
+  - "The dedicated swap disk is in use at priority 50, and every entry in `/etc/fstab` refers to a device that exists."
+  - "chronyd follows node1 only, and node2's clock agrees with it."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "Let the job tell you what it trips over, fix that, and run it again. Each message points at one layer: the share, the scratch area, or the clock."
+  - "`automount -m` prints the maps autofs would use; `findmnt` and `df -h` show what is mounted, and how big. In `/etc/fstab`, tmpfs sizes need a unit; `findmnt --verify` checks every entry."
+  - "`swapon --show` lists active swap with priorities, `blkid` shows a device's UUID and label, and `mkswap -L` labels new swap. `chronyc sources` shows which time servers chronyd uses and whether they answer."
+debrief: |
+  ## What was wrong
+
+  The restore brought back four settings that had gone stale:
+
+  1. **The autofs map** named the old file server, `files.old.invalid`, and autofs was
+     not even enabled:
+     `lal-crunch: cannot read /data/projects/alpha/input.csv: No such file or directory`.
+  2. **The scratch tmpfs** said `size=96`. tmpfs reads a bare number as bytes, so the
+     scratch area held one page:
+     `lal-crunch: cannot stage data in /run/lal-data-cache: No space left on device`.
+  3. **The swap entry** pointed at the UUID of the replaced disk. Nothing was swapped to
+     the dedicated disk, and every boot waited 90 seconds for a device that will never
+     appear before giving up on it.
+  4. **chrony** followed `ntp.old.invalid`, and node2's clock had drifted three hours
+     ahead. The NFS server stamps files with its own clock, so the job noticed:
+     `lal-crunch: this clock is 10800 s ahead of the file server; refusing to stamp results`.
+
+  ## A clean fix
+
+  ```bash
+  sudo sed -i 's/files\.old\.invalid:/10.80.0.1:/' /etc/auto.data
+  sudo systemctl enable --now autofs
+  sudo sed -i 's#tmpfs size=96,#tmpfs size=96M,#' /etc/fstab
+  sudo mkswap -L LAL_REMOTE_SWAP /dev/disk/by-id/virtio-lal-remoteswap
+  sudo sed -i 's#^UUID=5d1b7c1e[^ ]*#LABEL=LAL_REMOTE_SWAP#' /etc/fstab
+  sudo systemctl daemon-reload
+  sudo mount -o remount /run/lal-data-cache && sudo swapon -a
+  sudo sed -i 's/^server ntp\.old\.invalid iburst$/server 10.80.0.1 iburst/' /etc/chrony.conf
+  sudo systemctl restart chronyd
+  ```
+
+  `mount -o remount` re-reads the entry in `/etc/fstab`, so the new size applies without
+  unmounting. chronyd steps the clock on its first updates (`makestep` in chrony.conf),
+  so the three hours disappear at once rather than over days.
+
+  ## Check it yourself
+
+  ```bash
+  sudo -iu analyst lal-crunch alpha
+  findmnt /data/projects; findmnt --verify
+  swapon --show; df -h /run/lal-data-cache
+  chronyc sources
+  ```
+
+  ## Tempting but wrong
+
+  - **Mounting the share from `/etc/fstab`.** It works, and every boot now depends on the
+    file server, which is exactly what the runbook rules out.
+  - **Fixing only the running system** with `mount -o remount,size=96M` and `swapon -p 50`.
+    The next boot brings back the one-page tmpfs, the missing swap, and the 90-second wait.
+  - **Setting the clock by hand.** Jobs work today, and the clock drifts again.
 objectives:
-  - {track: lfcs, version: lfcs-2026-08, objective_id: networking.time, title: Set and synchronize system time using time servers}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.virtual-filesystem, title: Manage and configure the virtual file system}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.remote-storage, title: Use remote filesystems and network block devices}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.swap, title: Configure and manage swap space}
-  - {track: lfcs, version: lfcs-2026-08, objective_id: storage.automounters, title: Configure filesystem automounters}
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.time
+    title: Set and synchronize system time using time servers
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.virtual-filesystem
+    title: Manage and configure the virtual file system
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.remote-storage
+    title: Use remote filesystems and network block devices
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.swap
+    title: Configure and manage swap space
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.automounters
+    title: Configure filesystem automounters
 sources:
-  - {kind: scope, title: Linux Foundation LFCS competencies, url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/}
-  - {kind: upstream, title: Chrony documentation, url: https://chrony-project.org/documentation.html}
-  - {kind: man-page, title: exports manual, man_page: exports(5)}
-  - {kind: man-page, title: auto.master manual, man_page: auto.master(5)}
-  - {kind: man-page, title: swapon manual, man_page: swapon(8)}
-  - {kind: man-page, title: tmpfs manual, man_page: tmpfs(5)}
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Master map and map entries
+    man_page: auto.master(5)
+  - kind: man-page
+    title: tmpfs size and mode options
+    man_page: tmpfs(5)
+  - kind: man-page
+    title: Swap priorities
+    man_page: swapon(8)
+  - kind: man-page
+    title: Verify fstab
+    man_page: findmnt(8)
+  - kind: man-page
+    title: server, iburst, and makestep
+    man_page: chrony.conf(5)
 topology:
+  networks:
+    - {name: data, cidr: 10.80.0.0/24}
   hosts:
-    - {name: node1, image: rocky-10.2-lab-v1, memory_mib: 1280, vcpus: 1}
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1280
+    - name: node1
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
       vcpus: 1
+      nics: [{network: data, name: data0}]
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: data, name: data0}]
       disks:
-        - {name: remoteswap, size_mib: 768, role: remote data client swap disk}
+        - {name: remoteswap, size_mib: 768, role: dedicated swap disk}
 checks:
-  - check_id: designated-time-source
+  - check_id: job-completes
     kind: command
     target: node2
-    description: Chrony is configured only against node1 with iburst.
+    description: As analyst, lal-crunch alpha completes and writes its report.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          awk -v ip='{{host.node1.address}}'
-          '$1=="server" || $1=="pool" {n++; if ($1=="server" && $2==ip && $0 ~ /iburst/) ok=1}
-          END {exit !(n==1 && ok)}' /etc/chrony.conf
-  - check_id: designated-time-source-selected
+      timeout_seconds: 90
+      script: |
+        output=$(cd / && runuser -u analyst -- /usr/local/bin/lal-crunch alpha 2>&1) || fail "$(tail -n 1 <<<"$output")"
+        expect_eq "$(cat /data/projects/alpha/output/report.txt 2>/dev/null)" "alpha: 1000 rows, total 485771" "the report"
+  - check_id: projects-on-demand
     kind: command
     target: node2
-    description: Chrony has selected node1 as its live synchronization source.
-    parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          for attempt in $(seq 1 30); do
-            chronyc -n sources |
-            grep -Eq '^\^\*[[:space:]]+{{host.node1.address}}([[:space:]]|$)' && exit 0;
-            sleep 1;
-          done;
-          exit 1
-      timeout_seconds: 40
-  - check_id: time-client-persistent
-    kind: service
-    target: node2
-    description: Chronyd is running and enabled.
-    parameters: {name: chronyd.service, active: true, enabled: true}
-  - check_id: volatile-cache-correct
-    kind: command
-    target: node2
-    description: The required tmpfs is mounted with the requested capacity and mode.
-    parameters: {arguments: [bash, -c, 'test "$(findmnt -n -o FSTYPE /run/lal-data-cache)" = tmpfs && findmnt -n -o OPTIONS /run/lal-data-cache | grep -qw size=98304k && test "$(stat -c %a /run/lal-data-cache)" = 750 && awk ''$1=="tmpfs" && $2=="/run/lal-data-cache" {ok=1} END {exit !ok}'' /etc/fstab']}
-  - check_id: priority-swap-correct
-    kind: command
-    target: node2
-    description: The labeled disk is active swap at priority 50 and persistent by stable identity.
+    description: autofs mounts node1's projects on demand, starts at boot, and fstab mounts no NFS share.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          disk=/dev/disk/by-id/virtio-lal-remoteswap;
-          test "$(blkid -s TYPE -o value "$disk")" = swap &&
-          test "$(blkid -s LABEL -o value "$disk")" = LAL_REMOTE_SWAP &&
-          uuid=$(blkid -s UUID -o value "$disk") &&
-          swapon --show=UUID,PRIO --noheadings --raw |
-          awk -v u="$uuid" '$1==u && $2==50 {ok=1} END {exit !ok}' &&
-          awk '$1 ~ /^(UUID=|LABEL=LAL_REMOTE_SWAP$)/ && $2=="none" && $3=="swap" &&
-          $4 ~ /(^|,)pri=50(,|$)/ {ok=1} END {exit !ok}' /etc/fstab
-  - check_id: automounter-running
-    kind: service
-    target: node2
-    description: autofs is running and enabled.
-    parameters: {name: autofs.service, active: true, enabled: true}
-  - check_id: remote-project-behavior
+      timeout_seconds: 60
+      script: |
+        nfs_at_boot=$(findmnt --fstab -n -t nfs,nfs4 -o TARGET | head -n 1)
+        [[ -z $nfs_at_boot ]] || fail "/etc/fstab mounts an NFS share at $nfs_at_boot; the runbook wants it on demand"
+        systemctl is-active --quiet autofs.service || fail "autofs is not running"
+        systemctl is-enabled --quiet autofs.service || fail "autofs does not start at boot"
+        ls /data/projects/alpha >/dev/null 2>&1 || true   # triggers the automount
+        read -r fstype source <<<"$(findmnt -n -o FSTYPE,SOURCE --mountpoint /data/projects | tail -n 1)"
+        [[ $fstype == nfs4 ]] || fail "nothing is mounted at /data/projects after accessing it"
+        host=${source%%:*}
+        [[ $(getent ahostsv4 "$host" | awk 'NR == 1 {print $1}') == 10.80.0.1 && ${source#*:} == /srv/lal-data/projects ]] ||
+          fail "/data/projects comes from $source, not node1's /srv/lal-data/projects"
+        findmnt -n -t autofs --mountpoint /data >/dev/null || fail "/data is not managed by autofs"
+  - check_id: scratch-tmpfs
     kind: command
     target: node2
-    description: Access triggers the exact NFS project share and returns its data.
-    parameters: {arguments: [bash, -c, 'test "$(cat /data/projects/status.txt)" = remote-data-ready && findmnt -n -t nfs,nfs4 /data/projects | grep -Fq ''{{host.node1.address}}:/srv/lal-data/projects'' && ! awk ''$3 ~ /^nfs/ {exit 0} END {exit 1}'' /etc/fstab']}
-persistence: {reboot: true, hosts: [node2]}
+    description: /run/lal-data-cache is a 96 MiB tmpfs owned by analyst, mode 0750.
+    parameters:
+      script: |
+        expect_eq "$(findmnt -n -o FSTYPE --mountpoint /run/lal-data-cache)" tmpfs "the filesystem at /run/lal-data-cache"
+        size=$(df -B1 --output=size /run/lal-data-cache | tail -n 1 | tr -d ' ')
+        expect_eq "$((size / 1048576)) MiB" "96 MiB" "the size of /run/lal-data-cache"
+        expect_eq "$(stat -c '%U %a' /run/lal-data-cache)" "analyst 750" "the owner and mode of /run/lal-data-cache"
+  - check_id: swap-ready
+    kind: command
+    target: node2
+    description: The dedicated disk is swap at priority 50, and every fstab entry's device exists.
+    parameters:
+      sudo: true
+      script: |
+        disk=$(readlink -f /dev/disk/by-id/virtio-lal-remoteswap)
+        priority=$(swapon --show=NAME,PRIO --noheadings --raw | awk -v disk="$disk" '$1 == disk {print $2}')
+        [[ -n $priority ]] || fail "the dedicated swap disk is not in use as swap"
+        expect_eq "$priority" 50 "the priority of the dedicated swap disk"
+        problems=$(findmnt --verify 2>&1 | grep -E '\[E\]' | head -n 1)
+        [[ -z $problems ]] || fail "/etc/fstab has a broken entry: ${problems#*\] }"
+  - check_id: time-from-node1
+    kind: command
+    target: node2
+    description: chronyd follows node1 only, and the clock agrees with it.
+    parameters:
+      timeout_seconds: 45
+      script: |
+        systemctl is-active --quiet chronyd.service || fail "chronyd is not running"
+        following() { chronyc -n sources 2>/dev/null | awk '$1 == "^*" && $2 == "10.80.0.1" {found = 1} END {exit !found}'; }
+        if ! retry 30 following; then
+          sources=$(chronyc -n sources | awk 'NR > 2 {print $1, $2}' | paste -sd',' -)
+          fail "chronyd does not follow 10.80.0.1; its sources: ${sources:-none}"
+        fi
+        others=$(chronyc -n sources | awk 'NR > 2 && $2 != "10.80.0.1" {print $2}' | paste -sd' ' -)
+        [[ -z $others ]] || fail "chronyd also uses: $others"
+        offset=$(chronyc -c tracking | cut -d, -f5)
+        awk -v offset="$offset" 'BEGIN {exit !(offset < 1 && offset > -1)}' ||
+          fail "node2's clock is $(chronyc tracking | sed -n 's/^System time *: //p')"
+persistence:
+  reboot: true
+  hosts: [node2]
 setup: actions/remote-data-platform-recovery.setup.yaml
 reference_solution: actions/remote-data-platform-recovery.solution.yaml
 alternate_solutions: [actions/remote-data-platform-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/remote-data-platform-recovery.rejected-nfs-in-fstab.yaml
+  - actions/remote-data-platform-recovery.rejected-fixed-until-reboot.yaml
+  - actions/remote-data-platform-recovery.rejected-set-the-clock.yaml
