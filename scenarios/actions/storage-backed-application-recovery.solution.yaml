@@ -1,12 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: remove-obsolete-archive
-    target: node2
-    arguments: [sudo, --, rm, -f, /srv/lal-catalog/archive.fill]
-  - action_id: grow-volume-and-filesystem
-    target: node2
-    arguments: [sudo, --, lvextend, --resizefs, -L, 1024M, /dev/vgapps/lvcatalog]
-  - action_id: stabilize-mount-and-service
+  - action_id: delete-exports-past-retention
     target: node2
     arguments:
       - sudo
@@ -14,8 +8,26 @@ actions:
       - bash
       - -c
       - |
-        uuid=$(blkid -s UUID -o value /dev/vgapps/lvcatalog)
-        sed -i '\#/srv/lal-catalog#d' /etc/fstab
-        printf 'UUID=%s /srv/lal-catalog ext4 defaults 0 2\n' "$uuid" >> /etc/fstab
-        systemctl reset-failed lal-catalog.service || true
-        systemctl enable --now lal-catalog.service
+        set -euo pipefail
+        oldest_kept=$(date -d '-6 days' +%F)
+        for export in /srv/lal-catalog/exports/catalog-*.csv; do
+          day=${export##*/catalog-}; day=${day%.csv}
+          if [[ $day < $oldest_kept ]]; then rm -- "$export"; fi
+        done
+  - action_id: grow-the-volume-and-its-filesystem
+    target: node2
+    arguments: [sudo, --, lvextend, --resizefs, --size, 1024M, vgapps/lvcatalog]
+  - action_id: mount-it-at-boot
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        echo "UUID=$(blkid -s UUID -o value /dev/vgapps/lvcatalog) /srv/lal-catalog ext4 defaults 0 2" >> /etc/fstab
+        systemctl daemon-reload
+  - action_id: restart-the-catalog
+    target: node2
+    arguments: [sudo, --, systemctl, restart, lal-catalog.service]

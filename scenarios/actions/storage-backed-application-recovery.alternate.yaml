@@ -1,27 +1,14 @@
 schema_version: 1
 actions:
-  - action_id: reclaim-and-extend-storage
+  - action_id: keep-the-newest-seven-exports
     target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - |
-        rm -f /srv/lal-catalog/archive.fill
-        lvextend -L 1G /dev/vgapps/lvcatalog
-        resize2fs /dev/vgapps/lvcatalog
-  - action_id: write-uuid-policy-and-recover-service
+    arguments: [sudo, --, bash, -c, "cd /srv/lal-catalog/exports && ls catalog-*.csv | sort | head -n -7 | xargs rm --"]
+  - action_id: grow-in-two-steps
     target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - |
-        uuid=$(findmnt -n -o UUID /srv/lal-catalog)
-        sed -i '\#/srv/lal-catalog#d' /etc/fstab
-        printf 'UUID=%s /srv/lal-catalog ext4 defaults 0 2\n' "$uuid" >> /etc/fstab
-        systemctl reset-failed lal-catalog.service || true
-        systemctl enable lal-catalog.service
-        systemctl restart lal-catalog.service
+    arguments: [sudo, --, bash, -c, "lvresize -L 1G vgapps/lvcatalog && resize2fs /dev/vgapps/lvcatalog"]
+  - action_id: mount-by-label-at-boot
+    target: node2
+    arguments: [sudo, --, bash, -c, "echo 'LABEL=LAL_CATALOG /srv/lal-catalog ext4 defaults,nofail 0 2' >> /etc/fstab && systemctl daemon-reload"]
+  - action_id: wait-for-the-catalog-to-recover
+    target: node2
+    arguments: [sudo, --, bash, -c, "for _ in $(seq 30); do systemctl is-active --quiet lal-catalog.service && exit 0; sleep 1; done; exit 1"]
