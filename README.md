@@ -134,12 +134,26 @@ uv run pytest --cov
 uv run labctl catalog validate scenarios
 ```
 
-Live KVM verification is deliberately separate from fast tests:
+The fast tests need no libvirt. Everything they cannot reach is proven against the real
+thing by live tests, each kind opted into by its own variable:
+
+| Variable | What it runs on this host |
+| --- | --- |
+| `LAL_RUN_LIVE=1` | host-safety rules against real libvirt networks; `labctl doctor` |
+| `LAL_RUN_DOMAIN_LIVE=1` | boots a guest and checks every man page a debrief cites |
+| `LAL_RUN_SCENARIO_LIVE=1` | isolated scenario networks; every scenario's acceptance contract |
+| `LAL_RUN_BROWSER_LIVE=1` | a learner's journey through `labctl up` in headless Chromium |
+| `LAL_RUN_IMAGE_BUILD=1` | a complete Kickstart install of the lab image (about 20 minutes) |
+
+Guest-booting tests also need `LAL_BASE_IMAGE`. Replaying all 45 contracts takes hours;
+`-k` selects scenarios, and `LAL_LIVE_SHARD_TOTAL` with `LAL_LIVE_SHARD_INDEX` splits them
+across runs. Fast and live tests together cover every line:
 
 ```bash
-LAL_RUN_SCENARIO_LIVE=1 \
-LAL_BASE_IMAGE=runtime/cache/images/rocky-10.2-lab-v2.qcow2 \
-uv run pytest tests/live/test_verified_scenario_replay.py
+uv run pytest --cov --cov-report=
+LAL_RUN_LIVE=1 LAL_RUN_DOMAIN_LIVE=1 LAL_RUN_SCENARIO_LIVE=1 LAL_RUN_BROWSER_LIVE=1 \
+LAL_RUN_IMAGE_BUILD=1 LAL_BASE_IMAGE=runtime/cache/images/rocky-10.2-lab-v2.qcow2 \
+uv run pytest tests/live -m live -k "not acceptance_contract or runaway" --cov --cov-append
 ```
 
 ## Troubleshooting
