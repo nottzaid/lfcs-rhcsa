@@ -130,13 +130,14 @@ def can_traverse(directory: Path, uid: int, gids: set[int]) -> bool:
 
 def _deepest_visible(path: Path) -> Path:
     """The deepest existing directory on path that the current user can see."""
-    for candidate in (path, *path.parents):  # ends at /, which always exists
+
+    def visible(candidate: Path) -> bool:
         try:
-            if candidate.exists():
-                break
+            return candidate.exists()
         except OSError:  # a closed directory above it
-            continue
-    return candidate
+            return False
+
+    return next(filter(visible, (path, *path.parents)))  # the parents end at /, or at .
 
 
 def runtime_access_finding(runtime_root: Path, uid: int, gid: int) -> Finding:

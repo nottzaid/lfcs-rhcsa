@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import dataclasses
 from contextlib import nullcontext
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import pytest
 
+from sysadmin_lab.adapters.sqlite_progress import SqliteCheckAttemptRepository
+from sysadmin_lab.adapters.sqlite_rehearsals import SqliteMockRehearsalRepository
+from sysadmin_lab.application.image_building import ImageBuildError
 from sysadmin_lab.application.lab_workspace import LabWorkspace, WorkspacePaths
+from sysadmin_lab.application.progress import ProgressService
 from sysadmin_lab.catalog import CatalogError, load_catalog, load_image_manifest
+from sysadmin_lab.domain.progress import CheckAttempt
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
@@ -149,23 +156,19 @@ def test_the_catalog_is_reused_until_a_manifest_changes(tmp_path: Path) -> None:
 def test_a_rehearsal_scores_checks_made_after_it_starts(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from datetime import timedelta
-    from uuid import uuid4
-
-    from sysadmin_lab.adapters.sqlite_rehearsals import SqliteMockRehearsalRepository
-    from sysadmin_lab.domain.progress import CheckAttempt
-
     root = Path(__file__).parents[2]
     workspace = LabWorkspace(WorkspacePaths.under(root))
     mock = workspace.mock_exam("lfcs-mock-a")
     first, second = mock.tasks[:2]
     versions = {scenario.scenario_id: scenario.version for scenario in workspace.scenarios()}
-    attempts: list[CheckAttempt] = []
 
-    with SqliteMockRehearsalRepository(tmp_path / "state.db") as rehearsals:
-        runtime = SimpleNamespace(
-            rehearsals=rehearsals, progress=SimpleNamespace(attempts=lambda: tuple(attempts))
-        )
+    state = tmp_path / "state.db"
+    with (
+        SqliteMockRehearsalRepository(state) as rehearsals,
+        SqliteCheckAttemptRepository(state) as attempts,
+    ):
+        progress = ProgressService(attempts)
+        runtime = SimpleNamespace(rehearsals=rehearsals, progress=progress)
         monkeypatch.setattr(
             "sysadmin_lab.application.lab_workspace.open_vm_runtime",
             lambda _root: nullcontext(runtime),
@@ -186,13 +189,24 @@ def test_a_rehearsal_scores_checks_made_after_it_starts(
                 False,
             )
 
-        attempts += [
-            check(first, -5, 2, True),
-            check(first, 3, 2, True),
-            check(second, 9, 1, False),
-        ]
+        progress.record(check(first, -5, 2, True))  # solved before the rehearsal began
+        progress.record(check(first, 3, 2, True))
+        progress.record(check(second, 9, 1, False))
         score = workspace.rehearsal("lfcs-mock-a")
         assert score is not None
         assert (score.solved, score.percent, score.passing_percent) == (1, 8, 67)  # 1.5 of 20
         with pytest.raises(LookupError, match="mock exam does not exist"):
             workspace.start_rehearsal("lfcs-mock-z")
+
+
+def test_nothing_is_provisioned_until_the_lab_image_is_built(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).parents[2]
+    paths = dataclasses.replace(WorkspacePaths.under(root), image_cache=tmp_path / "images")
+    monkeypatch.setattr(
+        "sysadmin_lab.application.lab_workspace.open_vm_runtime",
+        lambda _root: pytest.fail("provisioning began without an image"),
+    )
+    with pytest.raises(ImageBuildError, match="built image is missing; run labctl image build"):
+        LabWorkspace(paths).start("nfs-client-recovery")

@@ -3,12 +3,13 @@ from __future__ import annotations
 from contextlib import nullcontext
 from pathlib import Path
 from socket import AF_INET, SOCK_STREAM, socket
+from threading import Event
 from types import SimpleNamespace
 from uuid import UUID
 
 import pytest
 import yaml
-from typer.testing import CliRunner
+from typer.testing import CliRunner, Result
 
 from sysadmin_lab.adapters.sqlite_machines import SqliteSessionMachineRepository
 from sysadmin_lab.adapters.sqlite_sessions import SqliteSessionRepository
@@ -20,12 +21,15 @@ from sysadmin_lab.application.verification import (
     VerificationPhase,
     VerificationReport,
 )
-from sysadmin_lab.catalog import load_catalog
+from sysadmin_lab.catalog import load_action_manifest, load_catalog
 from sysadmin_lab.cli import app
 from sysadmin_lab.domain.actions import ActionManifest
+from sysadmin_lab.domain.images import ImageVerificationError
+from sysadmin_lab.domain.models import PersistenceSpec, ScenarioManifest
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
+from tests.unit.test_image_building import kickstart_manifest
 from tests.unit.test_images import image_manifest
 
 runner = CliRunner()
@@ -167,6 +171,24 @@ def test_session_commands_use_shared_runtime_service(
     assert f"PASS {fake.check_id}: matched" in checked.stdout
 
 
+def test_session_check_fails_when_a_required_check_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeRuntime(tmp_path)
+    check = fake.manifest.checks[0]
+    fake.checks.run = lambda _session_id, _manifest: CheckReport(
+        (CheckResult(check, CheckObservation(check.check_id, False, "UID is 4301; expected 4201")),)
+    )
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: fake)
+    root = Path(__file__).parents[2]
+    manifest = root / "scenarios" / f"{fake.manifest.scenario_id}.yaml"
+
+    checked = runner.invoke(app, ["session", "check", str(SESSION_ID), str(manifest)])
+    assert checked.exit_code == 1
+    assert f"FAIL {check.check_id}: UID is 4301; expected 4201" in checked.stdout
+    assert f"score: 0/{check.weight}" in checked.stdout
+
+
 def test_public_scenario_commands_use_learner_service(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -205,6 +227,93 @@ def test_public_scenario_commands_use_learner_service(
     destroyed = runner.invoke(app, ["scenario", "destroy", str(SESSION_ID)])
     assert destroyed.exit_code == 0
     assert "destroyed" in destroyed.stdout
+
+
+def test_scenario_start_launches_from_the_catalog_and_a_verified_image(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).parents[2]
+    payload = b"cloud image"
+    manifest_path = tmp_path / "manifest.yaml"
+    manifest_path.write_text(
+        yaml.safe_dump(image_manifest(payload).model_dump(mode="json")), encoding="utf-8"
+    )
+    cache = tmp_path / "images"
+    cache.mkdir()
+    (cache / "source.iso").write_bytes(payload)
+    fake = FakeRuntime(tmp_path)
+    launched: list[tuple[ScenarioManifest, ActionManifest, dict[str, Path]]] = []
+
+    def start(
+        scenario: ScenarioManifest, setup: ActionManifest, images: dict[str, Path]
+    ) -> StartedScenario:
+        launched.append((scenario, setup, images))
+        return fake.started
+
+    fake.scenarios.start = start
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: fake)
+
+    def launch(image_manifest_path: Path, image_cache: Path) -> Result:
+        return runner.invoke(
+            app,
+            [
+                "scenario",
+                "start",
+                "nfs-client-recovery",
+                "--scenario-directory",
+                str(root / "scenarios"),
+                "--image-manifest-path",
+                str(image_manifest_path),
+                "--image-cache",
+                str(image_cache),
+            ],
+        )
+
+    assert launch(manifest_path, cache).exit_code == 0
+    [(scenario, setup, images)] = launched
+    assert scenario.scenario_id == "nfs-client-recovery"
+    assert setup == load_action_manifest(root / "scenarios" / scenario.setup)
+    assert images == {"rocky-10.2-test-v1": (cache / "source.iso").resolve()}
+
+    # The lab's own image is built locally, and nothing is provisioned until it exists.
+    unbuilt = launch(root / "images" / "rocky-10.2" / "iso-manifest.yaml", tmp_path / "empty")
+    assert unbuilt.exit_code == 1
+    assert "scenario start failed: built image is missing; run labctl image build" in (
+        unbuilt.stderr
+    )
+    assert len(launched) == 1
+
+
+@pytest.mark.parametrize("draft", [False, True])
+def test_scenario_start_prints_the_brief_the_check_will_hold_the_learner_to(
+    draft: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fake = FakeRuntime(tmp_path)
+    root = Path(__file__).parents[2]
+    scenario = next(
+        manifest
+        for manifest in load_catalog(root / "scenarios")
+        if manifest.scenario_id == "nfs-client-recovery"
+    )
+    if draft:  # a draft may not state its requirements or prove persistence yet
+        scenario = scenario.model_copy(
+            update={"requirements": (), "persistence": PersistenceSpec()}
+        )
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: fake)
+    monkeypatch.setattr(
+        "sysadmin_lab.cli._scenario_launch_inputs", lambda *_args: (scenario, None, {})
+    )
+
+    started = runner.invoke(app, ["scenario", "start", scenario.scenario_id])
+    assert started.exit_code == 0
+    brief = started.stdout.split(scenario.task.strip(), 1)[1]
+    if draft:
+        assert brief.strip() == ""
+    else:
+        assert "Done means:" in brief
+        for requirement in scenario.requirements:
+            assert f"  - {requirement}" in brief
+        assert f"the check reboots {', '.join(scenario.reboot_hosts)} to prove" in brief
 
 
 def test_scenario_verify_reports_acceptance_semantics(
@@ -346,6 +455,21 @@ def test_scenario_list_shows_what_the_state_store_holds(
     assert "destroyed" in everything.stdout
 
 
+def test_scenario_list_says_when_there_is_nothing_to_list(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_path = tmp_path / "state.db"
+    with (
+        SqliteSessionRepository(state_path) as sessions,
+        SqliteSessionMachineRepository(state_path) as machines,
+    ):
+        runtime = SimpleNamespace(sessions=sessions, machines=machines)
+        monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: nullcontext(runtime))
+        listed = runner.invoke(app, ["scenario", "list", "--all"])
+    assert listed.exit_code == 0
+    assert listed.stdout == "no scenario sessions\n"
+
+
 @pytest.mark.parametrize(
     ("command", "message", "code"),
     [
@@ -359,6 +483,7 @@ def test_scenario_list_shows_what_the_state_store_holds(
         (["scenario", "status", "{session}"], "session status failed", 1),
         (["scenario", "reset", "{session}"], "scenario reset failed", 1),
         (["scenario", "destroy", "{session}"], "scenario destroy failed", 1),
+        (["scenario", "verify", "local-account-repair"], "scenario verification failed", 2),
     ],
 )
 def test_every_command_explains_an_unreachable_lab(
@@ -387,6 +512,35 @@ def test_every_command_explains_an_unreachable_lab(
     result = runner.invoke(app, [part.format(**values) for part in command])
     assert result.exit_code == code
     assert f"{message}: cannot connect to qemu:///system" in result.stderr
+
+
+def test_image_build_refuses_tampered_media_before_building_anything(tmp_path: Path) -> None:
+    manifest = tmp_path / "manifest.yaml"
+    manifest.write_text(
+        yaml.safe_dump(kickstart_manifest(b"installer").model_dump(mode="json")),
+        encoding="utf-8",
+    )
+    (tmp_path / "kickstart.ks").write_text("shutdown", encoding="utf-8")
+    isos = tmp_path / "isos"
+    isos.mkdir()
+    (isos / "source.iso").write_bytes(b"tampered!")  # same length, different bytes
+
+    refused = runner.invoke(
+        app,
+        [
+            "image",
+            "build",
+            str(manifest),
+            "--source-cache",
+            str(isos),
+            "--output-directory",
+            str(tmp_path / "images"),
+        ],
+    )
+    assert refused.exit_code == 1
+    assert refused.stderr.startswith("image build failed: ")
+    assert "mismatch" in refused.stderr
+    assert not (tmp_path / "images").exists()
 
 
 def test_image_fetch_reuses_a_verified_download_and_refuses_a_tampered_one(
@@ -568,3 +722,54 @@ def test_first_launch_builds_the_missing_image_then_serves(
     assert f"Verified lab image: {built}" in result.stdout
     assert "Linux Admin Lab: http://[::1]:8791/scenarios/topic/lfcs" in result.stdout
     assert served == [("::1", 8791)]
+
+
+def test_first_launch_stops_before_serving_when_the_iso_fails_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).parents[2]
+    project = tmp_path / "lab"
+    project.mkdir()
+    for shared in ("scenarios", "images"):
+        (project / shared).symlink_to(root / shared)
+
+    def tampered(_self: object, _manifest: object, _cache: Path) -> Path:
+        raise ImageVerificationError("sha256 mismatch for Rocky-10.2-x86_64-dvd1.iso")
+
+    monkeypatch.setattr("sysadmin_lab.cli.ImageAcquirer.acquire", tampered)
+    monkeypatch.setattr("uvicorn.run", lambda *_args, **_kwargs: pytest.fail("served"))
+    result = runner.invoke(
+        app, ["up", "--port", "8792", "--no-browser", "--project-root", str(project)]
+    )
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "lab image preparation failed: sha256 mismatch for Rocky-10.2-x86_64-dvd1.iso\n"
+    )
+    assert "Verified lab image" not in result.stdout
+
+
+def test_up_opens_the_catalog_in_a_browser_once_the_site_is_serving(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).parents[2]
+    built = tmp_path / "built.qcow2"
+    monkeypatch.setattr(
+        "sysadmin_lab.cli.resolve_built_image",
+        lambda *_args: SimpleNamespace(artifact=built),
+    )
+    opened: list[str] = []
+    browser_opened = Event()
+
+    def open_in_browser(url: str) -> bool:
+        opened.append(url)
+        browser_opened.set()
+        return True
+
+    def serve(*_args: object, **_kwargs: object) -> None:  # serves until the browser opens
+        assert browser_opened.wait(timeout=10)
+
+    monkeypatch.setattr("sysadmin_lab.cli.webbrowser.open", open_in_browser)
+    monkeypatch.setattr("uvicorn.run", serve)
+    result = runner.invoke(app, ["up", "--port", "8793", "--project-root", str(root)])
+    assert result.exit_code == 0, result.stderr
+    assert opened == ["http://127.0.0.1:8793/scenarios/topic/lfcs"]
