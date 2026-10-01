@@ -344,3 +344,46 @@ def test_scenario_list_shows_what_the_state_store_holds(
     ]
     assert str(finished.session_id) in everything.stdout
     assert "destroyed" in everything.stdout
+
+
+@pytest.mark.parametrize(
+    ("command", "message", "code"),
+    [
+        (["session", "start", "{base}"], "session start failed", 1),
+        (["session", "status", "{session}"], "session status failed", 1),
+        (["session", "destroy", "{session}"], "session destroy failed", 1),
+        (["session", "check", "{session}", "{manifest}"], "session check failed", 2),
+        (["scenario", "list"], "scenario list failed", 1),
+        (["scenario", "start", "local-account-repair"], "scenario start failed", 1),
+        (["scenario", "check", "{session}"], "scenario check failed", 2),
+        (["scenario", "status", "{session}"], "session status failed", 1),
+        (["scenario", "reset", "{session}"], "scenario reset failed", 1),
+        (["scenario", "destroy", "{session}"], "scenario destroy failed", 1),
+    ],
+)
+def test_every_command_explains_an_unreachable_lab(
+    command: list[str],
+    message: str,
+    code: int,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unreachable(_root: Path) -> object:
+        raise ConnectionError("cannot connect to qemu:///system")
+
+    monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", unreachable)
+    monkeypatch.setattr(
+        "sysadmin_lab.cli._scenario_launch_inputs",
+        lambda *_args: (None, None, {}),
+    )
+    base = tmp_path / "base.qcow2"
+    base.touch()
+    root = Path(__file__).parents[2]
+    values = {
+        "base": str(base),
+        "session": str(SESSION_ID),
+        "manifest": str(root / "scenarios" / "local-account-repair.yaml"),
+    }
+    result = runner.invoke(app, [part.format(**values) for part in command])
+    assert result.exit_code == code
+    assert f"{message}: cannot connect to qemu:///system" in result.stderr
