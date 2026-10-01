@@ -156,6 +156,7 @@ checks:
     target: node2
     description: Exports inside the retention period are untouched, and older ones are gone.
     parameters:
+      timeout_seconds: 60
       sudo: true
       script: |
         cd /srv/lal-catalog/exports 2>/dev/null || fail "/srv/lal-catalog/exports is missing"

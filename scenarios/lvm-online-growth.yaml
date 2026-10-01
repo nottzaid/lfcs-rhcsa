@@ -128,6 +128,7 @@ checks:
     target: node2
     description: Every existing log file is intact, and /etc/fstab still mounts /srv/logs.
     parameters:
+      timeout_seconds: 60
       sudo: true
       script: |
         cd /srv/logs || fail "/srv/logs is gone"
