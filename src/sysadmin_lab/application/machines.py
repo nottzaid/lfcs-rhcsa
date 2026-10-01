@@ -73,3 +73,7 @@ class DomainLeaseReadiness:
             if attempt + 1 < attempts:
                 self._sleep(interval_seconds)
         return False
+
+    def holds(self, domain_name: str, address: str) -> bool:
+        """Whether libvirt currently leases this address to the domain."""
+        return address in self._source.domain_ipv4_addresses(domain_name)

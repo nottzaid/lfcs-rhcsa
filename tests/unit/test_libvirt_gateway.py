@@ -241,6 +241,7 @@ def test_domain_ipv4_addresses_returns_non_loopback_dhcp_leases() -> None:
     assert ("addresses", FakeApi.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0) in (
         connection.domains["lal-domain"].calls
     )
+    assert gateway.domain_ipv4_addresses("lal-gone") == ()  # a deleted domain holds nothing
 
 
 def test_connect_and_context_manager_close_connection(monkeypatch: pytest.MonkeyPatch) -> None:

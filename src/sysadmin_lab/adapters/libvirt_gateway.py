@@ -219,7 +219,9 @@ class LibvirtGateway:
                 domain.updateDeviceFlags(ET.tostring(interface, encoding="unicode"), scope)
 
     def domain_ipv4_addresses(self, name: str) -> tuple[str, ...]:
-        """Return DHCP lease addresses for one explicitly named domain."""
+        """Return DHCP lease addresses for one explicitly named domain; none if it is gone."""
+        if self.find(ResourceKind.DOMAIN, name) is None:
+            return ()
         domain = self._connection.lookupByName(name)
         raw = domain.interfaceAddresses(self._api.VIR_DOMAIN_INTERFACE_ADDRESSES_SRC_LEASE, 0)
         interfaces = cast(dict[str, dict[str, object]], raw)

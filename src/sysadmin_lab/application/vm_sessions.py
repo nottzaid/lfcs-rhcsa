@@ -220,7 +220,7 @@ class VmSessionService:
             for machine in self._machines.list(session_id):
                 if self._resources.is_registered(machine.identity):
                     self._release_address(machine)
-                    self._resources.remove(machine.identity)
+                    self._resources.remove(machine.identity, missing_ok=True)
                 self._artifacts.destroy(session_id, machine.host_name)
                 self._machines.remove(machine)
             self._remove_networks(session_id)
@@ -284,7 +284,7 @@ class VmSessionService:
         for machine in self._machines.list(state.session_id):
             if self._resources.is_registered(machine.identity):
                 self._release_address(machine)
-                self._resources.remove(machine.identity)
+                self._resources.remove(machine.identity, missing_ok=True)
             self._artifacts.destroy(state.session_id, machine.host_name)
             cleaned.add(machine.host_name)
             self._machines.remove(machine)
@@ -301,7 +301,11 @@ class VmSessionService:
         resets would exhaust its 253 addresses. A guest that cannot be reached keeps its
         lease until it expires.
         """
-        if machine.address is None:
+        if machine.address is None or not self._leases.holds(
+            machine.identity.name, machine.address
+        ):
+            # A machine that is off or gone may have lost its address to another guest,
+            # possibly one sharing this runtime's key, which must not be taken offline.
             return
         endpoint = GuestEndpoint(machine.address, machine.username, machine.private_key)
         try:
@@ -319,4 +323,4 @@ class VmSessionService:
     def _remove_networks(self, session_id: UUID) -> None:
         # Domains are gone by now, so no guest still holds a port on these bridges.
         for identity in self.owned_networks(session_id):
-            self._resources.remove(identity)
+            self._resources.remove(identity, missing_ok=True)
