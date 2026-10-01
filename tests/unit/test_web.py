@@ -18,7 +18,7 @@ from sysadmin_lab.domain.progress import ScenarioProgress
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 from sysadmin_lab.domain.virtual_machines import domain_identity
-from sysadmin_lab.web import create_app
+from sysadmin_lab.web import create_app, render_markdown
 
 SESSION_ID = UUID("10000000-0000-0000-0000-000000000001")
 RESET_ID = UUID("20000000-0000-0000-0000-000000000002")
@@ -144,7 +144,9 @@ def test_lfcs_topic_and_scenario_pages_expose_hands_on_loop(tmp_path: Path) -> N
         assert catalog.headers["cache-control"] == "no-store"
 
         detail = client.get(f"/scenarios/{workspace.manifest.scenario_id}")
-        assert workspace.manifest.task.split(".", maxsplit=1)[0] in detail.text
+        assert render_markdown(workspace.manifest.task) in detail.text
+        for requirement in workspace.manifest.requirements:
+            assert render_markdown(requirement) in detail.text
         assert "Launch scenario" in detail.text
         assert workspace.manifest.topology.hosts[0].name in detail.text
 

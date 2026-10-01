@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: cap-the-archiver-in-a-drop-in
+  - action_id: lower-the-archiver-weight
     target: node2
     arguments:
       - sudo
@@ -10,6 +10,6 @@ actions:
       - |
         set -euo pipefail
         install -d /etc/systemd/system/lal-archiver.service.d
-        printf '[Service]\nIOWriteBandwidthMax=/srv/data 1M\n' > /etc/systemd/system/lal-archiver.service.d/io.conf
+        printf '[Service]\nIOWeight=10\nIOSchedulingClass=idle\n' > /etc/systemd/system/lal-archiver.service.d/io.conf
         systemctl daemon-reload
         systemctl restart lal-archiver.service

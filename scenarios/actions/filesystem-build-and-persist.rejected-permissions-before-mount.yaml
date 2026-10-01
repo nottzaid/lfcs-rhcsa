@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-mount-and-share-by-label
+  - action_id: set-permissions-then-mount-over-them
     target: node2
     arguments:
       - sudo
@@ -9,9 +9,9 @@ actions:
       - -c
       - |
         set -euo pipefail
+        chown root:archivists /srv/archive
+        chmod 2770 /srv/archive
         mkfs.xfs -q -L LAL_ARCHIVE /dev/disk/by-id/virtio-lal-archive
         printf 'LABEL=LAL_ARCHIVE /srv/archive xfs defaults 0 0\n' >> /etc/fstab
         systemctl daemon-reload
         mount /srv/archive
-        chown root:archivists /srv/archive
-        chmod 2770 /srv/archive

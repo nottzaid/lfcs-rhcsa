@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-mount-and-share-by-label
+  - action_id: mount-by-kernel-device-name
     target: node2
     arguments:
       - sudo
@@ -10,7 +10,7 @@ actions:
       - |
         set -euo pipefail
         mkfs.xfs -q -L LAL_ARCHIVE /dev/disk/by-id/virtio-lal-archive
-        printf 'LABEL=LAL_ARCHIVE /srv/archive xfs defaults 0 0\n' >> /etc/fstab
+        printf '%s /srv/archive xfs defaults 0 0\n' "$(readlink -f /dev/disk/by-id/virtio-lal-archive)" >> /etc/fstab
         systemctl daemon-reload
         mount /srv/archive
         chown root:archivists /srv/archive

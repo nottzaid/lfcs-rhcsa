@@ -1,30 +1,23 @@
 schema_version: 1
 actions:
-  - action_id: login-to-designated-target
+  - action_id: discover-and-log-in-in-one-step
     target: node2
-    timeout_seconds: 120
+    timeout_seconds: 180
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        iscsiadm --mode discoverydb --type sendtargets --portal {{host.node1.address}}
-        --discover;
-        iscsiadm --mode node --targetname iqn.2026-08.internal.lab:storage
-        --portal {{host.node1.address}}:3260 --login;
-        iscsiadm --mode node --targetname iqn.2026-08.internal.lab:storage
-        --portal {{host.node1.address}}:3260 --op update --name node.startup --value automatic;
+      - |
+        set -euo pipefail
+        sed -i 's/^InitiatorName=.*/InitiatorName=iqn.2026-09.internal.lab:node2-database/' /etc/iscsi/initiatorname.iscsi
+        systemctl restart iscsid.service
+        iscsiadm --mode discoverydb --type sendtargets --portal {{host.node1.address}}:3260 --discover --login
         udevadm settle
-  - action_id: configure-labeled-network-mount
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - >-
-        device=/dev/disk/by-path/ip-{{host.node1.address}}:3260-iscsi-iqn.2026-08.internal.lab:storage-lun-0;
-        mkfs -t xfs -f -L LAL_DATABASE "$device";
-        printf 'LABEL=LAL_DATABASE /srv/database xfs _netdev,nofail 0 0\n' >> /etc/fstab;
-        mount /srv/database
+        device=$(readlink -f /dev/disk/by-path/*iqn.2026-08.internal.lab:storage-lun-0)
+        mkfs -t xfs -f "$device"
+        xfs_admin -L LAL_DATABASE "$device"
+        uuid=$(blkid -s UUID -o value "$device")
+        printf 'UUID=%s\t/srv/database\txfs\t_netdev,noatime\t0 0\n' "$uuid" >> /etc/fstab
+        systemctl daemon-reload
+        systemctl start srv-database.mount

@@ -1,16 +1,60 @@
 schema_version: 1
 scenario_id: persistent-swap-priority
-version: 1
+version: 2
 status: verified
-title: The emergency swap disk is unused
-summary: Build, activate, prioritize, and persist dedicated swap space.
-estimated_minutes: 25
+title: The fast swap disk was attached but never used
+summary: Add a dedicated swap device that the kernel prefers over the existing swap, persistently.
+estimated_minutes: 20
 task_type: build
 difficulty: foundation
-task: >-
-  Configure /dev/disk/by-id/virtio-lal-swap on node2 as 768 MiB of swap labeled LAL_SWAP.
-  Activate it now with priority 50 and configure it in /etc/fstab by UUID or label so the
-  same priority is restored after reboot. Do not create a swap file or alter other swap.
+task: |
+  **node2** runs short of memory during nightly batch runs. Its only swap is a small logical
+  volume on the system disk. A dedicated, faster disk was attached for swap,
+  `/dev/disk/by-id/virtio-lal-swap`, but nobody set it up.
+
+  Make the whole disk swap space that the kernel uses before the existing swap, today and
+  after every reboot. Leave the existing swap in place as a fallback.
+requirements:
+  - "The disk carries a swap signature labeled `LAL_SWAP`."
+  - "It is active swap with priority `50`."
+  - "`/etc/fstab` activates it by UUID or label with priority `50`."
+  - "The existing swap logical volume stays active at its default priority."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "`swapon --show` lists active swap and priorities; `lsblk -f` shows what is on each disk."
+  - "`mkswap -L` writes a labeled swap signature. `swapon -p` sets a priority now; in `/etc/fstab` the same thing is the `pri=` option in the fourth field."
+  - "Higher priority swap is used first. Test the fstab entry without rebooting: `sudo swapoff` the new device, then `sudo swapon -a`, then `swapon --show`."
+debrief: |
+  ## A clean build
+
+  ```bash
+  sudo mkswap -L LAL_SWAP /dev/disk/by-id/virtio-lal-swap
+  echo 'LABEL=LAL_SWAP none swap defaults,pri=50 0 0' | sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload
+  sudo swapon -a
+  swapon --show
+  ```
+
+  The kernel fills swap areas in priority order, highest first; areas with equal priority
+  are used round-robin. Swap activated without a priority gets a negative default (`-2`,
+  `-3`, ...), so priority `50` makes the dedicated disk preferred and keeps the old logical
+  volume as a fallback. `swapon -a` activates every fstab swap entry that is not active
+  yet, which proves the entry before a reboot does.
+
+  ## Check it yourself
+
+  ```bash
+  swapon --show=NAME,TYPE,SIZE,PRIO
+  findmnt --fstab --types swap
+  ```
+
+  ## Tempting but wrong
+
+  - **`swapon -p 50` without an fstab entry.** Correct until the reboot.
+  - **An fstab entry without `pri=50`.** After the reboot the disk is active but ranks
+    below the old swap, so the kernel still uses the slow one first.
+  - **A swap file on the system disk.** It adds swap, but not on the fast disk that was
+    attached for it.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -21,15 +65,18 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: mkswap manual
+    title: Create a swap area
     man_page: mkswap(8)
   - kind: man-page
-    title: swapon manual
+    title: Activate swap and set priorities
     man_page: swapon(8)
+  - kind: man-page
+    title: Swap entries in fstab
+    man_page: fstab(5)
 topology:
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
       disks:
@@ -37,44 +84,59 @@ topology:
           size_mib: 768
           role: dedicated swap disk
 checks:
-  - check_id: swap-signature
+  - check_id: labeled-swap-signature
     kind: command
     target: node2
-    description: The dedicated disk has the required swap signature and label.
+    description: The disk carries a swap signature labeled LAL_SWAP.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(blkid -s TYPE -o value /dev/disk/by-id/virtio-lal-swap)" = swap &&
-          test "$(blkid -s LABEL -o value /dev/disk/by-id/virtio-lal-swap)" = LAL_SWAP
-  - check_id: swap-active-with-priority
+      script: |
+        disk=/dev/disk/by-id/virtio-lal-swap
+        expect_eq "$(blkid -s TYPE -o value "$disk")" swap "the signature on the swap disk"
+        expect_eq "$(blkid -s LABEL -o value "$disk")" LAL_SWAP "the swap label"
+  - check_id: active-with-priority
     kind: command
     target: node2
-    description: The dedicated disk is active at priority 50.
+    description: The disk is active swap with priority 50.
+    parameters:
+      script: |
+        device=$(readlink -f /dev/disk/by-id/virtio-lal-swap)
+        priority=$(swapon --show=NAME,PRIO --noheadings --raw | awk -v d="$device" '$1 == d {print $2}')
+        [[ -n "$priority" ]] || fail "the swap disk is not active"
+        expect_eq "$priority" 50 "the swap disk's priority"
+  - check_id: persistent-by-stable-identity
+    kind: command
+    target: node2
+    description: /etc/fstab activates it by UUID or label with priority 50.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          device=$(readlink -f /dev/disk/by-id/virtio-lal-swap);
-          swapon --show=NAME,PRIO --noheadings --raw | awk -v d="$device" '$1==d && $2==50 {ok=1} END {exit !ok}'
-  - check_id: swap-persistent-by-stable-id
+      script: |
+        disk=/dev/disk/by-id/virtio-lal-swap
+        uuid=$(blkid -s UUID -o value "$disk")
+        found=
+        while read -r source options; do
+          case "$source" in "UUID=$uuid"|LABEL=LAL_SWAP) found=$options ;; esac
+        done < <(findmnt --fstab --types swap --noheadings --output SOURCE,OPTIONS)
+        [[ -n "$found" ]] || fail "/etc/fstab has no swap entry for the disk by UUID or label"
+        priority=$(option_value "$found" pri)
+        [[ -n "$priority" ]] || fail "the fstab entry has no pri= option, so the disk gets a default priority at boot"
+        expect_eq "$priority" 50 "the priority in /etc/fstab"
+  - check_id: fallback-swap-intact
     kind: command
     target: node2
-    description: fstab uses UUID or label and records priority 50.
+    description: The existing swap logical volume stays active at its default priority.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          awk '$3=="swap" && $1 ~ /^(UUID=|LABEL=LAL_SWAP$)/ && $4 ~ /(^|,)pri=50(,|$)/ {ok=1}
-               END {exit !ok}' /etc/fstab
+      script: |
+        lv=$(readlink -f /dev/mapper/rl_lal--base-swap)
+        priority=$(swapon --show=NAME,PRIO --noheadings --raw | awk -v d="$lv" '$1 == d {print $2}')
+        [[ -n "$priority" ]] || fail "the existing swap logical volume is no longer active"
+        (( priority < 0 )) || fail "the existing swap now has priority $priority; leave it at its default"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/persistent-swap-priority.setup.yaml
 reference_solution: actions/persistent-swap-priority.solution.yaml
 alternate_solutions: [actions/persistent-swap-priority.alternate.yaml]
+rejected_solutions:
+  - actions/persistent-swap-priority.rejected-no-priority-in-fstab.yaml
+  - actions/persistent-swap-priority.rejected-swap-file.yaml

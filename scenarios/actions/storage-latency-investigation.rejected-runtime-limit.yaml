@@ -1,11 +1,12 @@
 schema_version: 1
 actions:
-  - action_id: set-a-persistent-limit-on-the-device
+  - action_id: limit-until-the-next-restart
     target: node2
     arguments:
       - sudo
       - --
       - systemctl
       - set-property
+      - --runtime
       - lal-archiver.service
-      - IOWriteBandwidthMax=/dev/disk/by-id/virtio-lal-data 1M
+      - IOWriteBandwidthMax=/srv/data 1M

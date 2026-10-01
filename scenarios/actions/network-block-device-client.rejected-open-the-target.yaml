@@ -1,6 +1,17 @@
 schema_version: 1
 actions:
-  - action_id: register-log-in-and-build-the-filesystem
+  - action_id: let-the-target-admit-anyone
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        targetcli /iscsi/iqn.2026-08.internal.lab:storage/tpg1 set attribute generate_node_acls=1 demo_mode_write_protect=0
+        targetcli saveconfig
+  - action_id: log-in-under-the-generic-name
     target: node2
     timeout_seconds: 180
     arguments:
@@ -11,13 +22,10 @@ actions:
       - |
         set -euo pipefail
         portal={{host.node1.address}}
-        printf 'InitiatorName=iqn.2026-09.internal.lab:node2-database\n' > /etc/iscsi/initiatorname.iscsi
-        systemctl restart iscsid.service
         iscsiadm -m discovery -t sendtargets -p "$portal"
         iscsiadm -m node -T iqn.2026-08.internal.lab:storage -p "$portal" --login
         udevadm settle
-        lun=/dev/disk/by-path/ip-$portal:3260-iscsi-iqn.2026-08.internal.lab:storage-lun-0
-        mkfs.xfs -q -f -L LAL_DATABASE "$lun"
+        mkfs.xfs -q -f -L LAL_DATABASE "/dev/disk/by-path/ip-$portal:3260-iscsi-iqn.2026-08.internal.lab:storage-lun-0"
         printf 'LABEL=LAL_DATABASE /srv/database xfs defaults,_netdev 0 0\n' >> /etc/fstab
         systemctl daemon-reload
         mount /srv/database

@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: create-and-activate-by-label
+  - action_id: set-the-priority-only-for-today
     target: node2
     arguments:
       - sudo
@@ -10,6 +10,5 @@ actions:
       - |
         set -euo pipefail
         mkswap -L LAL_SWAP /dev/disk/by-id/virtio-lal-swap
-        printf 'LABEL=LAL_SWAP none swap defaults,pri=50 0 0\n' >> /etc/fstab
-        systemctl daemon-reload
-        swapon -a
+        printf 'LABEL=LAL_SWAP none swap defaults 0 0\n' >> /etc/fstab
+        swapon -p 50 /dev/disk/by-id/virtio-lal-swap

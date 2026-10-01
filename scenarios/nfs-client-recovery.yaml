@@ -1,17 +1,78 @@
 schema_version: 1
 scenario_id: nfs-client-recovery
-version: 1
+version: 2
 status: verified
-title: The application node lost its shared data mount
-summary: Repair a persistent NFS client mount against a live local server.
+title: The application lost its shared data mount
+summary: An NFS client points at a retired server, and its application account cannot write once reconnected.
 estimated_minutes: 35
 task_type: fix
 difficulty: intermediate
-task: >-
-  node1 exports /srv/teamshare for node2, but node2's stale mount configuration points to
-  the wrong server. Mount node1:/srv/teamshare at /mnt/teamshare on node2 using NFSv4 and
-  make it persistent with _netdev. The appshare user must retain read/write access and the
-  server's root_squash policy must remain in effect. Do not alter the exported data.
+task: |
+  The application on **node2** keeps its shared records on the NFS export
+  `/srv/teamshare` from **node1**, mounted at `/mnt/teamshare`. After last weekend's
+  maintenance, `/mnt/teamshare` is just an empty directory, and the application, which runs
+  as the `appshare` account, cannot find its records.
+
+  Reconnect node2 to the share so it comes back on every boot, and make sure `appshare` can
+  read and write there again. The export on node1 is shared with other clients: leave it
+  exactly as it is.
+requirements:
+  - "node1's `/srv/teamshare` is mounted at `/mnt/teamshare` over NFSv4, now and automatically at boot."
+  - "`appshare` on node2 can read the existing records and create new files on the share."
+  - "root on node2 is still squashed: it cannot write to the share."
+  - "The export configuration and the existing data on node1 are unchanged."
+hints:
+  - "`findmnt /mnt/teamshare` shows what is mounted; `grep teamshare /etc/fstab` shows what boot will try. `showmount -e NODE1_ADDRESS` lists what node1 exports."
+  - "Once mounted, compare `ls -ln /mnt/teamshare` with `id appshare`. With the default `sec=sys` security, NFS checks access by numeric user and group IDs, not by names."
+  - "`usermod -u` and `groupmod -g` renumber a local account. A network filesystem needs `_netdev` (or a network-online dependency) so boot does not try to mount it before the network is up."
+debrief: |
+  ## What was wrong
+
+  Two things. The fstab entry still pointed at the retired server `192.0.2.99`, so nothing was
+  mounted. And `appshare` on node2 had UID and GID `2201`, while on node1 the share and its
+  files belong to `2200`. With `sec=sys`, the client sends numeric IDs with every request and
+  the server checks them against its own files, so to node1 the node2 `appshare` was a
+  stranger:
+
+  ```text
+  $ ls -ln /mnt/teamshare
+  -rw-r--r--. 1 2200 2200 22 ... project.txt
+  $ id appshare
+  uid=2201(appshare) gid=2201(appshare) groups=2201(appshare)
+  ```
+
+  ## A clean fix
+
+  ```bash
+  sudo sed -i '\#/mnt/teamshare#d' /etc/fstab
+  echo 'NODE1_ADDRESS:/srv/teamshare /mnt/teamshare nfs4 defaults,_netdev 0 0' | sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload
+  sudo mount /mnt/teamshare
+  sudo groupmod -g 2200 appshare
+  sudo usermod -u 2200 -g 2200 appshare
+  sudo -u appshare touch /mnt/teamshare/probe
+  ```
+
+  In real environments, central directories such as LDAP or FreeIPA exist largely to keep
+  these numbers identical on every host. NFS with Kerberos (`sec=krb5`) sends names instead
+  of numbers.
+
+  ## Check it yourself
+
+  ```bash
+  findmnt -t nfs4 /mnt/teamshare
+  sudo -u appshare sh -c 'cat /mnt/teamshare/project.txt; echo ok > /mnt/teamshare/test'
+  sudo touch /mnt/teamshare/root-test     # Permission denied: root is squashed
+  ```
+
+  ## Tempting but wrong
+
+  - **Fixing only the mount.** The share appears, and `appshare` gets `Permission denied`.
+  - **`no_root_squash`, `all_squash,anonuid=2201`, or `chmod 777` on node1.** They change a
+    share other clients depend on, and `no_root_squash` hands every client's root user full
+    control of the server's files.
+  - **Mounting without `_netdev`.** It may work, but boot can try the mount before the
+    network is up and stall or give up.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,68 +83,74 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: exports manual
+    title: NFS mount options and security flavors
+    man_page: nfs(5)
+  - kind: man-page
+    title: Export options, including root_squash
     man_page: exports(5)
   - kind: man-page
-    title: nfs manual
-    man_page: nfs(5)
+    title: Network filesystems in fstab (_netdev)
+    man_page: fstab(5)
+  - kind: man-page
+    title: Renumber a user
+    man_page: usermod(8)
 topology:
   hosts:
-    - name: node1
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: remote-share-mounted
+  - check_id: share-mounted
     kind: command
     target: node2
-    description: node2 has the designated NFSv4 share mounted.
+    description: node1's /srv/teamshare is mounted at /mnt/teamshare over NFSv4.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(findmnt -n -o FSTYPE /mnt/teamshare)" = nfs4 &&
-          test "$(findmnt -n -o SOURCE /mnt/teamshare)" = '{{host.node1.address}}:/srv/teamshare'
-  - check_id: remote-content-visible
+      script: |
+        ls /mnt/teamshare >/dev/null 2>&1 || true   # triggers an automount, if one is used
+        mounted=$(findmnt -n -o FSTYPE,SOURCE --mountpoint /mnt/teamshare | tail -n 1)
+        [[ -n "$mounted" ]] || fail "nothing is mounted at /mnt/teamshare"
+        read -r fstype source <<<"$mounted"
+        expect_eq "$fstype" nfs4 "the filesystem type at /mnt/teamshare"
+        expect_eq "$source" '{{host.node1.address}}:/srv/teamshare' "the mounted export"
+  - check_id: application-reads-and-writes
     kind: command
     target: node2
-    description: Existing server data is visible on the client.
-    parameters:
-      sudo: true
-      arguments: [runuser, -u, appshare, --, grep, -Fxq, shared project record, /mnt/teamshare/project.txt]
-  - check_id: application-write-access
-    kind: command
-    target: node2
-    description: The application identity can write to the mounted share.
+    description: appshare can read the existing records and create new files on the share.
     parameters:
       sudo: true
-      arguments: [runuser, -u, appshare, --, test, -w, /mnt/teamshare]
-  - check_id: persistent-network-mount
+      script: |
+        runuser -u appshare -- grep -qx 'shared project record' /mnt/teamshare/project.txt 2>/dev/null ||
+          fail "appshare cannot read /mnt/teamshare/project.txt"
+        probe=/mnt/teamshare/.check-$$
+        runuser -u appshare -- touch "$probe" 2>/dev/null || fail "appshare cannot create files on the share"
+        runuser -u appshare -- rm -f "$probe"
+  - check_id: root-still-squashed
     kind: command
     target: node2
-    description: fstab records the designated share as a network-dependent NFS mount.
+    description: root on node2 cannot write to the share.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          awk '$1=="{{host.node1.address}}:/srv/teamshare" && $2=="/mnt/teamshare" &&
-               $3=="nfs4" && $4 ~ /(^|,)_netdev(,|$)/ {ok=1} END {exit !ok}' /etc/fstab
-  - check_id: root-squash-retained
+      sudo: true
+      script: |
+        mountpoint -q /mnt/teamshare || fail "nothing is mounted at /mnt/teamshare"
+        if touch /mnt/teamshare/.root-check 2>/dev/null; then
+          rm -f /mnt/teamshare/.root-check
+          fail "root on node2 can write to the share; root squashing is off"
+        fi
+  - check_id: server-unchanged
     kind: command
     target: node1
-    description: The server export retains root squashing.
+    description: The export configuration and existing data on node1 are unchanged.
     parameters:
       sudo: true
-      arguments: [bash, -c, 'exportfs -v | grep -A1 -F /srv/teamshare | grep -qw root_squash']
+      script: |
+        sha256sum --check --status /usr/share/lal-nfs/server.sha256 ||
+          fail "the export configuration or the existing records on node1 changed"
+        expect_eq "$(stat -c %u:%g:%a /srv/teamshare)" 2200:2200:770 "the owner and mode of the export"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/nfs-client-recovery.setup.yaml
 reference_solution: actions/nfs-client-recovery.solution.yaml
 alternate_solutions: [actions/nfs-client-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/nfs-client-recovery.rejected-mount-only.yaml
+  - actions/nfs-client-recovery.rejected-squash-everyone.yaml

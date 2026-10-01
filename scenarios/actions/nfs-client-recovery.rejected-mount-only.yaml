@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: point-at-node1-and-align-the-account
+  - action_id: fix-the-mount-but-not-the-identity
     target: node2
     timeout_seconds: 90
     arguments:
@@ -14,5 +14,3 @@ actions:
         printf '{{host.node1.address}}:/srv/teamshare /mnt/teamshare nfs4 defaults,_netdev 0 0\n' >> /etc/fstab
         systemctl daemon-reload
         mount /mnt/teamshare
-        groupmod -g 2200 appshare
-        usermod -u 2200 -g 2200 appshare

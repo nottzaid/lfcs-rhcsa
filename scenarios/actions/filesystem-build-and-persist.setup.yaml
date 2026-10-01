@@ -1,16 +1,16 @@
 schema_version: 1
 actions:
-  - action_id: prepare-unused-archive-disk
+  - action_id: prepare-the-team-and-a-blank-disk
     target: node2
     arguments:
       - sudo
       - --
       - bash
       - -c
-      - >-
-        umount /srv/archive >/dev/null 2>&1 || true;
-        sed -i '\#/srv/archive#d' /etc/fstab;
-        wipefs -a /dev/disk/by-id/virtio-lal-archive;
-        getent group archivists >/dev/null || groupadd archivists;
-        rm -rf /srv/archive;
+      - |
+        set -euo pipefail
+        groupadd archivists
+        useradd --create-home --groups archivists archive1
+        useradd --create-home visitor
+        wipefs --all --quiet /dev/disk/by-id/virtio-lal-archive
         install -d -m 0755 /srv/archive

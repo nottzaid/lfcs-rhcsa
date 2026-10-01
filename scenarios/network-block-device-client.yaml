@@ -1,17 +1,78 @@
 schema_version: 1
 scenario_id: network-block-device-client
-version: 1
+version: 2
 status: verified
-title: The database node has not attached its iSCSI volume
-summary: Discover, persist, format, and mount a live network block device.
-estimated_minutes: 35
+title: The database node cannot log in to its SAN volume
+summary: Attach an iSCSI LUN that only accepts a registered initiator, then build persistent storage on it.
+estimated_minutes: 40
 task_type: build
 difficulty: advanced
-task: >-
-  node1 publishes iSCSI target iqn.2026-08.internal.lab:storage with LUN 0. On node2,
-  discover and log in to the target, make the node login automatic, create an XFS filesystem
-  labeled LAL_DATABASE on the LUN, and mount it at /srv/database. Configure a persistent
-  UUID- or label-based /etc/fstab entry with _netdev. Do not format any local disk.
+task: |
+  The storage team published an iSCSI volume for the database on **node2**: target
+  `iqn.2026-08.internal.lab:storage`, LUN 0, on **node1**, port 3260. The target admits only
+  initiators it knows, and they registered node2 as:
+
+  ```text
+  iqn.2026-09.internal.lab:node2-database
+  ```
+
+  Attach the volume to node2, give it an XFS filesystem labeled `LAL_DATABASE`, and mount it
+  at `/srv/database`. It has to come back by itself after every reboot, network and all.
+requirements:
+  - "node2 identifies itself as `iqn.2026-09.internal.lab:node2-database`."
+  - "node2 has an active session to `iqn.2026-08.internal.lab:storage` on node1, and logs in automatically at boot."
+  - "The LUN holds an XFS filesystem labeled `LAL_DATABASE`, mounted at `/srv/database`."
+  - "`/etc/fstab` mounts it by UUID or label, marked `_netdev` as a network device."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "Discovery comes first: `iscsiadm -m discovery -t sendtargets -p NODE1_ADDRESS`, then `iscsiadm -m node --login`. Read what the login error says about authorization."
+  - "The initiator's name lives in `/etc/iscsi/initiatorname.iscsi` and is read when `iscsid` starts."
+  - "After login the LUN is an ordinary new disk: `lsblk` and `/dev/disk/by-path/` show it. Mounting it at boot must wait for the network and the iSCSI login, which is what `_netdev` tells systemd."
+debrief: |
+  ## What was wrong
+
+  The target's access list contains one initiator name. node2 still had the generic name it
+  was built with, so discovery worked but login was refused:
+
+  ```text
+  iscsiadm: Could not login to [iface: default, target: iqn.2026-08.internal.lab:storage, ...].
+  iscsiadm: initiator reported error (24 - iSCSI login failed due to authorization failure)
+  ```
+
+  ## A clean build
+
+  ```bash
+  echo 'InitiatorName=iqn.2026-09.internal.lab:node2-database' | sudo tee /etc/iscsi/initiatorname.iscsi
+  sudo systemctl restart iscsid
+  sudo iscsiadm -m discovery -t sendtargets -p NODE1_ADDRESS
+  sudo iscsiadm -m node -T iqn.2026-08.internal.lab:storage -p NODE1_ADDRESS --login
+  lsblk                                    # the LUN appears as a new sdX disk
+  sudo mkfs.xfs -L LAL_DATABASE /dev/disk/by-path/ip-NODE1_ADDRESS:3260-iscsi-iqn.2026-08.internal.lab:storage-lun-0
+  echo 'LABEL=LAL_DATABASE /srv/database xfs defaults,_netdev 0 0' | sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload && sudo mount /srv/database
+  ```
+
+  Discovery records the target under `/var/lib/iscsi/nodes/` with `node.startup =
+  automatic` (the default in `/etc/iscsi/iscsid.conf`), so the iSCSI services log in again
+  at boot. `_netdev` orders the mount after the network and `remote-fs-pre.target`, when the
+  login has happened. Without it, boot looks for the disk before it exists.
+
+  ## Check it yourself
+
+  ```bash
+  sudo iscsiadm -m session -P 1
+  cat /etc/iscsi/initiatorname.iscsi
+  findmnt /srv/database; lsblk -f
+  ```
+
+  ## Tempting but wrong
+
+  - **`/dev/sdb` in `/etc/fstab`.** iSCSI disks get kernel names in login order; use the
+    label or UUID.
+  - **No `_netdev`.** Boot treats it as a local disk, tries to mount it before the login,
+    and can fail or stall.
+  - **Changing the target's access list on node1.** The storage team owns it; the fix
+    belongs on the client.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,76 +83,76 @@ sources:
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: iscsiadm manual
+    title: Discover, log in, and manage iSCSI nodes
     man_page: iscsiadm(8)
   - kind: man-page
-    title: targetcli manual
-    man_page: targetcli(8)
+    title: The iSCSI daemon and the initiator name
+    man_page: iscsid(8)
+  - kind: man-page
+    title: Network block devices in fstab (_netdev)
+    man_page: fstab(5)
 topology:
   hosts:
     - name: node1
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
       disks:
-        - name: target
-          size_mib: 1536
-          role: iSCSI target backing device
-    - name: node2
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
+        - {name: target, size_mib: 1536, role: iSCSI target backing device}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
 checks:
-  - check_id: iscsi-session-active
+  - check_id: registered-initiator-name
     kind: command
     target: node2
-    description: node2 has an active session to node1's designated target.
+    description: node2 identifies itself as iqn.2026-09.internal.lab:node2-database.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          iscsiadm -m session | grep -Fq '{{host.node1.address}}:3260' &&
-          iscsiadm -m session | grep -Fq 'iqn.2026-08.internal.lab:storage'
-  - check_id: network-filesystem-mounted
+      script: |
+        name=$(sed -n 's/^InitiatorName=//p' /etc/iscsi/initiatorname.iscsi)
+        expect_eq "$name" iqn.2026-09.internal.lab:node2-database "node2's initiator name"
+  - check_id: session-active-and-automatic
     kind: command
     target: node2
-    description: The LAL_DATABASE XFS filesystem is mounted at /srv/database.
+    description: node2 has an active session to the storage target and logs in at boot.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          test "$(findmnt -n -o FSTYPE /srv/database)" = xfs &&
-          test "$(findmnt -n -o LABEL /srv/database)" = LAL_DATABASE
-  - check_id: iscsi-login-persistent
+      timeout_seconds: 30
+      script: |
+        sessions=$(iscsiadm -m session 2>/dev/null) || fail "node2 has no iSCSI session"
+        grep -Fq '{{host.node1.address}}:3260' <<<"$sessions" && grep -Fq iqn.2026-08.internal.lab:storage <<<"$sessions" ||
+          fail "node2 has no session to iqn.2026-08.internal.lab:storage on node1"
+        startup=$(iscsiadm -m node -T iqn.2026-08.internal.lab:storage -p '{{host.node1.address}}:3260' -o show |
+          sed -n 's/^node\.startup *= *//p')
+        expect_eq "$startup" automatic "node.startup for the target"
+  - check_id: database-filesystem-mounted
     kind: command
     target: node2
-    description: The discovered target is configured for automatic startup.
+    description: The LUN holds an XFS filesystem labeled LAL_DATABASE, mounted at /srv/database.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          iscsiadm -m node -T iqn.2026-08.internal.lab:storage -p {{host.node1.address}}:3260 -o show |
-          grep -Eq '^node.startup[[:space:]]*=[[:space:]]*automatic$'
-  - check_id: network-mount-persistent
+      script: |
+        lun=/dev/disk/by-path/ip-{{host.node1.address}}:3260-iscsi-iqn.2026-08.internal.lab:storage-lun-0
+        [[ -e "$lun" ]] || fail "the LUN is not attached"
+        expect_eq "$(blkid -s TYPE -o value "$lun")" xfs "the filesystem on the LUN"
+        expect_eq "$(blkid -s LABEL -o value "$lun")" LAL_DATABASE "the label on the LUN"
+        source=$(findmnt -n -o SOURCE --mountpoint /srv/database) || fail "nothing is mounted at /srv/database"
+        expect_eq "$(readlink -f "$source")" "$(readlink -f "$lun")" "the device mounted at /srv/database"
+  - check_id: persistent-network-mount
     kind: command
     target: node2
-    description: fstab uses a stable filesystem ID with _netdev.
+    description: /etc/fstab mounts it by UUID or label, marked _netdev.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          awk '$2=="/srv/database" && $1 ~ /^(UUID=|LABEL=LAL_DATABASE$)/ &&
-               $4 ~ /(^|,)_netdev(,|$)/ {ok=1} END {exit !ok}' /etc/fstab
+      script: |
+        entry=$(fstab_field /srv/database SOURCE)
+        [[ -n "$entry" ]] || fail "/etc/fstab has no entry for /srv/database"
+        case "$entry" in UUID=*|LABEL=*) ;; *) fail "/etc/fstab mounts /srv/database by $entry; use UUID= or LABEL=" ;; esac
+        has_option "$(fstab_field /srv/database OPTIONS)" _netdev || fail "the /srv/database entry is not marked _netdev"
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/network-block-device-client.setup.yaml
 reference_solution: actions/network-block-device-client.solution.yaml
 alternate_solutions: [actions/network-block-device-client.alternate.yaml]
+rejected_solutions:
+  - actions/network-block-device-client.rejected-no-netdev.yaml
+  - actions/network-block-device-client.rejected-open-the-target.yaml

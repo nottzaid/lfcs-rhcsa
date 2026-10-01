@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: declare-both-mounts-in-fstab
+  - action_id: fix-owner-and-mode-by-hand
     target: node2
     arguments:
       - sudo
@@ -9,11 +9,12 @@ actions:
       - -c
       - |
         set -euo pipefail
-        printf '%s\n' \
-          'tmpfs /run/lal-cache tmpfs size=64M,mode=0750,uid=lalapp,gid=lalapp 0 0' \
+        printf '%s\n' 'tmpfs /run/lal-cache tmpfs size=64M 0 0' \
           '/srv/releases/current /opt/app/current none bind,ro 0 0' >> /etc/fstab
         systemctl daemon-reload
         mkdir -p /run/lal-cache
         mount /run/lal-cache
         mount /opt/app/current
+        chown lalapp:lalapp /run/lal-cache
+        chmod 0750 /run/lal-cache
         systemctl restart lal-webapp.service

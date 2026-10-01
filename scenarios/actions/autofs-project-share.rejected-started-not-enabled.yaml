@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: repoint-the-map-and-run-the-automounter
+  - action_id: fix-the-map-and-start-for-now
     target: node2
     arguments:
       - sudo
@@ -11,5 +11,4 @@ actions:
         set -euo pipefail
         sed -i 's#192\.0\.2\.99#{{host.node1.address}}#' /etc/auto.projects
         sed -i 's#--timeout=900#--timeout=300#' /etc/auto.master.d/projects.autofs
-        systemctl enable --now autofs.service
-        systemctl reload autofs.service
+        systemctl start autofs.service

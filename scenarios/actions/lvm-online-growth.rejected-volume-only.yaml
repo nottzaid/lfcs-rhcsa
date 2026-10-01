@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: add-the-disk-and-grow-volume-and-filesystem
+  - action_id: grow-the-volume-but-not-the-filesystem
     target: node2
     timeout_seconds: 120
     arguments:
@@ -10,6 +10,5 @@ actions:
       - -c
       - |
         set -euo pipefail
-        pvcreate /dev/disk/by-id/virtio-lal-spare
         vgextend vgdata /dev/disk/by-id/virtio-lal-spare
-        lvextend -r -L 1G vgdata/lvlogs
+        lvextend -L 1G vgdata/lvlogs
