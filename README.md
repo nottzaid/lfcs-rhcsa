@@ -30,19 +30,28 @@ checksum. The equivalent development command is `uv run labctl up`.
 
 ## What is included
 
-- 38 focused exercises, with at least one dedicated scenario for every published LFCS
-  competency.
-- 7 integrated capstones that combine administration domains into realistic incidents.
+- 38 focused scenarios, with at least one for every published LFCS competency, and 7
+  capstones: single incidents whose causes cross several domains.
 - 3 balanced 20-task mock rehearsals following the published domain weights.
-- Fresh disposable Rocky Linux 10.2 VMs, including multi-machine, extra-disk, networking,
-  LDAP, NFS, iSCSI, container, SELinux, and nested-libvirt labs.
-- State-based grading, reset, solution-independent checks, and reboot validation where
-  persistence is part of the task.
+- A practice path that orders scenarios by LFCS domain and difficulty, capstones last.
+- Fresh disposable Rocky Linux 10.2 VMs, including multi-machine labs on their own isolated
+  networks (routers, partners, clients, directory, file, and time servers), extra disks,
+  LDAP, NFS, iSCSI, containers, SELinux, and libvirt guests inside a lab VM.
 
-The scenario names and suggested times are visible before launch. **Info** shows the task,
-competency mapping, sources, topology, and affected VM names. **Run** starts the machines in
-the background; **Check** grades the observable end state. You remain free to use the VM
-console in virt-manager or the displayed SSH command.
+Every scenario starts from a situation a working administrator would actually meet,
+usually a symptom, and teaches through the lab itself:
+
+- **Done means** lists the requirements the checks enforce, in plain words.
+- **Hints** go from where to look, to what is wrong, to which mechanism fixes it; they
+  name tools and manual pages and never paste the solution.
+- **Check** grades the machines' behavior and explains every unmet requirement. When a
+  task requires persistence, a passing check reboots the machines and grades them again.
+- **Debrief** opens after a solve, or on request: what was wrong, a clean fix and why it
+  works, how to verify it yourself, and the fixes that look right but are not.
+
+**Info** shows the task, competency mapping, sources, and topology before launch. **Run**
+starts the machines in the background. You remain free to use the VM console in
+virt-manager or the displayed SSH command.
 
 ## Non-negotiable properties
 
@@ -52,10 +61,11 @@ console in virt-manager or the displayed SSH command.
 - Checks evaluate resulting system behavior, not command history.
 - Persistence checks reboot machines when the task requires it.
 - Every scenario is replayed from a clean build with a known-good repair.
+- Every scenario ships near-miss repairs that the checks must refuse.
 - Reset behavior is tested as seriously as successful completion.
 - Certification scope comes only from the certification vendor's published objectives.
-- Technical behavior is sourced from upstream, distribution, and installed documentation.
-- The documented quick-start path is replayed on clean supported hosts before release.
+- Technical behavior is sourced from upstream, distribution, and installed documentation;
+  every man page a scenario cites is checked against the lab image.
 
 ## Verification contract
 
@@ -65,9 +75,12 @@ Before a scenario can be included in a release, automation must demonstrate:
 2. Its reference repair satisfies all required checks.
 3. The repaired state remains correct after any required reboot.
 4. Resetting the scenario recreates the original failing state.
+5. Every alternate repair passes too, so the checks do not demand one particular method.
+6. Every rejected near-miss repair fails, live or after the reboot, so the checks tell a
+   fix from a workaround.
 
-The web application and CLI will call the same application service used by this verification
-harness. No scenario logic may exist only in the browser.
+The web application and CLI call the same application services as this verification
+harness. No scenario logic exists only in the browser.
 
 ## Curriculum and evidence
 
@@ -77,16 +90,14 @@ official weighting, project and book audits, distribution decision, and coverage
 [`docs/research`](docs/research) and [`curricula`](curricula). Each scenario also records its
 competency mapping and upstream, distribution, or man-page sources in its manifest.
 
-All 45 released scenarios pass the permanent disposable-VM acceptance contract against the
-pinned Rocky Linux 10.2 image. Maintainers can replay one with:
+All 45 released scenarios pass this contract against the pinned Rocky Linux 10.2 lab image
+(`rocky-10.2-lab-v2`). Maintainers can replay one with:
 
 ```bash
 uv run labctl scenario verify SCENARIO_ID
 ```
 
-The verifier proves broken initial state, reference repair, required reboot persistence, clean
-reset, and every alternate repair. The browser and CLI call the same application services; no
-grader behavior exists only in the UI.
+How to write a scenario that meets the standard is in [docs/authoring.md](docs/authoring.md).
 
 Session state, machine access details, check history, best score, and resource ownership survive
 website restarts in a private SQLite database. Only resources registered to a lab session can be
@@ -103,6 +114,7 @@ uv run labctl scenario start local-account-repair
 The returned session UUID drives the remaining operations:
 
 ```bash
+uv run labctl scenario list
 uv run labctl scenario check SESSION_UUID
 uv run labctl scenario status SESSION_UUID
 uv run labctl scenario reset SESSION_UUID
@@ -125,6 +137,19 @@ Live KVM verification is deliberately separate from fast tests:
 
 ```bash
 LAL_RUN_SCENARIO_LIVE=1 \
-LAL_BASE_IMAGE=runtime/cache/images/rocky-10.2-lab-v1.qcow2 \
+LAL_BASE_IMAGE=runtime/cache/images/rocky-10.2-lab-v2.qcow2 \
 uv run pytest tests/live/test_verified_scenario_replay.py
 ```
+
+## Troubleshooting
+
+- **Guests are slow to start services, or SSSD and NFS time out.** Guests resolve names
+  through libvirt's DNS service on `192.168.122.1`. A host firewall that blocks it, for
+  example ufw's default incoming policy, makes every lookup wait for a timeout. Allow DNS
+  from the libvirt bridge: `sudo ufw allow in on virbr0 to any port 53`.
+- **The libvirt labs run slowly.** They start a small guest inside a lab VM. With nested
+  KVM enabled on the host (`cat /sys/module/kvm_*/parameters/nested` prints `Y` or `1`) it
+  runs at full speed; without it, QEMU emulates the CPU and the guest still works, slowly.
+- **A crash left lab VMs behind.** `uv run labctl scenario list` shows every session that
+  was not destroyed, and `uv run labctl scenario destroy SESSION_UUID` removes one session's
+  domains, disks, and networks; only resources registered to that session are touched.

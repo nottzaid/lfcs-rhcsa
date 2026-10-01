@@ -31,6 +31,7 @@ from sysadmin_lab.composition import open_vm_runtime
 from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.images import ImageVerificationError, verify_installation_source
 from sysadmin_lab.domain.models import ScenarioManifest
+from sysadmin_lab.domain.sessions import SessionStatus
 
 app = typer.Typer(help="Operate and verify the local Linux administration lab.")
 catalog_app = typer.Typer(help="Inspect and validate scenario catalogs.")
@@ -395,6 +396,32 @@ def check_scenario(
     _show_learner_report(report)
     if not report.solved:
         raise typer.Exit(code=1)
+
+
+@scenario_app.command("list")
+def list_scenarios(
+    include_destroyed: Annotated[
+        bool, typer.Option("--all", help="Include sessions that were already destroyed.")
+    ] = False,
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
+) -> None:
+    """List scenario sessions, for example to find ones a crash left behind."""
+    try:
+        with open_vm_runtime(runtime_root) as runtime:
+            sessions = [
+                (state, runtime.machines.list(state.session_id))
+                for state in runtime.sessions.list_all(limit=1000)
+                if include_destroyed or state.status is not SessionStatus.DESTROYED
+            ]
+    except Exception as exc:
+        typer.echo(f"scenario list failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not sessions:
+        typer.echo("no scenario sessions")
+        return
+    for state, machines in sessions:
+        hosts = ",".join(machine.host_name for machine in machines) or "-"
+        typer.echo(f"{state.session_id}  {state.status.value:<10}  {state.scenario_id}  {hosts}")
 
 
 @scenario_app.command("status")

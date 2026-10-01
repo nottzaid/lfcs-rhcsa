@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from contextlib import nullcontext
 from pathlib import Path
 from socket import AF_INET, SOCK_STREAM, socket
 from types import SimpleNamespace
@@ -9,6 +10,8 @@ import pytest
 import yaml
 from typer.testing import CliRunner
 
+from sysadmin_lab.adapters.sqlite_machines import SqliteSessionMachineRepository
+from sysadmin_lab.adapters.sqlite_sessions import SqliteSessionRepository
 from sysadmin_lab.application.checking import CheckReport, CheckResult
 from sysadmin_lab.application.ports import CheckObservation
 from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
@@ -290,3 +293,54 @@ def test_scenario_check_reports_the_persistence_phase(
 
     assert expected in checked.stdout
     assert checked.exit_code == (0 if after_reboot else 1)
+
+
+def test_scenario_list_shows_what_the_state_store_holds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    state_path = tmp_path / "state.db"
+    left_behind = (
+        SessionState.declared("nfs-client-recovery")
+        .transition(SessionStatus.PROVISIONING)
+        .transition(SessionStatus.READY)
+    )
+    finished = (
+        SessionState.declared("local-account-repair")
+        .transition(SessionStatus.PROVISIONING)
+        .transition(SessionStatus.FAILED, error="boot timed out")
+        .transition(SessionStatus.DESTROYING)
+        .transition(SessionStatus.DESTROYED)
+    )
+    with (
+        SqliteSessionRepository(state_path) as sessions,
+        SqliteSessionMachineRepository(state_path) as machines,
+    ):
+        sessions.create(left_behind)
+        sessions.create(finished)
+        for host in ("node1", "node2"):
+            identity = domain_identity("nfs-client-recovery", left_behind.session_id, host)
+            machines.add(
+                SessionMachine(
+                    left_behind.session_id,
+                    host,
+                    identity,
+                    "labadmin",
+                    "secret",
+                    (tmp_path / "key").resolve(),
+                )
+            )
+        runtime = SimpleNamespace(sessions=sessions, machines=machines)
+        monkeypatch.setattr("sysadmin_lab.cli.open_vm_runtime", lambda _path: nullcontext(runtime))
+
+        listed = runner.invoke(app, ["scenario", "list"])
+        everything = runner.invoke(app, ["scenario", "list", "--all"])
+
+    assert listed.exit_code == 0
+    assert listed.stdout.split() == [
+        str(left_behind.session_id),
+        "ready",
+        "nfs-client-recovery",
+        "node1,node2",
+    ]
+    assert str(finished.session_id) in everything.stdout
+    assert "destroyed" in everything.stdout
