@@ -1,0 +1,46 @@
+schema_version: 1
+actions:
+  - action_id: export-the-homes-from-node1
+    target: node1
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.66.0.10/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null
+        for user in alice:6001 bob:6002; do
+          name=${user%:*} id=${user#*:}
+          groupadd --gid "$id" "$name"
+          useradd --uid "$id" --gid "$id" --no-create-home "$name"
+          install -d -o "$name" -g "$name" -m 0700 "/exports/home/$name"
+          printf 'welcome, %s\n' "$name" > "/exports/home/$name/welcome.txt"
+          chown "$name:$name" "/exports/home/$name/welcome.txt"
+        done
+        printf '/exports/home 10.66.0.0/24(rw,sync,no_subtree_check,root_squash)\n' > /etc/exports.d/homes.exports
+        setsebool -P nfs_export_all_rw 1
+        systemctl enable --now nfs-server.service
+        exportfs -ra
+        firewall-cmd --quiet --permanent --add-service=nfs
+        firewall-cmd --quiet --reload
+  - action_id: create-the-users-on-node2
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.66.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null
+        for user in alice:6001 bob:6002; do
+          name=${user%:*} id=${user#*:}
+          groupadd --gid "$id" "$name"
+          useradd --uid "$id" --gid "$id" --create-home "$name"
+        done

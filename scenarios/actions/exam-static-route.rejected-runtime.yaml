@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: route-until-reboot
+    target: node2
+    arguments: [sudo, --, ip, route, add, 10.64.2.0/24, via, 10.64.1.1, dev, lan0]

@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: record-the-existing-swap
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -m 0755 /usr/share/lal-exam
+        swapon --show=NAME --noheadings | head -n 1 > /usr/share/lal-exam/existing-swap
+        [[ -s /usr/share/lal-exam/existing-swap ]]

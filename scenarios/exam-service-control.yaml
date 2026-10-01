@@ -1,0 +1,103 @@
+schema_version: 1
+scenario_id: exam-service-control
+version: 1
+status: verified
+collection: exam
+title: Silence a listener and lower a service's priority
+summary: Find which service owns a port and mask it, then set a service's niceness for good.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`:
+
+  1. A process is listening on TCP port 8125. Find the systemd service that runs it, stop
+     it, and make sure it cannot be started again, not even by another unit that depends
+     on it.
+  2. `lal-batch.service` must run its process with a nice value of 10, now and after every
+     restart of the service or reboot of node2.
+requirements:
+  - "Nothing listens on TCP port 8125, and the service behind it is masked."
+  - "`lal-batch.service` is running, its process has nice value 10, and the unit itself sets it."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo ss -ltnp 'sport = :8125'               # users:(("python3",pid=...))
+  systemctl status <pid>                     # names the unit: lal-statsd.service
+  sudo systemctl mask --now lal-statsd.service
+  sudo systemctl edit lal-batch.service      # [Service] then Nice=10
+  sudo systemctl restart lal-batch.service
+  ```
+
+  `systemctl status PID` maps any process to the unit that owns it. `mask` links the unit
+  to `/dev/null`, so nothing can start it: not you, not a dependency, not a boot target.
+  `disable` only removes the unit's own install links, and `lal-dashboard.service` still
+  wants it.
+
+  `Nice=` in the unit applies to every process systemd starts for it. `renice` changes
+  one running process, and the next restart starts a fresh one at nice 0.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl is-enabled lal-statsd.service     # masked
+  ps -o ni=,cmd= -p "$(systemctl show -p MainPID --value lal-batch.service)"
+  systemctl show -p Nice lal-batch.service
+  ```
+
+  ## Tempting but wrong
+
+  - **`systemctl disable --now`.** It stops the service, but `lal-dashboard.service` wants
+    it, so the next boot starts it again.
+  - **`renice -n 10 -p PID`.** Correct until the service restarts.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.processes-services
+    title: Diagnose, identify, manage, and troubleshoot processes and services
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Find which process owns a socket
+    man_page: ss(8)
+  - kind: man-page
+    title: Mask, stop, and inspect units
+    man_page: systemctl(1)
+  - kind: man-page
+    title: Nice= and the rest of the execution environment
+    man_page: systemd.exec(5)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: listener-gone-for-good
+    kind: command
+    target: node2
+    description: Nothing listens on TCP port 8125, and lal-statsd.service is masked.
+    parameters:
+      sudo: true
+      script: |
+        listener=$(ss -Hltnp 'sport = :8125')
+        [[ -z "$listener" ]] || fail "something still listens on port 8125: ${listener##* }"
+        expect_eq "$(systemctl is-enabled lal-statsd.service 2>/dev/null)" masked "lal-statsd.service"
+  - check_id: batch-niceness
+    kind: command
+    target: node2
+    description: lal-batch.service runs at nice 10, and its unit sets Nice=10.
+    parameters:
+      script: |
+        expect_eq "$(systemctl is-active lal-batch.service)" active "lal-batch.service"
+        expect_eq "$(unit_value lal-batch.service Nice)" 10 "Nice= in lal-batch.service"
+        pid=$(unit_value lal-batch.service MainPID)
+        expect_eq "$(ps -o ni= -p "$pid" | tr -d ' ')" 10 "the nice value of lal-batch's process"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-service-control.setup.yaml
+reference_solution: actions/exam-service-control.solution.yaml
+rejected_solutions:
+  - actions/exam-service-control.rejected-disable.yaml
+  - actions/exam-service-control.rejected-renice.yaml

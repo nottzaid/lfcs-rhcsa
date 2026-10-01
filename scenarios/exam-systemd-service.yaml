@@ -1,0 +1,127 @@
+schema_version: 1
+scenario_id: exam-systemd-service
+version: 1
+status: verified
+collection: exam
+title: Turn a program into a systemd service
+summary: Run a program as its own user, with its environment, restarted on failure and at boot.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, `/usr/local/bin/lal-sync` is a long-running program. Create a systemd service
+  `lal-sync.service` that:
+
+  - runs it as the user `syncer`;
+  - sets the environment variable `SYNC_TARGET=/srv/sync` for it;
+  - restarts it 5 seconds after it fails;
+  - starts at boot.
+
+  Start it now.
+requirements:
+  - "`lal-sync.service` is running and starts at boot."
+  - "Its process runs as `syncer` with `SYNC_TARGET=/srv/sync`."
+  - "When its process dies, systemd starts it again after 5 seconds."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo tee /etc/systemd/system/lal-sync.service <<'UNIT'
+  [Unit]
+  Description=Sync agent
+
+  [Service]
+  User=syncer
+  Environment=SYNC_TARGET=/srv/sync
+  ExecStart=/usr/local/bin/lal-sync
+  Restart=on-failure
+  RestartSec=5
+
+  [Install]
+  WantedBy=multi-user.target
+  UNIT
+  sudo systemctl daemon-reload
+  sudo systemctl enable --now lal-sync.service
+  ```
+
+  Units you write belong in `/etc/systemd/system`. `daemon-reload` makes systemd read the
+  new file; `enable` links it into `multi-user.target` so it starts at boot, and `--now`
+  starts it as well. `Restart=on-failure` covers a non-zero exit and a fatal signal.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl status lal-sync.service
+  systemctl show -p User,Environment,Restart,RestartUSec lal-sync.service
+  sudo kill -9 "$(systemctl show -p MainPID --value lal-sync.service)"; sleep 6; systemctl status lal-sync.service
+  ```
+
+  ## Tempting but wrong
+
+  - **No `Restart=`.** The default is `no`: a crash leaves the service down.
+  - **No `User=`.** The program runs as root.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.services
+    title: Create, configure, and troubleshoot services
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Restart= and RestartSec=
+    man_page: systemd.service(5)
+  - kind: man-page
+    title: User= and Environment=
+    man_page: systemd.exec(5)
+  - kind: man-page
+    title: Enable and start units
+    man_page: systemctl(1)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: running-at-boot
+    kind: command
+    target: node2
+    description: lal-sync.service is running and starts at boot.
+    parameters:
+      timeout_seconds: 20
+      script: |
+        expect_eq "$(systemctl is-enabled lal-sync.service 2>/dev/null)" enabled "lal-sync.service at boot"
+        retry 10 systemctl is-active --quiet lal-sync.service || fail "lal-sync.service is $(systemctl is-active lal-sync.service)"
+  - check_id: user-and-environment
+    kind: command
+    target: node2
+    description: Its process runs as syncer with SYNC_TARGET=/srv/sync.
+    parameters:
+      timeout_seconds: 20
+      script: |
+        pid=$(unit_value lal-sync.service MainPID)
+        (( pid > 0 )) || fail "lal-sync.service has no running process"
+        expect_eq "$(ps -o user= -p "$pid")" syncer "the user lal-sync runs as"
+        reported() { [[ "$(cat /srv/sync/status 2>/dev/null)" == "target=/srv/sync user=syncer" ]]; }
+        retry 8 reported || fail "lal-sync reports: $(cat /srv/sync/status 2>/dev/null || echo nothing)"
+  - check_id: restarted-after-failure
+    kind: command
+    target: node2
+    description: When its process dies, systemd starts it again after 5 seconds.
+    parameters:
+      sudo: true
+      timeout_seconds: 40
+      script: |
+        expect_eq "$(unit_value lal-sync.service RestartUSec)" 5s "the restart delay"
+        old=$(unit_value lal-sync.service MainPID)
+        (( old > 0 )) || fail "lal-sync.service has no running process"
+        kill -9 "$old"
+        restarted() { new=$(unit_value lal-sync.service MainPID); (( new > 0 && new != old )); }
+        retry 20 restarted || fail "systemd did not start lal-sync again after its process died"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-systemd-service.setup.yaml
+reference_solution: actions/exam-systemd-service.solution.yaml
+rejected_solutions:
+  - actions/exam-systemd-service.rejected-no-restart.yaml
+  - actions/exam-systemd-service.rejected-as-root.yaml

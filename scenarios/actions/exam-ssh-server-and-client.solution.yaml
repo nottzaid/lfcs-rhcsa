@@ -1,0 +1,38 @@
+schema_version: 1
+actions:
+  - action_id: authorize-the-key-and-set-the-policy
+    target: node1
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -o ops -g ops -m 0700 /home/ops/.ssh
+        printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJvDXqgrKTYiUkc7Ab6qQjON5Qu8ljZgamAS6U55Zrsg ops@node2' \
+          >> /home/ops/.ssh/authorized_keys
+        chown ops:ops /home/ops/.ssh/authorized_keys
+        chmod 0600 /home/ops/.ssh/authorized_keys
+        restorecon -R /home/ops/.ssh
+        printf '%s\n' 'Port 22' 'Port 2022' 'PermitRootLogin no' 'PasswordAuthentication no' \
+          'Match Group rescue' '    PasswordAuthentication yes' > /etc/ssh/sshd_config.d/05-legacy.conf
+        semanage port -a -t ssh_port_t -p tcp 2022
+        firewall-cmd --quiet --permanent --add-port=2022/tcp
+        firewall-cmd --quiet --reload
+        sshd -t
+        systemctl restart sshd.service
+  - action_id: add-the-client-alias
+    target: node2
+    arguments:
+      - sudo
+      - -u
+      - ops
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '%s\n' 'Host n1' '    HostName 10.62.0.10' '    User ops' '    Port 2022' >> ~/.ssh/config
+        chmod 0600 ~/.ssh/config

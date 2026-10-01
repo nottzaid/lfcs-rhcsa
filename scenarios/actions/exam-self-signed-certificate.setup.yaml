@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: nothing-to-prepare
+    target: node2
+    arguments: [sudo, --, rm, -f, /etc/pki/tls/private/portal.key, /etc/pki/tls/certs/portal.crt]

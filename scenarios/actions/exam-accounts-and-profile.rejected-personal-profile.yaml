@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: variable-for-ana-only
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        groupadd -g 5100 finance
+        useradd -u 5101 -g finance -G wheel -m -d /home/ana -s /bin/bash ana
+        chage -M 90 ana
+        printf 'export LEDGER_HOME=/srv/ledger\n' >> /home/ana/.bash_profile

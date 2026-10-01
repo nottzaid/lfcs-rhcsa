@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: open-it-to-everyone
+    target: node2
+    arguments: [sudo, --, chmod, -R, "777", /srv/projects/atlas]

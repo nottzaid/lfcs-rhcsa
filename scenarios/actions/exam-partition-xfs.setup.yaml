@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: blank-the-log-disk
+    target: node2
+    arguments: [sudo, --, wipefs, --all, --quiet, /dev/disk/by-id/virtio-lal-logs]
