@@ -102,7 +102,7 @@ class NicSpec(StrictModel):
 class HostSpec(StrictModel):
     name: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
     image: str = Field(min_length=1)
-    memory_mib: int = Field(default=1024, ge=256)
+    memory_mib: int = Field(default=1024, ge=1024)
     vcpus: int = Field(default=1, ge=1)
     nics: tuple[NicSpec, ...] = ()
     disks: tuple[DiskSpec, ...] = ()
