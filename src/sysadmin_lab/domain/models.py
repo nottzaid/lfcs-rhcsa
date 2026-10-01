@@ -104,7 +104,6 @@ class HostSpec(StrictModel):
     image: str = Field(min_length=1)
     memory_mib: int = Field(default=1024, ge=256)
     vcpus: int = Field(default=1, ge=1)
-    nested_virtualization: bool = False
     nics: tuple[NicSpec, ...] = ()
     disks: tuple[DiskSpec, ...] = ()
 

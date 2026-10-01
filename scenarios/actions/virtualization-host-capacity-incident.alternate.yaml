@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: set-persistent-host-controls
+  - action_id: cap-and-deprioritize-the-batch-job-with-a-drop-in
     target: node2
     arguments:
       - sudo
@@ -8,15 +8,12 @@ actions:
       - bash
       - -c
       - |
-        echo 'vm.swappiness=10' > /etc/sysctl.d/80-lal-capacity.conf
-        sysctl --system >/dev/null
-        systemctl set-property lal-capacity-cpu.service CPUQuota=30%
-        systemctl set-property lal-capacity-io.service IOWeight=10
-        install -d /etc/systemd/system/lal-capacity-cpu.service.d
-        printf '%s\n' '[Service]' 'Nice=5' > /etc/systemd/system/lal-capacity-cpu.service.d/priority.conf
+        set -euo pipefail
+        install -d /etc/systemd/system/lal-reindex.service.d
+        printf '[Service]\nCPUQuota=50%%\nNice=10\n' > /etc/systemd/system/lal-reindex.service.d/50-batch-policy.conf
         systemctl daemon-reload
-        systemctl restart lal-capacity-cpu.service lal-capacity-io.service
-  - action_id: define-alternate-bridge-profiles
+        systemctl restart lal-reindex.service
+  - action_id: bridge-with-default-stp
     target: node2
     arguments:
       - sudo
@@ -24,20 +21,28 @@ actions:
       - bash
       - -c
       - |
-        nmcli connection add type bridge ifname br-lab con-name lal-capacity-bridge
-        nmcli connection modify lal-capacity-bridge ipv4.method manual ipv4.addresses 192.0.2.50/24 ipv4.never-default yes ipv6.method disabled connection.autoconnect yes
-        nmcli connection add type dummy ifname lab-port con-name lal-capacity-port master br-lab slave-type bridge
-        nmcli connection modify lal-capacity-port connection.autoconnect yes
-        nmcli connection up lal-capacity-bridge
-  - action_id: import-alternate-capacity-guest
+        set -euo pipefail
+        nmcli connection delete lab
+        nmcli connection add type bridge ifname br-lab con-name lab-bridge \
+          ipv4.method manual ipv4.addresses 10.88.0.20/24 ipv6.method disabled
+        nmcli connection add type ethernet ifname lab0 con-name lab-bridge-lab0 controller br-lab port-type bridge
+        nmcli connection up lab-bridge
+        nmcli connection up lab-bridge-lab0
+  - action_id: redefine-the-vm-on-the-bridge
     target: node2
-    timeout_seconds: 120
     arguments:
       - sudo
       - --
       - bash
       - -c
       - |
-        qemu-img create -f qcow2 /var/lib/libvirt/images/capacity-guest.qcow2 768M
-        virt-install --connect qemu:///system --virt-type qemu --name capacity-guest --memory 384 --vcpus 1 --disk path=/var/lib/libvirt/images/capacity-guest.qcow2,format=qcow2,bus=virtio --network bridge=br-lab --import --osinfo generic --boot uefi --graphics none --noautoconsole
-        virsh -c qemu:///system autostart capacity-guest
+        set -euo pipefail
+        virsh dumpxml lal-utility |
+          sed "s#<interface type='network'>#<interface type='bridge'>#; s#<source network='default'[^/]*/>#<source bridge='br-lab'/>#" \
+          > /tmp/lal-utility.xml
+        virsh define /tmp/lal-utility.xml >/dev/null
+        virsh autostart lal-utility >/dev/null
+        virsh shutdown lal-utility >/dev/null 2>&1 || true
+        for _ in $(seq 10); do [[ $(virsh domstate lal-utility) == "shut off" ]] && break; sleep 1; done
+        virsh destroy lal-utility >/dev/null 2>&1 || true
+        virsh start lal-utility >/dev/null

@@ -1,9 +1,9 @@
 schema_version: 1
 actions:
-  - action_id: cap-the-batch-job
+  - action_id: stop-the-batch-job
     target: node2
-    arguments: [sudo, --, systemctl, set-property, lal-reindex.service, CPUQuota=50%]
-  - action_id: move-the-host-onto-a-bridge
+    arguments: [sudo, --, systemctl, disable, --now, lal-reindex.service]
+  - action_id: move-the-host-and-vm-onto-a-bridge
     target: node2
     arguments:
       - sudo
@@ -18,15 +18,6 @@ actions:
         nmcli connection delete lab
         nmcli connection up br-lab
         nmcli connection up br-lab-port
-  - action_id: attach-the-vm-to-the-bridge
-    target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - |
-        set -euo pipefail
         virt-xml lal-utility --edit --network bridge=br-lab >/dev/null
         virsh destroy lal-utility >/dev/null
         virsh start lal-utility >/dev/null
