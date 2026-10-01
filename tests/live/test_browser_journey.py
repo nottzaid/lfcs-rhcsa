@@ -11,6 +11,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -90,7 +91,7 @@ def lab_site() -> Iterator[tuple[str, Path]]:
             time.sleep(2)
         yield url, project / "runtime"
     finally:
-        server.terminate()
+        server.send_signal(signal.SIGINT)  # Ctrl+C, as the site tells learners to stop it
         server.wait(timeout=30)
         with open_vm_runtime(project / "runtime") as runtime:
             for state in runtime.sessions.list_all():
