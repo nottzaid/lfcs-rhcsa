@@ -45,6 +45,22 @@ four is right. Hints name tools and manual pages; they do not paste the solution
 **`summary`** is one line in the catalog. For a troubleshooting scenario it describes the
 symptom, never the diagnosis.
 
+Quote real messages, exactly as Rocky Linux prints them: run the setup on a guest and copy
+the journal line, the `curl` error, the AVC. A debrief that paraphrases an error teaches
+the learner to look for something that never appears. Cite only manual pages the lab image
+has; the live boot test checks every cited page against a real guest, and anything else is
+an upstream link.
+
+The contract tests enforce the shape: requirements, two to four hints, a debrief with
+`## What was wrong` (for `troubleshoot` and `fix` scenarios), `## Check it yourself`, and
+`## Tempting but wrong`, at least one rejected solution, and objective titles exactly as
+the curriculum words them.
+
+A **capstone** (`difficulty: exam`) is one incident whose causes cross domains, not a list
+of unrelated chores: a full disk that also hides a missing fstab entry, a rebuilt host whose
+job trips over a stale automount, a mistyped tmpfs, and a drifting clock. Let the learner
+meet the faults in the order a real investigation would.
+
 Never leak the platform into the story. There is no "lab controller" in a scenario, and a
 single-machine scenario does not tell the learner not to reboot a `node1` that does not
 exist.
@@ -84,7 +100,16 @@ verdict.
 5. **Explain failure.** Script checks run with the host-owned helper library in
    `src/sysadmin_lab/adapters/check_library.sh`. On failure, end with `fail "<what is
    wrong>"` or `expect_eq`, so the learner reads "UID is 4301; expected 4201" instead of
-   "exit status 1".
+   "exit status 1". A `service` check quotes a failed unit's own last log line by itself.
+6. **Grade from the machine that would notice.** In a multi-machine scenario, request the
+   page from the client, open the forbidden port from the partner, and log in from the
+   runner. A check on the server alone cannot see a firewall or a route.
+7. **Give checks realistic time.** A check has ten seconds unless it asks for more.
+   `semanage` takes 12 to 18 seconds on a cold cache right after a boot, hashing hundreds
+   of megabytes takes longer still, and some state converges only after a moment: IPv6
+   duplicate address detection, a bridge's STP delay, libvirt autostart. Wrap those in
+   `retry`, and set `timeout_seconds`. Actions get 120 seconds by default; a busy host is
+   slower than a developer's idle one.
 
 Check `description`s are shown next to every result. Write them as the requirement they
 grade.
@@ -109,6 +134,10 @@ Run one scenario's contract with:
 uv run labctl scenario verify SCENARIO_ID
 ```
 
+While writing a scenario, iterate on a live session instead: `labctl scenario start`, try
+the setup's symptom and each solution by hand, and `labctl scenario check` after each one.
+Verification replays everything from scratch and takes ten to thirty minutes per scenario.
+
 ## Networks
 
 Hosts can join isolated scenario networks: plain layer-2 segments with no host address, no
@@ -121,7 +150,7 @@ topology:
   networks:
     - {name: lan, cidr: 10.70.0.0/24}
   hosts:
-    - {name: router, image: rocky-10.2-lab-v1, nics: [{network: lan, name: lan0}]}
+    - {name: router, image: rocky-10.2-lab-v2, nics: [{network: lan, name: lan0}]}
 ```
 
 The management NIC (`enp1s0`) on libvirt's default network carries SSH for the learner and
