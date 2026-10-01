@@ -1,43 +1,14 @@
 schema_version: 1
 actions:
-  - action_id: create-dual-stack-profile
+  - action_id: give-node2-its-own-ipv6-address
     target: node2
-    arguments:
-      - sudo
-      - --
-      - nmcli
-      - connection
-      - add
-      - type
-      - dummy
-      - ifname
-      - mgmt0
-      - con-name
-      - lal-mgmt
-      - ipv4.method
-      - manual
-      - ipv4.addresses
-      - 192.0.2.10/24
-      - ipv4.never-default
-      - "yes"
-      - ipv6.method
-      - manual
-      - ipv6.addresses
-      - 2001:db8:42::10/64
-      - ipv6.never-default
-      - "yes"
-      - connection.autoconnect
-      - "yes"
-  - action_id: activate-management-profile
+    arguments: [sudo, --, nmcli, connection, modify, lab, ipv6.addresses, fd00:30::12/64]
+  - action_id: activate-the-profile
     target: node2
-    arguments: [sudo, --, nmcli, connection, up, lal-mgmt]
-  - action_id: configure-management-names
+    arguments: [sudo, --, nmcli, connection, up, lab]
+  - action_id: set-node2-hostname
     target: node2
-    arguments:
-      - sudo
-      - --
-      - bash
-      - -c
-      - >-
-        hostnamectl set-hostname node2.lal.invalid;
-        printf '%s\n' '192.0.2.10 app.internal' '2001:db8:42::10 app.internal' >> /etc/hosts
+    arguments: [sudo, --, hostnamectl, set-hostname, node2.lab.internal]
+  - action_id: drop-db-loopback-line
+    target: node2
+    arguments: [sudo, --, sed, -i, '/^127\.0\.1\.1[[:space:]]\+db\.lab\.internal/d', /etc/hosts]

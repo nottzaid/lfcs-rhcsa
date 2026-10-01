@@ -6,6 +6,6 @@ actions:
   - action_id: remove-the-debugging-override
     target: mon
     arguments: [sudo, --, bash, -c, "rm /etc/systemd/system/lal-monitor.service.d/debug.conf && systemctl daemon-reload && systemctl restart lal-monitor.service"]
-  - action_id: open-the-dashboard-port
+  - action_id: turn-the-firewall-off
     target: mon
-    arguments: [sudo, --, bash, -c, "firewall-cmd --quiet --permanent --add-port=9180/tcp && firewall-cmd --quiet --reload"]
+    arguments: [sudo, --, systemctl, disable, --now, firewalld.service]

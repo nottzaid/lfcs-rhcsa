@@ -1,6 +1,55 @@
 schema_version: 1
 actions:
-  - action_id: build-routed-namespace-topology
+  - action_id: build-the-gateway
+    target: gw
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname transit0 con-name transit ipv4.method manual \
+          ipv4.addresses 10.50.0.1/24 ipv6.method disabled connection.zone trusted >/dev/null
+        nmcli connection add type ethernet ifname services0 con-name services ipv4.method manual \
+          ipv4.addresses 172.20.30.1/24 ipv6.method disabled connection.zone trusted >/dev/null
+        nmcli connection up transit >/dev/null
+        nmcli connection up services >/dev/null
+        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-gateway.conf
+        sysctl --quiet --load /etc/sysctl.d/90-gateway.conf
+  - action_id: start-the-records-service
+    target: records
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname services0 con-name services ipv4.method manual \
+          ipv4.addresses 172.20.30.40/24 ipv4.routes '10.50.0.0/24 172.20.30.1' ipv6.method disabled >/dev/null
+        nmcli connection up services >/dev/null
+        install -d /srv/records
+        printf 'records-service\n' > /srv/records/index.html
+        cat > /etc/systemd/system/records-web.service <<'UNIT'
+        [Unit]
+        Description=Records service
+        After=network-online.target
+
+        [Service]
+        DynamicUser=yes
+        AmbientCapabilities=CAP_NET_BIND_SERVICE
+        ExecStart=/usr/bin/python3 -m http.server 80 --directory /srv/records
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now records-web.service
+        firewall-cmd --quiet --permanent --add-service=http
+        firewall-cmd --quiet --reload
+  - action_id: leave-node2-with-the-old-gateway
     target: node2
     arguments:
       - sudo
@@ -9,29 +58,6 @@ actions:
       - -c
       - |
         set -euo pipefail
-        nmcli con delete lal-uplink >/dev/null 2>&1 || true
-        ip netns delete lal-gateway >/dev/null 2>&1 || true
-        ip netns delete lal-service >/dev/null 2>&1 || true
-        ip link delete uplink0 >/dev/null 2>&1 || true
-        ip netns add lal-gateway
-        ip netns add lal-service
-        ip link add uplink0 type veth peer name gw0
-        ip link set gw0 netns lal-gateway
-        ip link add gw1 type veth peer name service0
-        ip link set gw1 netns lal-gateway
-        ip link set service0 netns lal-service
-        ip netns exec lal-gateway ip address add 192.0.2.2/24 dev gw0
-        ip netns exec lal-gateway ip address add 198.51.100.1/24 dev gw1
-        ip netns exec lal-gateway ip link set lo up
-        ip netns exec lal-gateway ip link set gw0 up
-        ip netns exec lal-gateway ip link set gw1 up
-        ip netns exec lal-gateway sysctl -w net.ipv4.ip_forward=1 >/dev/null
-        ip netns exec lal-service ip address add 198.51.100.2/24 dev service0
-        ip netns exec lal-service ip link set lo up
-        ip netns exec lal-service ip link set service0 up
-        ip netns exec lal-service ip route add default via 198.51.100.1
-        nmcli con add type ethernet ifname uplink0 con-name lal-uplink \
-          ipv4.method manual ipv4.addresses 192.0.2.1/24 ipv4.never-default yes ipv6.method disabled
-        nmcli con up lal-uplink
-        nmcli con modify lal-uplink ipv4.routes ''
-        ip route del 198.51.100.0/24 >/dev/null 2>&1 || true
+        nmcli connection add type ethernet ifname transit0 con-name transit ipv4.method manual \
+          ipv4.addresses 10.50.0.10/24 ipv4.routes '172.20.30.0/24 10.50.0.254' ipv6.method disabled >/dev/null
+        nmcli connection up transit >/dev/null

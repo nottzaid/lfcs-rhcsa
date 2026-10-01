@@ -3,18 +3,9 @@ actions:
   - action_id: label-the-new-port-for-web-traffic
     target: node2
     arguments: [sudo, --, semanage, port, -m, -t, http_port_t, -p, tcp, "8081"]
-  - action_id: health-check-the-pool
+  - action_id: take-app2-out-by-hand
     target: node2
-    arguments:
-      - sudo
-      - --
-      - sed
-      - -i
-      - -e
-      - 's/^\(    server app[12] [0-9.]*:8081\)$/\1 check/'
-      - -e
-      - '/^    balance roundrobin$/a\    option httpchk GET /health'
-      - /etc/haproxy/haproxy.cfg
+    arguments: [sudo, --, sed, -i, '/^    server app2 /d', /etc/haproxy/haproxy.cfg]
   - action_id: validate-and-reload
     target: node2
     arguments: [sudo, --, bash, -c, "haproxy -c -q -f /etc/haproxy/haproxy.cfg && systemctl reload haproxy.service"]

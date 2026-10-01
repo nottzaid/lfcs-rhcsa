@@ -1,21 +1,17 @@
 schema_version: 1
 actions:
-  - action_id: replace-client-chrony-configuration
+  - action_id: add-a-source-file
     target: node2
-    timeout_seconds: 120
     arguments:
       - sudo
       - --
       - bash
       - -c
       - |
-        cat > /etc/chrony.conf <<'EOF'
-        server {{host.node1.address}} iburst prefer minpoll 4 maxpoll 6
-        driftfile /var/lib/chrony/drift
-        makestep 1.0 3
-        rtcsync
-        logdir /var/log/chrony
-        EOF
+        set -euo pipefail
+        sed -i '/^server 10\.40\.0\.100 /d' /etc/chrony.conf
+        grep -q '^sourcedir /etc/chrony.d$' /etc/chrony.conf || echo 'sourcedir /etc/chrony.d' >> /etc/chrony.conf
+        install -d /etc/chrony.d
+        echo 'server 10.40.0.1 iburst' > /etc/chrony.d/site.sources
         systemctl enable chronyd.service
         systemctl restart chronyd.service
-        chronyc waitsync 30 0.5

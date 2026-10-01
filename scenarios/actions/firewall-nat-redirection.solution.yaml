@@ -1,45 +1,32 @@
 schema_version: 1
 actions:
-  - action_id: install-router-policy
-    target: node2
+  - action_id: zone-the-router-interfaces
+    target: router
     arguments:
       - sudo
       - --
       - bash
       - -c
       - |
-        install -d /etc/nftables
-        cat > /etc/nftables/lal-router.nft <<'EOF'
-        table inet lal_filter {
-          chain input {
-            type filter hook input priority filter; policy drop;
-            iifname "lo" accept
-            ct state established,related accept
-            tcp dport 22 accept
-            iifname "lan0" accept
-            iifname "wan0" tcp dport 80 accept
-            iifname "wan0" tcp dport 8080 accept
-          }
-          chain forward {
-            type filter hook forward priority filter; policy drop;
-            ct state established,related accept
-            iifname "lan0" oifname "wan0" accept
-          }
-        }
-        table ip lal_nat {
-          chain prerouting {
-            type nat hook prerouting priority dstnat; policy accept;
-            iifname "wan0" tcp dport 80 redirect to :8080
-          }
-          chain postrouting {
-            type nat hook postrouting priority srcnat; policy accept;
-            iifname "lan0" oifname "wan0" masquerade
-          }
-        }
-        EOF
-        grep -Fqx 'include "/etc/nftables/lal-router.nft"' /etc/sysconfig/nftables.conf ||
-          printf 'include "/etc/nftables/lal-router.nft"\n' >> /etc/sysconfig/nftables.conf
-        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-lal-router.conf
-        sysctl --load /etc/sysctl.d/90-lal-router.conf
-        nft -f /etc/nftables/lal-router.nft
-        systemctl enable --now nftables.service
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --zone=internal --change-interface=lan0
+        firewall-cmd --quiet --permanent --zone=external --change-interface=wan0
+  - action_id: redirect-public-http-to-the-service
+    target: router
+    arguments: [sudo, --, firewall-cmd, --permanent, --zone=external, "--add-forward-port=port=80:proto=tcp:toport=8080"]
+  - action_id: let-the-office-out
+    target: router
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --new-policy office-out
+        firewall-cmd --quiet --permanent --policy office-out --add-ingress-zone internal
+        firewall-cmd --quiet --permanent --policy office-out --add-egress-zone external
+        firewall-cmd --quiet --permanent --policy office-out --set-target ACCEPT
+  - action_id: load-the-permanent-configuration
+    target: router
+    arguments: [sudo, --, firewall-cmd, --reload]

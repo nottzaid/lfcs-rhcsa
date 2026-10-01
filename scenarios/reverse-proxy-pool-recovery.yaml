@@ -1,84 +1,206 @@
 schema_version: 1
 scenario_id: reverse-proxy-pool-recovery
-version: 1
+version: 2
 status: verified
-title: The reverse proxy sends traffic to a retired backend
-summary: Repair a persistent HTTP reverse proxy against a live backend service.
+title: Every request through the proxy fails
+summary: A load balancer broke when its backends moved ports, and it keeps sending traffic to a server in maintenance.
 estimated_minutes: 40
-task_type: fix
+task_type: troubleshoot
 difficulty: advanced
-task: >-
-  node1 serves the application on TCP port 8081. Configure either HAProxy or Nginx on node2
-  to listen on all addresses at TCP port 8080 and reverse-proxy HTTP requests to node1:8081.
-  Include an HTTP health check where the selected proxy supports it, validate the configuration,
-  and keep the proxy enabled and running. Remove the retired 192.0.2.99 backend.
+task: |
+  **node2** runs HAProxy on port 8080 in front of two application servers, **app1**
+  (10.20.0.11) and **app2** (10.20.0.12). Last night the application moved from port 80
+  to 8081, and the proxy configuration was updated to match. Since then every request to
+  `http://node2:8080/` fails:
+
+  ```text
+  <html><body><h1>503 Service Unavailable</h1>
+  No server is available to handle this request.
+  </body></html>
+  ```
+
+  Both application servers answer on port 8081 when you ask them directly. The
+  application team adds one more thing: when they put a server into maintenance, its
+  `/health` endpoint answers 503, and the proxy should stop sending it traffic until
+  `/health` answers 200 again. app2 is in maintenance right now.
+
+  Fix the proxy on node2, with SELinux left enforcing.
+requirements:
+  - "HAProxy on node2 runs, starts at boot, and answers every request on port 8080 successfully."
+  - "The pool still contains app1 and app2, and HAProxy itself takes a server out of rotation while its `/health` does not answer 200 (app2, right now)."
+  - "SELinux stays enforcing, and HAProxy's domain is not made permissive."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "Check what the proxy sees, not only what it serves: `journalctl -u haproxy` and `sudo ausearch -m AVC -ts recent`. A proxy is a network client of its backends, and SELinux decides which ports it may connect to."
+  - "`semanage port -l | grep -w 8081` shows how the new port is labeled; `getsebool -a | grep haproxy` lists HAProxy's booleans. A boolean set without `-P` lasts until the next reboot."
+  - "A `server` line without `check` is always assumed healthy. `option httpchk` makes the checks HTTP requests instead of bare TCP connections; see the HAProxy configuration manual under `/usr/share/doc/haproxy`. `echo 'show servers state' | sudo socat stdio /var/lib/haproxy/stats` shows what HAProxy thinks of each server."
+debrief: |
+  ## What was wrong
+
+  **SELinux.** HAProxy runs as `haproxy_t`, which may connect to web ports such as
+  `http_port_t` and `http_cache_port_t`. Port 8081 is labeled `transproxy_port_t`, so
+  every connection to the backends was denied:
+
+  ```text
+  avc:  denied  { name_connect } for  pid=1663 comm="haproxy" dest=8081
+    scontext=system_u:system_r:haproxy_t:s0 tcontext=system_u:object_r:transproxy_port_t:s0
+    tclass=tcp_socket permissive=0
+  ```
+
+  `sealert` puts it as "SELinux is preventing /usr/sbin/haproxy from name_connect access on
+  the tcp_socket port 8081." HAProxy's own log was no help: it logs to `/dev/log`, which does
+  not exist inside its chroot.
+
+  **The pool had no health checks.** With SELinux fixed, HAProxy sent every other request
+  to app2, which answers 503 in maintenance.
+
+  ## A clean fix
+
+  ```bash
+  sudo semanage port -m -t http_port_t -p tcp 8081
+  ```
+
+  ```text
+  backend app_servers
+      balance roundrobin
+      option httpchk GET /health
+      server app1 10.20.0.11:8081 check
+      server app2 10.20.0.12:8081 check
+  ```
+
+  ```bash
+  sudo haproxy -c -f /etc/haproxy/haproxy.cfg && sudo systemctl reload haproxy
+  ```
+
+  `-m` modifies the label of a port the policy already defines; `-a` refuses because 8081
+  is taken. `setsebool -P haproxy_connect_any 1` is the documented alternative; it lets
+  HAProxy connect to any port, which is broader than one relabeled port. With `check` and
+  `option httpchk`, HAProxy requests `/health` every two seconds; after three failures a
+  server is `DOWN` and gets no traffic, and after two successes it is back.
+
+  ## Check it yourself
+
+  ```bash
+  for i in $(seq 6); do curl -s http://127.0.0.1:8080/; done
+  echo 'show stat' | sudo socat stdio /var/lib/haproxy/stats | cut -d, -f1,2,18,37
+  getsebool haproxy_connect_any; sudo semanage port -l -C
+  ```
+
+  ## Tempting but wrong
+
+  - **`setsebool haproxy_connect_any 1` without `-P`.** Everything works until the next
+    reboot.
+  - **Deleting app2 from the pool.** Every request succeeds today, and app2 never gets
+    traffic again, even when the application team finishes maintenance.
+  - **`check` without `option httpchk`.** HAProxy then only checks that port 8081 accepts
+    connections, and a server in maintenance does.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: networking.proxies-load-balancers
-    title: Implement reverse proxies and load balancers
+    title: Configure reverse proxies and load balancers
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: upstream
-    title: HAProxy configuration manual
+    title: HAProxy configuration manual, option httpchk and check
     url: https://docs.haproxy.org/3.0/configuration.html
-  - kind: upstream
-    title: Nginx HTTP proxy module
-    url: https://nginx.org/en/docs/http/ngx_http_proxy_module.html
+  - kind: man-page
+    title: Port labels
+    man_page: semanage-port(8)
+  - kind: man-page
+    title: SELinux policy for HAProxy
+    man_page: haproxy_selinux(8)
 topology:
+  networks:
+    - {name: app, cidr: 10.20.0.0/24}
   hosts:
-    - name: node1
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
+      nics: [{network: app, name: app0}]
+    - name: app1
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: app, name: app0}]
+    - name: app2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: app, name: app0}]
 checks:
-  - check_id: backend-operational
-    kind: service
-    target: node1
-    description: The designated backend remains available.
-    parameters:
-      name: lal-backend.service
-      active: true
-      enabled: true
-  - check_id: proxy-operational-persistently
+  - check_id: every-request-answered
     kind: command
     target: node2
-    description: One supported reverse proxy is running and enabled.
+    description: HAProxy runs, starts at boot, and answers every request on port 8080.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          { systemctl is-active --quiet haproxy && systemctl is-enabled --quiet haproxy; } ||
-          { systemctl is-active --quiet nginx && systemctl is-enabled --quiet nginx; }
-  - check_id: proxied-response
+      timeout_seconds: 60
+      script: |
+        systemctl is-active --quiet haproxy.service || fail "haproxy is not running"
+        systemctl is-enabled --quiet haproxy.service || fail "haproxy does not start at boot"
+        failures=
+        all_answered() {
+          local count=0 body status
+          for _ in {1..10}; do
+            body=$(curl --silent --max-time 3 --write-out '\n%{http_code}' http://127.0.0.1:8080/)
+            status=${body##*$'\n'}
+            if [[ $status != 200 ]]; then
+              count=$((count + 1))
+              body=$(sed 's/<[^>]*>//g; /^$/d' <<<"${body%$'\n'*}" | head -n 1)
+              failures="$count of 10 requests failed; the last got $status: $body"
+            fi
+          done
+          (( count == 0 ))
+        }
+        retry 15 all_answered || fail "$failures"
+  - check_id: pool-health-checked
     kind: command
     target: node2
-    description: Requests through node2 return the live node1 application response.
-    parameters:
-      arguments: [curl, --fail, --silent, --max-time, "5", http://127.0.0.1:8080/]
-      stdout_equals: backend-one
-  - check_id: retired-backend-removed
-    kind: command
-    target: node2
-    description: Active proxy configuration contains node1 and not the retired address.
+    description: The pool keeps app1 and app2 and takes app2 out of rotation by health check.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - >-
-          files='/etc/haproxy/haproxy.cfg /etc/nginx/nginx.conf /etc/nginx/conf.d';
-          grep -Rqs '{{host.node1.address}}:8081' $files && ! grep -Rqs '192.0.2.99' $files
+      timeout_seconds: 60
+      script: |
+        server_state() {   # server_state SERVER: print "status check_status" for one pool member
+          echo 'show stat' | socat stdio /var/lib/haproxy/stats 2>/dev/null | awk -F, -v server="$1" '
+            NR == 1 { for (i = 1; i <= NF; i++) column[$i] = i; next }
+            $1 == "app_servers" && $2 == server { print $column["status"] "|" $column["check_status"] }'
+        }
+        [[ -S /var/lib/haproxy/stats ]] || fail "HAProxy's stats socket /var/lib/haproxy/stats is missing"
+        [[ -n $(server_state app1) ]] || fail "app1 is not in the app_servers pool"
+        [[ -n $(server_state app2) ]] || fail "app2 is not in the app_servers pool, so it will never get traffic again"
+        app2_down() { [[ $(server_state app2) == "DOWN|L7STS" ]]; }
+        if ! retry 15 app2_down; then
+          IFS='|' read -r status check <<<"$(server_state app2)"
+          case $status in
+            MAINT*) fail "app2 is disabled by hand, so it will not come back when it is healthy" ;;
+            "no check") fail "app2 is in rotation with no health check at all" ;;
+            DOWN*) [[ $check == L4* ]] && fail "HAProxy cannot connect to app2 at all (check result $check)" ;;&
+            UP*) fail "app2 is in rotation although its /health answers 503 (its check result: $check)" ;;
+            *) fail "app2 is $status, check result ${check:-none}; expected DOWN by a failed HTTP check" ;;
+          esac
+        fi
+        IFS='|' read -r status check <<<"$(server_state app1)"
+        [[ $status == UP* ]] || fail "app1 is $status (check result ${check:-none}); expected UP"
+  - check_id: selinux-still-enforcing
+    kind: command
+    target: node2
+    description: SELinux is enforcing and haproxy_t is not permissive.
+    parameters:
+      sudo: true
+      script: |
+        expect_eq "$(getenforce)" Enforcing "the SELinux mode"
+        ! semanage permissive -l 2>/dev/null | grep -qw haproxy_t || fail "the haproxy_t domain is permissive"
 persistence:
   reboot: true
-  hosts: [node1, node2]
+  hosts: [node2]
 setup: actions/reverse-proxy-pool-recovery.setup.yaml
 reference_solution: actions/reverse-proxy-pool-recovery.solution.yaml
 alternate_solutions: [actions/reverse-proxy-pool-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/reverse-proxy-pool-recovery.rejected-boolean-until-reboot.yaml
+  - actions/reverse-proxy-pool-recovery.rejected-drop-app2.yaml
+  - actions/reverse-proxy-pool-recovery.rejected-port-check.yaml

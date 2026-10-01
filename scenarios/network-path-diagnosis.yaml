@@ -1,78 +1,155 @@
 schema_version: 1
 scenario_id: network-path-diagnosis
-version: 1
+version: 2
 status: verified
-title: The monitoring endpoint works locally but not from its client
-summary: Diagnose and repair both name resolution and service binding across two hosts.
-estimated_minutes: 30
+title: The dashboard works only on its own host
+summary: A service answers locally and nowhere else; find every break between the client and the socket.
+estimated_minutes: 35
 task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  The monitoring service is managed by lal-monitor.service on node1 and should be reachable
-  from node2 as http://monitor.internal:9090/. It currently works only on node1 and the
-  client has stale name resolution. Diagnose the path, make monitor.internal resolve to
-  node1's session address on node2, and make the service listen on node1's non-loopback
-  interfaces. Keep the service enabled; do not disable the firewall globally.
+task: |
+  The monitoring dashboard runs on **mon** as `lal-monitor.service`, on port 9180. On mon
+  itself, `curl http://127.0.0.1:9180/` answers `monitor-ready`. From **node2**,
+  `curl http://monitor.internal:9180/` fails, and so it does for everyone else on the
+  operations network.
+
+  | Host | Address on the operations network |
+  | --- | --- |
+  | **mon** | 10.35.0.8 |
+  | **node2** | 10.35.0.20 |
+
+  Find every break between node2 and the dashboard and repair it. The dashboard must stay
+  a systemd service, and firewalld stays on.
+requirements:
+  - "From **node2**, `http://monitor.internal:9180/` answers `monitor-ready`."
+  - "On node2, `monitor.internal` resolves to 10.35.0.8 only."
+  - "On **mon**, the dashboard is served by `lal-monitor.service`, enabled at boot, and firewalld keeps running."
+  - "All of this still holds after both machines reboot."
+hints:
+  - "Split the path into layers and test each on its own: does the name resolve to the right address (`getent hosts`)? Does the address answer (`ping`)? Does anything listen on the port, on which address (`ss -ltnp` on mon)? Does the firewall let it through (`firewall-cmd --list-all`)?"
+  - "A socket bound to `127.0.0.1` accepts connections only from the same host. `systemctl cat lal-monitor` shows the unit and every drop-in that changes it."
+  - "`curl -v` shows which address it tries and how the attempt ends. `No route to host` after three seconds: nobody answered ARP for that address. `No route to host` at once: a firewall rejected the connection. `Connection refused`: the host is there, but nothing listens on that address and port."
+debrief: |
+  ## What was wrong
+
+  Three breaks, one per layer:
+
+  1. **Name.** node2's `/etc/hosts` still mapped `monitor.internal` to 10.35.0.99, the
+     dashboard's old address. Nobody answers ARP for it any more, so after three seconds:
+     `connect to 10.35.0.99 port 9180 from 10.35.0.20 port ... failed: No route to host`.
+  2. **Socket.** A forgotten drop-in, `debug.conf`, set `MONITOR_BIND=127.0.0.1`. `ss -ltnp`
+     on mon showed `127.0.0.1:9180`: the dashboard accepted only local connections.
+  3. **Firewall.** mon's firewall did not allow port 9180. firewalld rejects with an ICMP
+     message, which node2 reports at once as `No route to host`.
+
+  With the name fixed, the firewall answers first; with the firewall open, the loopback
+  binding shows up as `Connection refused`.
+
+  Starting at the name saves time: a wrong address makes everything behind it untestable.
+
+  ## A clean fix
+
+  ```bash
+  # node2
+  sudo sed -i 's/^10\.35\.0\.99\([[:space:]]\+monitor\.internal\)/10.35.0.8\1/' /etc/hosts
+  # mon
+  sudo rm /etc/systemd/system/lal-monitor.service.d/debug.conf
+  sudo systemctl daemon-reload && sudo systemctl restart lal-monitor
+  sudo firewall-cmd --permanent --add-port=9180/tcp && sudo firewall-cmd --reload
+  ```
+
+  Binding to 10.35.0.8 instead of all addresses, or a rich rule that opens 9180 only to
+  10.35.0.0/24, are tighter variants of the same fix.
+
+  ## Check it yourself
+
+  ```bash
+  getent ahosts monitor.internal         # node2
+  sudo ss -ltnp 'sport = :9180'          # mon
+  sudo firewall-cmd --list-all           # mon
+  curl -v http://monitor.internal:9180/  # node2
+  ```
+
+  ## Tempting but wrong
+
+  - **Stopping firewalld.** The dashboard answers, and every other port on mon is open too.
+  - **Running the dashboard by hand**, for example `python3 -m http.server 9180` in the
+    background. It works until the next reboot, and nothing restarts it if it dies.
+  - **Appending a correct line to `/etc/hosts`.** The first matching line wins, so the stale
+    one still does.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
     objective_id: networking.troubleshoot
-    title: Monitor and troubleshoot networking
+    title: Troubleshoot networking
 sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
   - kind: man-page
-    title: ss manual
+    title: Listening sockets and their processes
     man_page: ss(8)
   - kind: man-page
-    title: getent manual
-    man_page: getent(1)
+    title: Name resolution through the hosts file
+    man_page: hosts(5)
   - kind: man-page
-    title: curl manual
-    man_page: curl(1)
+    title: Drop-ins and systemctl cat
+    man_page: systemd.unit(5)
+  - kind: man-page
+    title: Ports and rich rules
+    man_page: firewall-cmd(1)
 topology:
+  networks:
+    - {name: ops, cidr: 10.35.0.0/24}
   hosts:
-    - name: node1
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
+      nics: [{network: ops, name: ops0}]
+    - name: mon
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: ops, name: ops0}]
 checks:
-  - check_id: monitor-service-running
-    kind: service
-    target: node1
-    description: The monitoring service remains running and enabled.
-    parameters: {name: lal-monitor.service, active: true, enabled: true}
-  - check_id: monitor-listens-remotely
+  - check_id: dashboard-reachable
     kind: command
-    target: node1
-    description: The monitoring port is bound beyond loopback.
+    target: node2
+    description: node2 gets monitor-ready from http://monitor.internal:9180/.
+    parameters:
+      script: |
+        answer=$(curl --silent --show-error --max-time 5 http://monitor.internal:9180/ 2>&1) ||
+          fail "node2 cannot reach the dashboard: ${answer#curl: }"
+        expect_eq "$answer" monitor-ready "the dashboard's answer"
+  - check_id: name-resolves-to-mon
+    kind: command
+    target: node2
+    description: monitor.internal resolves to 10.35.0.8 only.
+    parameters:
+      script: |
+        addresses=$(getent ahosts monitor.internal | awk '{print $1}' | sort -u | paste -sd' ' -)
+        expect_eq "$addresses" 10.35.0.8 "the address set of monitor.internal"
+  - check_id: served-by-systemd
+    kind: command
+    target: mon
+    description: lal-monitor.service serves port 9180 and starts at boot, and firewalld runs.
     parameters:
       sudo: true
-      arguments:
-        - bash
-        - -c
-        - ss -H -ltn 'sport = :9090' | awk '$4=="{{host.node1.address}}:9090" || $4 ~ /^(0\.0\.0\.0|\*|\[::\]):9090$/ {ok=1} END {exit !ok}'
-  - check_id: monitor-name-correct
-    kind: command
-    target: node2
-    description: monitor.internal resolves to node1's session address.
-    parameters:
-      arguments:
-        - bash
-        - -c
-        - getent ahostsv4 monitor.internal | awk '$1=="{{host.node1.address}}" {ok=1} END {exit !ok}'
-  - check_id: end-to-end-monitoring-path
-    kind: command
-    target: node2
-    description: node2 receives the expected response through the repaired path.
-    parameters: {arguments: [curl, --fail, --silent, --max-time, "5", http://monitor.internal:9090/], stdout_equals: monitor-ready}
+      script: |
+        systemctl is-active --quiet lal-monitor.service || fail "lal-monitor.service is not running"
+        systemctl is-enabled --quiet lal-monitor.service || fail "lal-monitor.service does not start at boot"
+        pid=$(ss -Hltnp 'sport = :9180' | grep -o 'pid=[0-9]*' | head -n 1 | cut -d= -f2)
+        [[ -n $pid ]] || fail "nothing listens on port 9180"
+        unit=$(ps -o unit= -p "$pid")
+        [[ $unit == lal-monitor.service ]] || fail "port 9180 is served by a process outside lal-monitor.service (${unit:-no unit})"
+        systemctl is-active --quiet firewalld.service || fail "firewalld is not running"
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [mon, node2]
 setup: actions/network-path-diagnosis.setup.yaml
 reference_solution: actions/network-path-diagnosis.solution.yaml
 alternate_solutions: [actions/network-path-diagnosis.alternate.yaml]
+rejected_solutions:
+  - actions/network-path-diagnosis.rejected-firewall-off.yaml
+  - actions/network-path-diagnosis.rejected-run-by-hand.yaml

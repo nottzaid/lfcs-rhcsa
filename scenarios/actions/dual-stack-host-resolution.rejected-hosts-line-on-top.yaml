@@ -1,0 +1,11 @@
+schema_version: 1
+actions:
+  - action_id: give-node2-its-own-ipv6-address
+    target: node2
+    arguments: [sudo, --, bash, -c, "nmcli connection modify lab ipv6.addresses fd00:30::12/64 && nmcli connection up lab"]
+  - action_id: set-node2-hostname
+    target: node2
+    arguments: [sudo, --, hostnamectl, set-hostname, node2.lab.internal]
+  - action_id: put-db-first-in-hosts
+    target: node2
+    arguments: [sudo, --, sed, -i, '1i 10.30.0.5 db.lab.internal db', /etc/hosts]

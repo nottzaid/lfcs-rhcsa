@@ -1,18 +1,70 @@
 schema_version: 1
 scenario_id: routed-internal-service
-version: 1
+version: 2
 status: verified
-title: The internal service network has no route from the host
-summary: Diagnose a routed namespace topology and persist the missing static route.
-estimated_minutes: 35
+title: The records service is out of reach
+summary: After a network renumbering, one host still routes a service network through a gateway that no longer exists.
+estimated_minutes: 30
 task_type: troubleshoot
-difficulty: advanced
-task: >-
-  A lab gateway at 192.0.2.2 on node2 routes to the internal service network
-  198.51.100.0/24. The host-side NetworkManager profile is lal-uplink on uplink0, but the
-  route is missing. Add a persistent route for 198.51.100.0/24 via 192.0.2.2 to that profile,
-  activate it without changing the default route, and restore reachability to 198.51.100.2.
-  Do not add a one-off route without updating NetworkManager.
+difficulty: intermediate
+task: |
+  Applications on **node2** read from the records service at `http://172.20.30.40/`, on
+  the services network 172.20.30.0/24. Last week the network team renumbered the transit
+  network, and since then node2 cannot reach the records service.
+
+  The network team says the services network is reached through **gw**, whose address on
+  the transit network (`transit0` on node2) is now 10.50.0.1. node2 keeps its management
+  connection, and its default route, as they are. Fix node2; only node2.
+requirements:
+  - "From **node2**, `http://172.20.30.40/` returns the records service."
+  - "node2 reaches the services network through **gw**, and its only default route is still the management one."
+  - "This still works after node2 reboots."
+hints:
+  - "`ip route get 172.20.30.40` shows which route and gateway the kernel picks for an address. `ping` it and read the error: who answers, and what do they say?"
+  - "`ip neigh show dev transit0` shows whether each neighbor answers ARP. A gateway stuck in `INCOMPLETE` or `FAILED` is not there."
+  - "Routes that survive a reboot belong in the NetworkManager profile: `nmcli connection show` lists profiles, and the `ipv4.routes` property holds their static routes (`nm-settings-nmcli(5)`)."
+debrief: |
+  ## What was wrong
+
+  The transit profile on node2 still carried the route from before the renumbering:
+
+  ```text
+  $ ip route get 172.20.30.40
+  172.20.30.40 via 10.50.0.254 dev transit0 src 10.50.0.10 uid 1000
+  $ ping -c1 172.20.30.40
+  From 10.50.0.10 icmp_seq=1 Destination Host Unreachable
+  ```
+
+  "Destination Host Unreachable" from node2's own address means node2 could not even reach
+  the next hop: nobody answers ARP for 10.50.0.254 any more.
+
+  ## A clean fix
+
+  ```bash
+  sudo nmcli connection modify transit ipv4.routes '172.20.30.0/24 10.50.0.1'
+  sudo nmcli connection up transit
+  ```
+
+  Setting `ipv4.routes` replaces the whole list; `-ipv4.routes` and `+ipv4.routes` remove
+  and add single routes. `nmcli device reapply transit0` applies the change without taking
+  the link down.
+
+  ## Check it yourself
+
+  ```bash
+  ip route get 172.20.30.40
+  ip -4 route show default
+  nmcli -g ipv4.routes connection show transit
+  curl http://172.20.30.40/
+  ```
+
+  ## Tempting but wrong
+
+  - **`ip route replace ... via 10.50.0.1`.** It works at once, and it is gone after the
+    next reboot or reactivation, because NetworkManager puts back what the profile says.
+  - **`ipv4.gateway 10.50.0.1` on the transit profile.** The records service answers,
+    because now *everything* goes to gw: node2 has a second default route, preferred over
+    the management one, and a service network route has become a routing policy change.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,46 +74,61 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: NetworkManager IP settings reference
-    url: https://networkmanager.dev/docs/api/latest/settings-ipv4.html
   - kind: man-page
-    title: ip-route manual
+    title: Inspect routes and route lookups
     man_page: ip-route(8)
   - kind: man-page
-    title: nmcli manual
-    man_page: nmcli(1)
+    title: Inspect the neighbor (ARP) table
+    man_page: ip-neighbour(8)
+  - kind: man-page
+    title: The ipv4.routes property
+    man_page: nm-settings-nmcli(5)
 topology:
+  networks:
+    - {name: transit, cidr: 10.50.0.0/24}
+    - {name: services, cidr: 172.20.30.0/24}
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
+      nics: [{network: transit, name: transit0}]
+    - name: gw
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: transit, name: transit0}, {network: services, name: services0}]
+    - name: records
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: services, name: services0}]
 checks:
-  - check_id: service-network-route-live
+  - check_id: records-reachable
     kind: command
     target: node2
-    description: The kernel routes the internal prefix through the designated gateway.
+    description: node2 gets the records service at http://172.20.30.40/.
     parameters:
-      arguments: [bash, -c, "ip route show 198.51.100.0/24 | grep -Eq '^198.51.100.0/24 via 192.0.2.2 dev uplink0'"]
-  - check_id: service-network-route-persistent
+      script: |
+        answer=$(curl --silent --show-error --max-time 5 http://172.20.30.40/ 2>&1) ||
+          fail "node2 cannot reach http://172.20.30.40/: ${answer##*: }"
+        expect_eq "$answer" records-service "the answer from 172.20.30.40"
+  - check_id: routed-through-gw
     kind: command
     target: node2
-    description: NetworkManager records the static route on lal-uplink.
+    description: The services network goes through gw, and the only default route is the management one.
     parameters:
-      arguments: [bash, -c, "nmcli -g ipv4.routes con show lal-uplink | grep -Fq '198.51.100.0/24 192.0.2.2'"]
-  - check_id: service-network-reachable
-    kind: command
-    target: node2
-    description: The routed internal service endpoint is reachable.
-    parameters: {arguments: [ping, -c, "2", -W, "2", 198.51.100.2]}
-  - check_id: default-route-untouched
-    kind: command
-    target: node2
-    description: The lab uplink did not become a default route.
-    parameters: {arguments: [bash, -c, '! ip route show default | grep -qw uplink0']}
+      script: |
+        route=$(ip -4 route get 172.20.30.40)
+        [[ $route == *" via 10.50.0.1 dev transit0 "* ]] || fail "node2 routes 172.20.30.40 as: ${route%%$'\n'*}"
+        others=$(ip -4 route show default | grep -v ' dev enp1s0 ' | head -n 1)
+        [[ -z $others ]] || fail "node2 has another default route: $others"
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [node2]
 setup: actions/routed-internal-service.setup.yaml
 reference_solution: actions/routed-internal-service.solution.yaml
 alternate_solutions: [actions/routed-internal-service.alternate.yaml]
+rejected_solutions:
+  - actions/routed-internal-service.rejected-runtime-route.yaml
+  - actions/routed-internal-service.rejected-default-gateway.yaml

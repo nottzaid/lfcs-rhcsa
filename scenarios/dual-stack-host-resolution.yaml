@@ -1,18 +1,89 @@
 schema_version: 1
 scenario_id: dual-stack-host-resolution
-version: 1
+version: 2
 status: verified
-title: The management endpoint lost its dual-stack identity
-summary: Build a persistent NetworkManager profile and matching local name resolution.
+title: The clone still thinks it is db
+summary: A host cloned in a hurry has a duplicate IPv6 address, the wrong name, and resolves its database to itself.
 estimated_minutes: 30
-task_type: configure
+task_type: troubleshoot
 difficulty: intermediate
-task: >-
-  Configure a persistent NetworkManager dummy interface named mgmt0 on node2. It must use
-  192.0.2.10/24 and 2001:db8:42::10/64 with no IPv4 or IPv6 default route and autoconnect
-  at boot. Set the static hostname to node2.lal.invalid. Configure /etc/hosts so
-  app.internal resolves to both management addresses. Do not modify the interface used for
-  your lab connection.
+task: |
+  **node2** was cloned from **db** last night to become the new application server, and
+  only its IPv4 address was changed before it went live. This morning:
+
+  - IPv6 on node2 does not work at all, and db's owner reports an IPv6 address conflict;
+  - node2's prompt says `db`, which has already confused one colleague;
+  - the application on node2 cannot talk to its database at `db.lab.internal`, port 5000.
+
+  The lab network has no DNS server; hosts find each other through `/etc/hosts`. The
+  address plan is:
+
+  | Host | Name | IPv4 | IPv6 |
+  | --- | --- | --- | --- |
+  | **db** | `db.lab.internal` | 10.30.0.5/24 | fd00:30::5/64 |
+  | **node2** | `node2.lab.internal` | 10.30.0.12/24 | fd00:30::12/64 |
+
+  Make node2 match the plan, working only on node2.
+requirements:
+  - "node2's `lab0` has its planned addresses, 10.30.0.12/24 and fd00:30::12/64, both usable, and nothing of db's."
+  - "node2's hostname is `node2.lab.internal`."
+  - "On node2, `db.lab.internal` resolves to db's two addresses, and nothing else."
+  - "node2 reaches the database at `db.lab.internal:5000` over IPv4 and over IPv6."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "`ip -6 address show dev lab0` shows each address's state. An address marked `dadfailed` lost duplicate address detection: another host on the link already uses it."
+  - "Addresses, like the hostname, must be changed where they persist: the NetworkManager profile (`nmcli connection show`), and `hostnamectl`."
+  - "`getent ahosts db.lab.internal` shows every address a program gets for a name, in the order it tries them. Read all of `/etc/hosts`, not only the lines you expect."
+debrief: |
+  ## What was wrong
+
+  The clone kept three things that belonged to db:
+
+  - **Its IPv6 address.** Before an IPv6 address is used, the kernel checks that nobody
+    else on the link has it. db answered, so node2's copy of `fd00:30::5` was marked
+    `dadfailed` and never used, and node2 had no working IPv6 address.
+  - **Its hostname**, `db.lab.internal`.
+  - **Its loopback line**, `127.0.1.1 db.lab.internal db`. `/etc/hosts` returns every
+    matching line, so on node2 the database's name also meant "this machine":
+
+    ```text
+    $ getent ahosts db.lab.internal | grep STREAM
+    127.0.1.1       STREAM db.lab.internal
+    10.30.0.5       STREAM
+    fd00:30::5      STREAM
+    ```
+
+    A client that tries the first address connects to node2 itself and gets "connection
+    refused".
+
+  ## A clean fix
+
+  ```bash
+  sudo nmcli connection modify lab ipv6.addresses fd00:30::12/64
+  sudo nmcli connection up lab
+  sudo hostnamectl set-hostname node2.lab.internal
+  sudo sed -i '/^127\.0\.1\.1[[:space:]]\+db\.lab\.internal/d' /etc/hosts
+  ```
+
+  `hostnamectl set-hostname` sets both the static name in `/etc/hostname` and the running
+  one. Replacing the loopback line with `127.0.1.1 node2.lab.internal node2` is just as good.
+
+  ## Check it yourself
+
+  ```bash
+  ip -br address show dev lab0
+  hostnamectl
+  getent ahosts db.lab.internal
+  curl -4 http://db.lab.internal:5000/
+  curl -6 http://db.lab.internal:5000/
+  ```
+
+  ## Tempting but wrong
+
+  - **`ip address del` and `ip address add`.** IPv6 works until the next reboot, when
+    NetworkManager applies the profile, and its duplicate address, again.
+  - **Adding a correct `db.lab.internal` line at the top of `/etc/hosts`.** The loopback
+    line is still there, so the name still resolves to node2 as well.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -22,68 +93,85 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: NetworkManager nm-settings documentation
-    url: https://networkmanager.dev/docs/api/latest/nm-settings-nmcli.html
   - kind: man-page
-    title: nmcli manual
-    man_page: nmcli(1)
+    title: Addresses and their flags, including dadfailed
+    man_page: ip-address(8)
   - kind: man-page
-    title: hosts manual
+    title: The ipv4 and ipv6 profile properties
+    man_page: nm-settings-nmcli(5)
+  - kind: man-page
+    title: Static and transient hostnames
+    man_page: hostnamectl(1)
+  - kind: man-page
+    title: The hosts file
     man_page: hosts(5)
 topology:
+  networks:
+    - {name: lab, cidr: 10.30.0.0/24}
   hosts:
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
+      nics: [{network: lab, name: lab0}]
+    - name: db
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: lab, name: lab0}]
 checks:
-  - check_id: ipv4-live
+  - check_id: planned-addresses
     kind: command
     target: node2
-    description: mgmt0 has the required IPv4 address.
+    description: lab0 has 10.30.0.12/24 and fd00:30::12/64, both usable, and nothing of db's.
     parameters:
-      arguments: [ip, "-4", address, show, dev, mgmt0]
-      stdout_contains: 192.0.2.10/24
-  - check_id: ipv6-live
+      script: |
+        ip -4 -o address show dev lab0 | grep -q ' 10\.30\.0\.12/24 ' || fail "lab0 does not have 10.30.0.12/24"
+        address=$(ip -6 -o address show dev lab0 to fd00:30::12/128)
+        [[ $address == *" fd00:30::12/64 "* ]] || fail "lab0 does not have fd00:30::12/64"
+        settled() { ! ip -6 -o address show dev lab0 to fd00:30::12/128 | grep -qw tentative; }
+        retry 5 settled   # duplicate address detection takes a moment after a change
+        [[ $(ip -6 -o address show dev lab0 to fd00:30::12/128) != *dadfailed* ]] ||
+          fail "fd00:30::12 on lab0 failed duplicate address detection: another host uses it"
+        settled || fail "fd00:30::12 on lab0 is still tentative"
+        if ip -o address show dev lab0 | grep -qE ' (10\.30\.0\.5|fd00:30::5)/'; then
+          fail "lab0 still has one of db's addresses"
+        fi
+  - check_id: own-hostname
     kind: command
     target: node2
-    description: mgmt0 has the required IPv6 address.
+    description: node2's hostname is node2.lab.internal.
     parameters:
-      arguments: [ip, "-6", address, show, dev, mgmt0]
-      stdout_contains: 2001:db8:42::10/64
-  - check_id: network-profile-persistent
+      script: |
+        expect_eq "$(hostnamectl hostname --static)" node2.lab.internal "the static hostname"
+        expect_eq "$(hostname)" node2.lab.internal "the running hostname"
+  - check_id: db-resolves-to-db
     kind: command
     target: node2
-    description: NetworkManager owns an autoconnecting dual-stack profile without default routes.
+    description: db.lab.internal resolves to db's two addresses and nothing else.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          connection=$(nmcli -g GENERAL.CONNECTION device show mgmt0) &&
-          test "$(nmcli -g connection.autoconnect connection show "$connection")" = yes &&
-          test "$(nmcli -g ipv4.never-default connection show "$connection")" = yes &&
-          test "$(nmcli -g ipv6.never-default connection show "$connection")" = yes
-  - check_id: static-hostname
+      script: |
+        addresses=$(getent ahosts db.lab.internal | awk '{print $1}' | sort -u | paste -sd' ' -)
+        expect_eq "$addresses" "10.30.0.5 fd00:30::5" "the address set of db.lab.internal"
+  - check_id: db-reachable-both-ways
     kind: command
     target: node2
-    description: The static hostname is correct.
-    parameters: {arguments: [hostnamectl, --static], stdout_equals: node2.lal.invalid}
-  - check_id: dual-stack-resolution
-    kind: command
-    target: node2
-    description: app.internal resolves locally to both management addresses.
+    description: node2 reaches db.lab.internal:5000 over IPv4 and IPv6.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          getent ahostsv4 app.internal | awk '$1=="192.0.2.10" {v4=1} END {exit !v4}' &&
-          getent ahostsv6 app.internal | awk '$1=="2001:db8:42::10" {v6=1} END {exit !v6}'
+      script: |
+        tentative() { ip -6 -o address show dev lab0 tentative -dadfailed | grep -q inet6; }
+        retry 5 eval '! tentative'   # a fresh IPv6 address is unusable until DAD completes
+        for family in 4 6; do
+          answer=$(curl -"$family" --silent --show-error --max-time 5 http://db.lab.internal:5000/ 2>&1) ||
+            fail "node2 cannot reach the database over IPv$family: ${answer##*: }"
+          expect_eq "$answer" db-service "the IPv$family answer from db.lab.internal:5000"
+        done
 persistence:
   reboot: true
   hosts: [node2]
 setup: actions/dual-stack-host-resolution.setup.yaml
 reference_solution: actions/dual-stack-host-resolution.solution.yaml
 alternate_solutions: [actions/dual-stack-host-resolution.alternate.yaml]
+rejected_solutions:
+  - actions/dual-stack-host-resolution.rejected-runtime-addresses.yaml
+  - actions/dual-stack-host-resolution.rejected-hosts-line-on-top.yaml

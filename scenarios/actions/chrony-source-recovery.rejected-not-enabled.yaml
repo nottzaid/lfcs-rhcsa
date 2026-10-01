@@ -3,6 +3,6 @@ actions:
   - action_id: use-the-site-time-server
     target: node2
     arguments: [sudo, --, sed, -i, 's/^server 10\.40\.0\.100 iburst$/server 10.40.0.1 iburst/', /etc/chrony.conf]
-  - action_id: run-chronyd-now-and-at-boot
+  - action_id: start-chronyd-for-now
     target: node2
-    arguments: [sudo, --, systemctl, enable, --now, chronyd.service]
+    arguments: [sudo, --, systemctl, start, chronyd.service]

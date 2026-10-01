@@ -1,6 +1,6 @@
 schema_version: 1
 actions:
-  - action_id: build-the-bridge-over-an-active-backup-bond
+  - action_id: build-a-bond-that-never-notices-a-failure
     target: node2
     arguments:
       - sudo
@@ -9,15 +9,11 @@ actions:
       - -c
       - |
         set -euo pipefail
+        nmcli connection delete storage
         nmcli connection add type bridge ifname br0 con-name br0 bridge.stp no \
           ipv4.method manual ipv4.addresses 10.90.0.20/24 ipv6.method disabled
         nmcli connection add type bond ifname bond0 con-name bond0 \
-          bond.options mode=active-backup,miimon=100 controller br0 port-type bridge
+          bond.options mode=active-backup,miimon=0 controller br0 port-type bridge
         nmcli connection add type ethernet ifname stor0 con-name bond0-stor0 controller bond0 port-type bond
         nmcli connection add type ethernet ifname stor1 con-name bond0-stor1 controller bond0 port-type bond
-  - action_id: retire-the-single-link-profile
-    target: node2
-    arguments: [sudo, --, nmcli, connection, delete, storage]
-  - action_id: bring-it-all-up
-    target: node2
-    arguments: [sudo, --, bash, -c, "nmcli connection up br0 && nmcli connection up bond0 && nmcli connection up bond0-stor0 && nmcli connection up bond0-stor1"]
+        nmcli connection up br0 && nmcli connection up bond0 && nmcli connection up bond0-stor0 && nmcli connection up bond0-stor1

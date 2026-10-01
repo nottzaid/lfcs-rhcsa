@@ -1,17 +1,64 @@
 schema_version: 1
 scenario_id: chrony-source-recovery
-version: 1
+version: 2
 status: verified
-title: The application node has no usable time source
-summary: Point Chrony at the designated internal time server and verify synchronization.
+title: node2's clock is running ahead
+summary: A host moved sites, lost its time source, and drifted; make it keep time from the site server again.
 estimated_minutes: 25
-task_type: fix
-difficulty: intermediate
-task: >-
-  node1 is the designated internal time server for this session. Chrony on node2 currently
-  points at an unreachable address. Configure node2 to use node1's session address as its
-  time source with iburst, keep chronyd running and enabled, and establish synchronization.
-  Do not change node1 or use an unrelated public time service.
+task_type: troubleshoot
+difficulty: foundation
+task: |
+  Log entries from **node2** appear about seven minutes in the future, which makes
+  correlating incidents across hosts miserable. node2 moved to this site last month. A
+  colleague stopped chronyd back then because "it could not reach the time server anyway".
+
+  This site's time server is **timesrv**, 10.40.0.1 on the site network (`site0` on
+  node2). Make node2 keep correct time from it, reboots included.
+requirements:
+  - "chronyd runs on node2 and starts at boot."
+  - "node2 is synchronized to 10.40.0.1, and gets there within seconds of chronyd starting."
+  - "node2's clock agrees with the time server to within a second."
+  - "All of this still holds after node2 reboots."
+hints:
+  - "`chronyc sources` lists the servers chronyd uses and whether they answer (`^*` is the one it follows, `^?` one it cannot reach). `chronyc tracking` shows how far the clock is off. Neither works while chronyd is stopped."
+  - "Sources come from `server` and `pool` lines in `/etc/chrony.conf`, and from files that a `sourcedir` line names. The `iburst` option sends a quick burst of requests at startup instead of waiting minutes for the first regular poll."
+  - "A clock seven minutes off is fixed by stepping it, not slewing it. `makestep` in chrony.conf lets chronyd step during its first updates, and `chronyc makestep` steps at once."
+debrief: |
+  ## What was wrong
+
+  - `/etc/chrony.conf` still named the old site's server, `server 10.40.0.100 iburst`,
+    which no longer exists.
+  - chronyd was stopped and disabled, so nothing corrected the clock, and it drifted.
+
+  ## A clean fix
+
+  ```bash
+  sudo sed -i 's/^server 10.40.0.100 iburst$/server 10.40.0.1 iburst/' /etc/chrony.conf
+  sudo systemctl enable --now chronyd
+  chronyc sources          # ^* 10.40.0.1 after a few seconds
+  chronyc tracking
+  ```
+
+  The shipped `makestep 1.0 3` lets chronyd step the clock during its first three
+  updates if it is off by more than a second, so the seven minutes disappear at once.
+  Without that, chronyd slews: it speeds up or slows the clock by at most a fraction of a
+  percent, and seven minutes would take days. A source file under a `sourcedir`, such as
+  `/etc/chrony.d/site.sources`, works as well as the line in chrony.conf.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl is-enabled chronyd
+  chronyc -n sources
+  chronyc tracking | grep -E 'Reference ID|System time|Leap status'
+  timedatectl                # "System clock synchronized: yes"
+  ```
+
+  ## Tempting but wrong
+
+  - **Setting the clock once**, with `date -s` or `chronyd -q`. The clock is right today,
+    and nothing keeps it right.
+  - **`systemctl start` without `enable`.** node2 keeps time until its next reboot.
 objectives:
   - track: lfcs
     version: lfcs-2026-08
@@ -21,53 +68,65 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: upstream
-    title: chrony documentation
-    url: https://chrony-project.org/documentation.html
   - kind: man-page
-    title: chrony.conf manual
+    title: server, iburst, sourcedir, and makestep
     man_page: chrony.conf(5)
   - kind: man-page
-    title: chronyc manual
+    title: sources, tracking, and makestep
     man_page: chronyc(1)
+  - kind: man-page
+    title: System clock status
+    man_page: timedatectl(1)
 topology:
+  networks:
+    - {name: site, cidr: 10.40.0.0/24}
   hosts:
-    - name: node1
-      image: rocky-10.2-lab-v1
-      memory_mib: 1024
-      vcpus: 1
     - name: node2
-      image: rocky-10.2-lab-v1
+      image: rocky-10.2-lab-v2
       memory_mib: 1024
       vcpus: 1
+      nics: [{network: site, name: site0}]
+    - name: timesrv
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: site, name: site0}]
 checks:
-  - check_id: chrony-client-running
+  - check_id: chronyd-running
     kind: service
     target: node2
-    description: chronyd is running and enabled on the client.
-    parameters:
-      name: chronyd.service
-      active: true
-      enabled: true
-  - check_id: designated-source-selected
+    description: chronyd runs and starts at boot.
+    parameters: {name: chronyd.service, active: true, enabled: true}
+  - check_id: synchronized-to-site
     kind: command
     target: node2
-    description: node2 has selected node1 as its current synchronization source.
+    description: node2 is synchronized to 10.40.0.1.
     parameters:
-      arguments:
-        - bash
-        - -c
-        - >-
-          chronyc -n sources | awk -v peer='{{host.node1.address}}' '$1=="^*" && $2==peer {ok=1} END {exit !ok}'
-      timeout_seconds: 30
-  - check_id: clock-synchronized
+      timeout_seconds: 45
+      script: |
+        systemctl is-active --quiet chronyd.service || fail "chronyd is not running"
+        following() { chronyc -n sources 2>/dev/null | awk '$1 == "^*" && $2 == "10.40.0.1" {found = 1} END {exit !found}'; }
+        retry 30 following ||
+          fail "node2 is not synchronized to 10.40.0.1; its sources: $(chronyc -n sources | awk 'NR > 2 {printf "%s %s; ", $1, $2}')"
+  - check_id: clock-agrees
     kind: command
     target: node2
-    description: Chrony reports a normal synchronized clock.
+    description: node2's clock agrees with the time server to within a second.
     parameters:
-      arguments: [bash, -c, 'chronyc tracking | grep -Eq "^Leap status[[:space:]]*:[[:space:]]*Normal$"']
+      timeout_seconds: 45
+      script: |
+        systemctl is-active --quiet chronyd.service || fail "chronyd is not running"
+        synchronized() { [[ $(chronyc -c -n tracking 2>/dev/null | cut -d, -f2) == 10.40.0.1 ]]; }
+        retry 30 synchronized || fail "node2 is not synchronized to 10.40.0.1, so nothing corrects its clock"
+        offset=$(chronyc -c tracking | cut -d, -f5)
+        awk -v offset="$offset" 'BEGIN {exit !(offset < 1 && offset > -1)}' ||
+          fail "node2's clock is $(chronyc tracking | sed -n 's/^System time *: //p')"
 persistence:
-  reboot: false
+  reboot: true
+  hosts: [node2]
 setup: actions/chrony-source-recovery.setup.yaml
 reference_solution: actions/chrony-source-recovery.solution.yaml
 alternate_solutions: [actions/chrony-source-recovery.alternate.yaml]
+rejected_solutions:
+  - actions/chrony-source-recovery.rejected-set-the-clock.yaml
+  - actions/chrony-source-recovery.rejected-not-enabled.yaml
