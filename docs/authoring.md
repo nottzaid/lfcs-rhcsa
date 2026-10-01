@@ -110,6 +110,10 @@ verdict.
    duplicate address detection, a bridge's STP delay, libvirt autostart. Wrap those in
    `retry`, and set `timeout_seconds`. Actions get 120 seconds by default; a busy host is
    slower than a developer's idle one.
+8. **Prove "never" with an identifier the kernel does not reuse.** The boot ID proves no
+   reboot. A mount ID does not prove no remount: Linux hands a freed mount ID to the next
+   mount, so an unmount and remount often get the same number back. An ext4 superblock's
+   `Last mount time` (`tune2fs -l`) changes on every mount and never on an online resize.
 
 Check `description`s are shown next to every result. Write them as the requirement they
 grade.

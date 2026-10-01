@@ -38,5 +38,8 @@ actions:
         done
         install -d -m 0755 /usr/share/lal-logs
         sha256sum *.log > /usr/share/lal-logs/logs.sha256
-        findmnt -n -o ID --mountpoint /srv/logs > /usr/share/lal-logs/mount-id
+        # The kernel reuses freed mount IDs, so a remount can get the same one back; the
+        # superblock's last mount time changes on every mount and never on an online resize.
+        tune2fs -l "$(findmnt -n -o SOURCE --mountpoint /srv/logs)" \
+          | sed -n 's/^Last mount time: *//p' > /usr/share/lal-logs/mounted-at
         cat /proc/sys/kernel/random/boot_id > /usr/share/lal-logs/boot-id

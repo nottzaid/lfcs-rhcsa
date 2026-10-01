@@ -121,10 +121,12 @@ checks:
     target: node2
     description: /srv/logs was never unmounted and node2 was not rebooted.
     parameters:
+      sudo: true
       script: |
         expect_eq "$(cat /proc/sys/kernel/random/boot_id)" "$(cat /usr/share/lal-logs/boot-id)" "the boot ID (node2 was rebooted)"
-        id=$(findmnt -n -o ID --mountpoint /srv/logs) || fail "/srv/logs is not mounted"
-        expect_eq "$id" "$(cat /usr/share/lal-logs/mount-id)" "the mount ID of /srv/logs (it was unmounted and mounted again)"
+        device=$(findmnt -n -o SOURCE --mountpoint /srv/logs) || fail "/srv/logs is not mounted"
+        mounted_at=$(tune2fs -l "$device" | sed -n 's/^Last mount time: *//p')
+        expect_eq "$mounted_at" "$(cat /usr/share/lal-logs/mounted-at)" "the last mount time of /srv/logs (it was unmounted and mounted again)"
   - check_id: logs-and-mount-kept
     kind: command
     target: node2
