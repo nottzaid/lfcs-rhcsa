@@ -505,3 +505,66 @@ def test_scenario_check_says_what_the_reboot_proved(
     assert result.exit_code == 1
     for line in expected_lines:
         assert any(output.startswith(line) for output in result.stdout.splitlines()), line
+
+
+def test_up_refuses_to_listen_beyond_loopback_or_without_a_project(tmp_path: Path) -> None:
+    exposed = runner.invoke(app, ["up", "--host", "0.0.0.0", "--no-browser"])
+    assert exposed.exit_code == 2
+    assert "only binds to a loopback address" in exposed.stderr
+
+    empty = runner.invoke(app, ["up", "--no-browser", "--project-root", str(tmp_path)])
+    assert empty.exit_code == 2
+    assert "project root is missing required paths" in empty.stderr
+
+
+def test_up_refuses_a_port_something_else_already_holds() -> None:
+    root = Path(__file__).parents[2]
+    with socket(AF_INET, SOCK_STREAM) as holder:
+        holder.bind(("127.0.0.1", 0))
+        holder.listen()
+        port = holder.getsockname()[1]
+        busy = runner.invoke(
+            app, ["up", "--no-browser", "--port", str(port), "--project-root", str(root)]
+        )
+    assert busy.exit_code == 2
+    assert f"loopback port {port} is already in use" in busy.stderr
+
+
+def test_first_launch_builds_the_missing_image_then_serves(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = Path(__file__).parents[2]
+    project = tmp_path / "lab"
+    project.mkdir()
+    for shared in ("scenarios", "images", "curricula", "mock-exams"):
+        (project / shared).symlink_to(root / shared)
+    built = tmp_path / "built.qcow2"
+    acquired: list[Path] = []
+    served: list[tuple[str, int]] = []
+
+    class StandInBuilder:  # the real build is a twenty-minute install; tests/live builds it
+        def __init__(self, _runner: object) -> None:
+            pass
+
+        def build(self, _manifest: object, _path: Path, source: Path, _out: Path) -> object:
+            acquired.append(source)
+            return SimpleNamespace(artifact=built)
+
+    monkeypatch.setattr("sysadmin_lab.cli.KickstartImageBuilder", StandInBuilder)
+    monkeypatch.setattr(
+        "sysadmin_lab.cli.ImageAcquirer.acquire",
+        lambda _self, _manifest, cache: cache / "rocky.iso",
+    )
+    monkeypatch.setattr(
+        "uvicorn.run", lambda _app, host, port, log_level: served.append((host, port))
+    )
+    result = runner.invoke(
+        app,
+        ["up", "--host", "::1", "--port", "8791", "--no-browser", "--project-root", str(project)],
+    )
+    assert result.exit_code == 0, result.stderr
+    assert "not present; building it now" in result.stdout
+    assert acquired == [project.resolve() / "runtime" / "cache" / "isos" / "rocky.iso"]
+    assert f"Verified lab image: {built}" in result.stdout
+    assert "Linux Admin Lab: http://[::1]:8791/scenarios/topic/lfcs" in result.stdout
+    assert served == [("::1", 8791)]
