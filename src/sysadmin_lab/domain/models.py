@@ -46,6 +46,13 @@ class ScenarioTaskType(StrEnum):
     BUILD = "build"
 
 
+class ScenarioCollection(StrEnum):
+    """Practice scenarios teach on the practice path; exam tasks appear only in an exam mock."""
+
+    PRACTICE = "practice"
+    EXAM = "exam"
+
+
 class ScenarioDifficulty(StrEnum):
     FOUNDATION = "foundation"
     INTERMEDIATE = "intermediate"
@@ -170,6 +177,7 @@ class ScenarioManifest(StrictModel):
     estimated_minutes: int = Field(ge=5, le=180)
     task_type: ScenarioTaskType
     difficulty: ScenarioDifficulty
+    collection: ScenarioCollection = ScenarioCollection.PRACTICE
     task: str = Field(min_length=1)
     requirements: tuple[str, ...] = ()
     hints: tuple[str, ...] = ()

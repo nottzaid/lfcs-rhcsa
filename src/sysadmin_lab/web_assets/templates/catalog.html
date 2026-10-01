@@ -84,18 +84,19 @@
       <div class="section-heading">
         <div>
           <h2 id="mock-list-title">Mock rehearsals</h2>
-          <p>Twenty-task sets balanced to the published LFCS domain weights.</p>
+          <p>Twenty-task sets balanced to the published LFCS domain weights. Review rehearsals revisit practice scenarios; exam rehearsals are tasks found nowhere else, phrased like the exam's.</p>
         </div>
       </div>
       <div class="table-scroll">
         <table>
-          <thead><tr><th>#</th><th>Name</th><th>Suggested time</th><th>Tasks</th><th></th></tr></thead>
+          <thead><tr><th>#</th><th>Name</th><th>Kind</th><th>Time limit</th><th>Tasks</th><th></th></tr></thead>
           <tbody>
             {% for mock in mock_exams %}
               <tr>
                 <td class="row-number">{{ loop.index }}</td>
                 <td><a class="scenario-name" href="/mocks/{{ mock.mock_id }}">{{ mock.title }}</a><span class="scenario-summary">{{ mock.summary }}</span></td>
-                <td class="nowrap">~{{ mock.suggested_minutes }} min</td>
+                <td>{{ 'Exam' if mock.kind == 'exam' else 'Review' }}</td>
+                <td class="nowrap">{{ mock.suggested_minutes }} min</td>
                 <td>{{ mock.tasks|length }}</td>
                 <td class="row-actions"><a class="button button-primary" href="/mocks/{{ mock.mock_id }}">Open</a></td>
               </tr>

@@ -31,13 +31,18 @@ def test_released_scenarios_teach_by_the_authoring_standard() -> None:
     problems: list[str] = []
     for scenario in load_catalog(root / "scenarios"):
         name = scenario.scenario_id
+        exam = scenario.collection.value == "exam"
         if not scenario.requirements:
             problems.append(f"{name}: states no requirements")
-        if not 2 <= len(scenario.hints) <= 4:
+        if exam and scenario.hints:
+            problems.append(f"{name}: an exam task has no hints, as on the exam")
+        if not exam and not 2 <= len(scenario.hints) <= 4:
             problems.append(f"{name}: has {len(scenario.hints)} hints; the standard is two to four")
         sections = scenario.debrief or ""
         expected = ["## Check it yourself", "## Tempting but wrong"]
-        if scenario.task_type.value in {"troubleshoot", "fix"}:
+        if exam:
+            expected.insert(0, "## One way to do it")
+        elif scenario.task_type.value in {"troubleshoot", "fix"}:
             expected.insert(0, "## What was wrong")
         problems.extend(
             f"{name}: debrief has no {section!r} section"
@@ -56,7 +61,9 @@ def test_every_competency_has_a_focused_verified_scenario() -> None:
     covered = {
         objective.objective_id
         for scenario in load_catalog(root / "scenarios")
-        if scenario.status.value == "verified" and not scenario.integrated
+        if scenario.status.value == "verified"
+        and not scenario.integrated
+        and scenario.collection.value == "practice"
         for objective in scenario.objectives
         if objective.track.value == curriculum.track.value
     }

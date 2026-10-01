@@ -21,8 +21,9 @@ virt-manager, and [`uv`](https://docs.astral.sh/uv/) installed:
 That is the only project command needed. It opens the LFCS scenario collection at
 `http://127.0.0.1:8787/scenarios/topic/lfcs`.
 Choose **Info** to inspect a task or **Run** to acquire/verify its image and launch the
-disposable VM in the background. Active machines are visible in virt-manager. Scenario time
-values are advisory estimates; the local lab does not enforce a countdown.
+disposable VM in the background. Active machines are visible in virt-manager. Scenario times
+are estimates. Only a mock rehearsal started as timed has a deadline: checks after it stop
+counting, and machines are never destroyed on a timer.
 
 The first launch verifies or downloads the pinned Rocky Linux 10.2 DVD (about 10 GB) and
 builds the immutable lab image. Later launches reuse it after validating its provenance and

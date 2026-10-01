@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID
 
@@ -21,7 +21,7 @@ from sysadmin_lab.domain.curricula import CurriculumManifest
 from sysadmin_lab.domain.mock_exams import MockExamManifest
 from sysadmin_lab.domain.models import ScenarioManifest
 from sysadmin_lab.domain.progress import ScenarioProgress
-from sysadmin_lab.domain.rehearsals import RehearsalScore, score_rehearsal
+from sysadmin_lab.domain.rehearsals import Rehearsal, RehearsalScore, score_rehearsal
 from sysadmin_lab.domain.session_machines import SessionMachine
 from sysadmin_lab.domain.sessions import SessionState
 
@@ -113,27 +113,30 @@ class LabWorkspace:
             state = runtime.sessions.get(session_id)
             return ScenarioSessionSnapshot(state, runtime.machines.list(session_id))
 
-    def start_rehearsal(self, mock_id: str) -> datetime:
-        self.mock_exam(mock_id)
+    def start_rehearsal(self, mock_id: str, *, timed: bool = False) -> Rehearsal:
+        """Begin a rehearsal; a timed one stops counting checks after the mock's minutes."""
+        mock = self.mock_exam(mock_id)
         started_at = datetime.now(UTC)
+        deadline = started_at + timedelta(minutes=mock.suggested_minutes) if timed else None
+        rehearsal = Rehearsal(started_at, deadline)
         with open_vm_runtime(self.paths.runtime_root) as runtime:
-            runtime.rehearsals.start(mock_id, started_at)
-        return started_at
+            runtime.rehearsals.start(mock_id, rehearsal)
+        return rehearsal
 
     def rehearsal(self, mock_id: str) -> RehearsalScore | None:
         """The current rehearsal of a mock exam, scored, or None if it was never started."""
         mock = self.mock_exam(mock_id)
         with open_vm_runtime(self.paths.runtime_root) as runtime:
-            started_at = runtime.rehearsals.started_at(mock_id)
+            rehearsal = runtime.rehearsals.get(mock_id)
             attempts = runtime.progress.attempts()
-        if started_at is None:
+        if rehearsal is None:
             return None
         versions = {scenario.scenario_id: scenario.version for scenario in self.scenarios()}
         return score_rehearsal(
             mock.tasks,
             versions,
             attempts,
-            started_at,
+            rehearsal,
             self.curriculum().exam.passing_score_percent,
         )
 

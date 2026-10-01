@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import dataclasses
 import shutil
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from uuid import UUID, uuid4
 
@@ -22,7 +22,7 @@ from sysadmin_lab.application.lab_workspace import (
     WorkspacePaths,
 )
 from sysadmin_lab.domain.progress import CheckAttempt, ScenarioProgress
-from sysadmin_lab.domain.rehearsals import RehearsalScore, score_rehearsal
+from sysadmin_lab.domain.rehearsals import Rehearsal, RehearsalScore, score_rehearsal
 from sysadmin_lab.web import create_app, render_markdown
 
 ROOT = Path(__file__).parents[2]
@@ -116,9 +116,10 @@ def test_draft_scenarios_and_mocks_are_not_published(tmp_path: Path) -> None:
 class RehearsingWorkspace(CatalogOnlyWorkspace):
     """A rehearsal of mock A in which one task was solved and one half done."""
 
-    def __init__(self, paths: WorkspacePaths) -> None:
+    def __init__(self, paths: WorkspacePaths, deadline: datetime | None = None) -> None:
         super().__init__(paths)
-        self.started: list[str] = []
+        self.started: list[tuple[str, bool]] = []
+        self.deadline = deadline
 
     def rehearsal(self, mock_id: str) -> RehearsalScore | None:
         mock = self.mock_exam(mock_id)
@@ -128,11 +129,20 @@ class RehearsingWorkspace(CatalogOnlyWorkspace):
             CheckAttempt(uuid4(), uuid4(), task, versions[task], start, earned, 2, solved, False)
             for task, earned, solved in ((mock.tasks[0], 2, True), (mock.tasks[1], 1, False))
         ]
-        return score_rehearsal(mock.tasks, versions, attempts, start, 67)
+        return score_rehearsal(mock.tasks, versions, attempts, Rehearsal(start, self.deadline), 67)
 
-    def start_rehearsal(self, mock_id: str) -> datetime:
-        self.started.append(mock_id)
-        return datetime.now(UTC)
+    def start_rehearsal(self, mock_id: str, *, timed: bool = False) -> Rehearsal:
+        self.started.append((mock_id, timed))
+        return Rehearsal(datetime.now(UTC))
+
+
+def finished(client: TestClient, response: object) -> dict[str, object]:
+    job_id = response.json()["job_id"]  # type: ignore[attr-defined]
+    for _ in range(100):
+        job = client.get(f"/api/jobs/{job_id}").json()
+        if job["status"] not in {"queued", "running"}:
+            return job
+    raise AssertionError("job did not finish")
 
 
 def test_a_mock_page_shows_the_rehearsal_score_against_the_pass_mark() -> None:
@@ -145,22 +155,36 @@ def test_a_mock_page_shows_the_rehearsal_score_against_the_pass_mark() -> None:
         assert page.count('class="nowrap result-partial"') == 1
         assert page.count('class="nowrap result-untouched"') == 18
         assert "50% of requirements" in page
-        assert "Start over" in page
+        assert "Untimed: every check from now on counts." in page
+        assert "Start over, timed" in page and "Start over, untimed" in page
+        assert "as on the exam" not in page  # partial credit is reported, not documented
 
         assert client.post("/api/mocks/lfcs-mock-a/rehearsal").status_code == 403
-        started = client.post(
-            "/api/mocks/lfcs-mock-a/rehearsal", headers={"X-Lab-Request": "browser"}
-        )
-        assert started.status_code == 202
-        job_id = started.json()["job_id"]
-        for _ in range(100):
-            job = client.get(f"/api/jobs/{job_id}").json()
-            if job["status"] != "queued" and job["status"] != "running":
-                break
-        assert job["result"] == {"redirect_url": "/mocks/lfcs-mock-a"}
-        assert workspace.started == ["lfcs-mock-a"]
+        browser = {"X-Lab-Request": "browser"}
+        untimed = client.post("/api/mocks/lfcs-mock-a/rehearsal", headers=browser)
+        timed = client.post("/api/mocks/lfcs-mock-a/rehearsal?timed=true", headers=browser)
+        assert untimed.status_code == 202
+        assert finished(client, untimed)["result"] == {"redirect_url": "/mocks/lfcs-mock-a"}
+        finished(client, timed)
+        assert workspace.started == [("lfcs-mock-a", False), ("lfcs-mock-a", True)]
+
+
+@pytest.mark.parametrize("minutes_left", [90, -5])
+def test_a_timed_rehearsal_counts_down_then_says_time_was_up(minutes_left: int) -> None:
+    deadline = datetime.now(UTC) + timedelta(minutes=minutes_left)
+    workspace = RehearsingWorkspace(WorkspacePaths.under(ROOT), deadline=deadline)
+    with TestClient(create_app(ROOT, workspace=workspace)) as client:
+        page = client.get("/mocks/lfcs-mock-a").text
+    if minutes_left > 0:
+        assert f'data-deadline="{deadline.isoformat()}"' in page
+        assert "Checks after that will not count." in page
+    else:
+        assert "data-deadline" not in page
+        assert "Time was up at" in page and "Checks after that do not count." in page
 
 
 def test_a_mock_without_a_rehearsal_offers_to_start_one(site: TestClient) -> None:
     page = site.get("/mocks/lfcs-mock-b").text
-    assert "Start rehearsal" in page and "Result</th>" not in page
+    assert "Start timed (120 min)" in page and "Start untimed" in page
+    assert "Result</th>" not in page
+    assert "Review rehearsal" in page

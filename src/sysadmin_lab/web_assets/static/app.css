@@ -271,6 +271,9 @@ dd { margin: 0; text-align: right; }
 .rehearsal-card .section-heading { padding-bottom: 0; align-items: center; }
 .rehearsal-card .section-heading p + p { margin-top: 8px; }
 .rehearsal-score { padding: 10px 12px; border-radius: 4px; margin: 8px 0 0; }
+.rehearsal-clock strong { font-variant-numeric: tabular-nums; }
+.rehearsal-actions { display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; }
+.exam-note { margin-top: 8px; font-size: 0.95em; }
 .result-solved { color: var(--green-dark); font-weight: 700; }
 .result-partial { color: #8a5a00; }
 .result-untouched { color: var(--muted); }

@@ -54,7 +54,11 @@
       {% if scenario.debrief %}
         {% if not solved %}
           <div class="debrief-offer" data-debrief-offer>
-            <p>Stuck after the hints? The debrief explains the fault and walks through a complete solution. It opens by itself once you solve the scenario.</p>
+            {% if scenario.collection.value == 'exam' %}
+              <p>Done, or out of time? The debrief walks through one way to do it and the traps. It opens by itself once you solve the task.</p>
+            {% else %}
+              <p>Stuck after the hints? The debrief explains the fault and walks through a complete solution. It opens by itself once you solve the scenario.</p>
+            {% endif %}
             <button class="button button-secondary" type="button" data-reveal-debrief>Show the debrief</button>
           </div>
         {% endif %}

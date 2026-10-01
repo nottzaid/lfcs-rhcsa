@@ -1,10 +1,10 @@
 schema_version: 1
 mock_id: lfcs-mock-c
 status: verified
+kind: review
 title: LFCS Mock C — Troubleshooting Depth
 summary: A balanced twenty-task rehearsal emphasizing diagnosis and persistent repair.
 suggested_minutes: 120
-time_policy: advisory-only
 tasks:
   - persistent-kernel-tuning
   - runaway-service-recovery
