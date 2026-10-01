@@ -1,8 +1,7 @@
 schema_version: 1
 actions:
-  - action_id: install-incomplete-secure-deployment
-    target: node2
-    timeout_seconds: 90
+  - action_id: trust-the-company-root-on-the-client
+    target: client
     arguments:
       - sudo
       - --
@@ -10,33 +9,92 @@ actions:
       - -c
       - |
         set -euo pipefail
-        setenforce 1
-        rm -rf /srv/lal-secure /etc/lal-pki
-        install -d /srv/lal-secure /etc/lal-pki
+        nmcli connection add type ethernet ifname intra0 con-name intranet ipv4.method manual \
+          ipv4.addresses 10.45.0.50/24 ipv6.method disabled >/dev/null
+        nmcli connection up intranet >/dev/null
+        echo '10.45.0.10 service.internal' >> /etc/hosts
+        cat > /etc/pki/ca-trust/source/anchors/lal-root-ca.crt <<'PEM'
+        -----BEGIN CERTIFICATE-----
+        MIIBxTCCAWugAwIBAgIUO5I9KZ0hyYz07PbdnZdO4H/f/pkwCgYIKoZIzj0EAwIw
+        MDEYMBYGA1UECgwPTGludXggQWRtaW4gTGFiMRQwEgYDVQQDDAtMQUwgUm9vdCBD
+        QTAeFw0yNjEwMDExMDQxNDRaFw00NjA5MjYxMDQxNDRaMDAxGDAWBgNVBAoMD0xp
+        bnV4IEFkbWluIExhYjEUMBIGA1UEAwwLTEFMIFJvb3QgQ0EwWTATBgcqhkjOPQIB
+        BggqhkjOPQMBBwNCAASGS2/MmuWBy9ZwnxwtfIrHkRQimdtqYPd3qZ//7eeYs3ck
+        7z9j9mB0lzSTP7yy8ajVVaUVwAn2bWe9BL/RQHBko2MwYTAdBgNVHQ4EFgQUB8Iu
+        r+LA0x+dqDSEdNCpC1tdlB0wHwYDVR0jBBgwFoAUB8Iur+LA0x+dqDSEdNCpC1td
+        lB0wDwYDVR0TAQH/BAUwAwEB/zAOBgNVHQ8BAf8EBAMCAQYwCgYIKoZIzj0EAwID
+        SAAwRQIhAPRZ26ld4YqpQ+fO+8gczSYXM+e5CGmlj3vPF7od5VqjAiB3KaYXb2qz
+        5d4UyMtbAKJxwbXlJcubbtJub+TsL+yeuw==
+        -----END CERTIFICATE-----
+        PEM
+        update-ca-trust
+        install -d /usr/share/lal-secure
+        ls /etc/pki/ca-trust/source/anchors | sha256sum > /usr/share/lal-secure/anchors.sha256
+  - action_id: move-the-site-to-https
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname intra0 con-name intranet ipv4.method manual \
+          ipv4.addresses 10.45.0.10/24 ipv6.method disabled >/dev/null
+        nmcli connection up intranet >/dev/null
+        install -d -m 0755 /etc/lal-pki
         install -d -m 0700 /etc/lal-pki/private
+        cat > /etc/lal-pki/service.crt <<'PEM'
+        -----BEGIN CERTIFICATE-----
+        MIIB/zCCAaagAwIBAgIUEi58ZwzINBX6eA/RigC8/xAUkT4wCgYIKoZIzj0EAwIw
+        NTEYMBYGA1UECgwPTGludXggQWRtaW4gTGFiMRkwFwYDVQQDDBBMQUwgSXNzdWlu
+        ZyBDQSAxMB4XDTI2MTAwMTEwNDE0NFoXDTM2MDkyODEwNDE0NFowNTEYMBYGA1UE
+        CgwPTGludXggQWRtaW4gTGFiMRkwFwYDVQQDDBBzZXJ2aWNlLmludGVybmFsMFkw
+        EwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEz1R36AJ4IdKgGAXn0xI9HLjMyHw4O2T8
+        Rb2GLW0W2yRhVv7WSrjYeqk/Hi8W9V52Puw1FMwgEizY9NHTALqEiqOBkzCBkDAM
+        BgNVHRMBAf8EAjAAMA4GA1UdDwEB/wQEAwIHgDATBgNVHSUEDDAKBggrBgEFBQcD
+        ATAbBgNVHREEFDASghBzZXJ2aWNlLmludGVybmFsMB0GA1UdDgQWBBQ8hwb40y0R
+        egzFwKYCPeN2e5TQ1jAfBgNVHSMEGDAWgBRwv7mFVDaqvmM4sdG8aAnUSv3LbTAK
+        BggqhkjOPQQDAgNHADBEAiBBxh+0yF/pgvfHKNTqljIpz7qbyAqICEyqkRLigXct
+        fgIgeWPPcbQwkW4uPl9mWGIsrjB+vXyWU1ADSpErYw1y7EI=
+        -----END CERTIFICATE-----
+        PEM
+        cat > /etc/lal-pki/issuing-ca.crt <<'PEM'
+        -----BEGIN CERTIFICATE-----
+        MIIBzDCCAXOgAwIBAgIUbII7seDLXAWl2ueklQN+N3XNMykwCgYIKoZIzj0EAwIw
+        MDEYMBYGA1UECgwPTGludXggQWRtaW4gTGFiMRQwEgYDVQQDDAtMQUwgUm9vdCBD
+        QTAeFw0yNjEwMDExMDQxNDRaFw00NTExMzAxMDQxNDRaMDUxGDAWBgNVBAoMD0xp
+        bnV4IEFkbWluIExhYjEZMBcGA1UEAwwQTEFMIElzc3VpbmcgQ0EgMTBZMBMGByqG
+        SM49AgEGCCqGSM49AwEHA0IABD/tR6f5VNqMnVCKF+qK9vo4c+e86w8/8S9RqJQh
+        bgFJ05u05uQPlxgWAgcQo7o01O/cqfychum6DKdqui6hPGWjZjBkMBIGA1UdEwEB
+        /wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBRwv7mFVDaqvmM4
+        sdG8aAnUSv3LbTAfBgNVHSMEGDAWgBQHwi6v4sDTH52oNIR00KkLW12UHTAKBggq
+        hkjOPQQDAgNHADBEAiB+zOFPxayK9li6NvAucALUM3d45iss6dDTK1vlk/4PNwIg
+        K9o5D6/gEHpsnkTpNnboxh3tAl+dkOf+eAs52fJCYiA=
+        -----END CERTIFICATE-----
+        PEM
+        # The key was generated in root's home during the renewal and moved into place.
+        install -d -m 0700 /root/tls-renewal
+        (umask 077; cat > /root/tls-renewal/service.key <<'PEM'
+        -----BEGIN PRIVATE KEY-----
+        MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg3Jov/pOBzLh92oCa
+        135Vxat3MKQ36xUdV2Tcat7vHyqhRANCAATPVHfoAngh0qAYBefTEj0cuMzIfDg7
+        ZPxFvYYtbRbbJGFW/tZKuNh6qT8eLxb1XnY+7DUUzCASLNj00dMAuoSK
+        -----END PRIVATE KEY-----
+        PEM
+        )
+        mv /root/tls-renewal/service.key /etc/lal-pki/private/service.key
+        rmdir /root/tls-renewal
+        install -d /srv/lal-secure
         printf 'secure-ready\n' > /srv/lal-secure/index.html
-        semanage fcontext -d '/srv/lal-secure(/.*)?' >/dev/null 2>&1 || true
-        semanage port -d -t http_port_t -p tcp 8443 >/dev/null 2>&1 || true
-        restorecon -RF /srv/lal-secure
-        openssl req -x509 -newkey rsa:2048 -nodes -days 3650 -sha256 -subj /CN=LAL-CA \
-          -keyout /etc/lal-pki/private/ca.key -out /etc/lal-pki/ca.crt >/dev/null 2>&1
-        openssl req -newkey rsa:2048 -nodes -sha256 -subj /CN=service.internal \
-          -addext 'subjectAltName=DNS:service.internal' \
-          -keyout /etc/lal-pki/private/service.key -out /tmp/lal-service.csr >/dev/null 2>&1
-        printf '%s\n' 'subjectAltName=DNS:service.internal' > /tmp/lal-service.ext
-        openssl x509 -req -in /tmp/lal-service.csr -CA /etc/lal-pki/ca.crt \
-          -CAkey /etc/lal-pki/private/ca.key -CAcreateserial -days 730 -sha256 \
-          -extfile /tmp/lal-service.ext -out /etc/lal-pki/service.crt >/dev/null 2>&1
-        chmod 0600 /etc/lal-pki/private/*.key
-        chmod 0644 /etc/lal-pki/*.crt
-        cat > /etc/nginx/conf.d/lal-secure.conf <<'EOF'
+        cat > /etc/nginx/conf.d/lal-secure.conf <<'CONF'
         server {
-            listen 8088;
+            listen 8443 ssl;
             server_name service.internal;
+            ssl_certificate     /etc/lal-pki/service.crt;
+            ssl_certificate_key /etc/lal-pki/private/service.key;
             root /srv/lal-secure;
         }
-        EOF
-        firewall-cmd --quiet --permanent --remove-port=8443/tcp >/dev/null 2>&1 || true
-        firewall-cmd --quiet --reload
+        CONF
         systemctl enable nginx.service
         systemctl restart nginx.service || true

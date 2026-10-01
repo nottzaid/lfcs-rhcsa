@@ -1,0 +1,32 @@
+schema_version: 1
+actions:
+  - action_id: fix-labels
+    target: node2
+    arguments: [sudo, --, bash, -c, "restorecon -Rv /etc/lal-pki && semanage fcontext -a -t httpd_sys_content_t '/srv/lal-secure(/.*)?' && restorecon -Rv /srv/lal-secure"]
+  - action_id: open-the-port-and-restart
+    target: node2
+    arguments: [sudo, --, bash, -c, "firewall-cmd --quiet --permanent --add-port=8443/tcp && firewall-cmd --quiet --reload && systemctl restart nginx.service"]
+  - action_id: make-this-client-trust-the-issuing-ca-copied-from-node2
+    target: client
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cat > /etc/pki/ca-trust/source/anchors/lal-issuing-ca.crt <<'PEM'
+        -----BEGIN CERTIFICATE-----
+        MIIBzDCCAXOgAwIBAgIUbII7seDLXAWl2ueklQN+N3XNMykwCgYIKoZIzj0EAwIw
+        MDEYMBYGA1UECgwPTGludXggQWRtaW4gTGFiMRQwEgYDVQQDDAtMQUwgUm9vdCBD
+        QTAeFw0yNjEwMDExMDQxNDRaFw00NTExMzAxMDQxNDRaMDUxGDAWBgNVBAoMD0xp
+        bnV4IEFkbWluIExhYjEZMBcGA1UEAwwQTEFMIElzc3VpbmcgQ0EgMTBZMBMGByqG
+        SM49AgEGCCqGSM49AwEHA0IABD/tR6f5VNqMnVCKF+qK9vo4c+e86w8/8S9RqJQh
+        bgFJ05u05uQPlxgWAgcQo7o01O/cqfychum6DKdqui6hPGWjZjBkMBIGA1UdEwEB
+        /wQIMAYBAf8CAQAwDgYDVR0PAQH/BAQDAgEGMB0GA1UdDgQWBBRwv7mFVDaqvmM4
+        sdG8aAnUSv3LbTAfBgNVHSMEGDAWgBQHwi6v4sDTH52oNIR00KkLW12UHTAKBggq
+        hkjOPQQDAgNHADBEAiB+zOFPxayK9li6NvAucALUM3d45iss6dDTK1vlk/4PNwIg
+        K9o5D6/gEHpsnkTpNnboxh3tAl+dkOf+eAs52fJCYiA=
+        -----END CERTIFICATE-----
+        PEM
+        update-ca-trust
