@@ -232,8 +232,12 @@ class ServiceCheckProvider:
                 ("systemctl", "is-enabled", "--", name),
                 timeout_seconds=parameters.timeout_seconds,
             )
-            if enabled.succeeded != parameters.enabled:
-                actual = enabled.stdout.strip() or "not enabled"
+            actual = enabled.stdout.strip() or "not enabled"
+            # is-enabled also exits 0 for static, indirect, and transient units, none of which
+            # start at boot by themselves; only these states do. A generated unit's boot start
+            # is its generator's to decide, and is-enabled cannot tell.
+            starts_at_boot = actual in {"enabled", "alias", "generated"}
+            if starts_at_boot != parameters.enabled:
                 expected = "enabled at boot" if parameters.enabled else "disabled"
                 mismatches.append(f"{name} is {actual}; expected {expected}")
         return CheckObservation(
