@@ -104,9 +104,9 @@ sources:
   - kind: man-page
     title: enabled, gpgcheck, and gpgkey
     man_page: dnf.conf(5)
-  - kind: man-page
-    title: Restore a file from another commit
-    man_page: git-restore(1)
+  - kind: upstream
+    title: Restore a file from another commit (git restore)
+    url: https://git-scm.com/docs/git-restore
   - kind: man-page
     title: Quadlet .container files
     man_page: podman-systemd.unit(5)

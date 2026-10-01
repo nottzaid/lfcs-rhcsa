@@ -110,8 +110,8 @@ sources:
     title: Port labels
     man_page: semanage-port(8)
   - kind: man-page
-    title: SELinux policy for HAProxy
-    man_page: haproxy_selinux(8)
+    title: Booleans such as haproxy_connect_any, and -P
+    man_page: setsebool(8)
 topology:
   networks:
     - {name: app, cidr: 10.20.0.0/24}

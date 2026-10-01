@@ -90,8 +90,8 @@ sources:
     title: Search audit records for denials
     man_page: ausearch(8)
   - kind: man-page
-    title: SELinux policy for web servers
-    man_page: httpd_selinux(8)
+    title: Explain denials in plain language
+    man_page: sealert(8)
 topology:
   hosts:
     - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}

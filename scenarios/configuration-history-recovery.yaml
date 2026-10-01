@@ -25,7 +25,7 @@ requirements:
   - "`lal-app.service` is running with the approved settings."
 hints:
   - "`git log --oneline --stat` shows which files each commit touched. `git diff approved-v1 -- app.conf` shows exactly what drifted."
-  - "Undoing a whole commit is not the same as restoring one file. Compare `git revert` with `git restore --source=<commit> -- <path>` in `git-restore(1)`."
+  - "Undoing a whole commit is not the same as restoring one file. Compare `git revert` with `git restore --source=<commit> -- <path>`; `git restore -h` lists its options."
   - "A service reads its configuration when it starts. Committing a change does not reach a process that is already running."
 debrief: |
   ## What was wrong
@@ -78,15 +78,15 @@ sources:
   - kind: scope
     title: Linux Foundation LFCS competencies
     url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
-  - kind: man-page
-    title: Restore files from any commit
-    man_page: git-restore(1)
-  - kind: man-page
-    title: Undo whole commits
-    man_page: git-revert(1)
-  - kind: man-page
-    title: Inspect history
-    man_page: git-log(1)
+  - kind: upstream
+    title: Restore files from any commit (git restore)
+    url: https://git-scm.com/docs/git-restore
+  - kind: upstream
+    title: Undo whole commits (git revert)
+    url: https://git-scm.com/docs/git-revert
+  - kind: upstream
+    title: Inspect history (git log)
+    url: https://git-scm.com/docs/git-log
 topology:
   hosts:
     - name: node2
