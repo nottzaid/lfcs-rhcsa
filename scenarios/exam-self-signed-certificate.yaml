@@ -1,0 +1,123 @@
+schema_version: 1
+scenario_id: exam-self-signed-certificate
+version: 1
+status: verified
+collection: exam
+title: Create a key and a self-signed certificate
+summary: Generate an RSA key and a self-signed certificate with a subject, alternative names, and a lifetime.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, create:
+
+  - an RSA private key of 3072 bits at `/etc/pki/tls/private/portal.key`, owned by root and
+    readable by root only;
+  - a self-signed certificate for that key at `/etc/pki/tls/certs/portal.crt`, valid for
+    365 days, with the subject `CN=portal.lab.internal` and the subject alternative names
+    `portal.lab.internal` and `portal`.
+requirements:
+  - "`portal.key` is a 3072-bit RSA key, owned by root with mode 0600."
+  - "`portal.crt` is self-signed, matches the key, and is valid for 365 days."
+  - "Its subject is `CN=portal.lab.internal`, with the DNS names `portal.lab.internal` and `portal`."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo openssl req -x509 -newkey rsa:3072 -nodes -days 365 \
+    -keyout /etc/pki/tls/private/portal.key -out /etc/pki/tls/certs/portal.crt \
+    -subj '/CN=portal.lab.internal' \
+    -addext 'subjectAltName=DNS:portal.lab.internal,DNS:portal'
+  sudo chmod 600 /etc/pki/tls/private/portal.key
+  ```
+
+  `-x509` makes `openssl req` sign the request with its own key instead of producing a
+  request for a CA. `-nodes` leaves the key unencrypted, so a service can read it at boot.
+  Clients match the host name against the subject alternative names, not the common name,
+  so the SANs are what make the certificate usable.
+
+  ## Check it yourself
+
+  ```bash
+  openssl x509 -in /etc/pki/tls/certs/portal.crt -noout -subject -dates -ext subjectAltName
+  sudo openssl pkey -in /etc/pki/tls/private/portal.key -noout -text | head -n 1
+  sudo ls -l /etc/pki/tls/private/portal.key
+  ```
+
+  ## Tempting but wrong
+
+  - **A certificate without `subjectAltName`.** Current clients ignore the common name and
+    reject it for `portal.lab.internal`.
+  - **A key readable by everyone.** Anyone on node2 could impersonate the service.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.tls-certificates
+    title: Work with SSL certificates
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Keys, requests, and self-signed certificates
+    man_page: openssl-req(1ossl)
+  - kind: man-page
+    title: Inspect certificates
+    man_page: openssl-x509(1ossl)
+  - kind: man-page
+    title: subjectAltName and other extensions
+    man_page: x509v3_config(5ossl)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: private-key
+    kind: command
+    target: node2
+    description: portal.key is a 3072-bit RSA key, owned by root with mode 0600.
+    parameters:
+      sudo: true
+      script: |
+        key=/etc/pki/tls/private/portal.key
+        [[ -f "$key" ]] || fail "$key does not exist"
+        header=$(openssl pkey -in "$key" -noout -text 2>/dev/null | head -n 1) || fail "$key is not a private key"
+        [[ "$header" == *"Private-Key: (3072 bit"* ]] || fail "$key is not a 3072-bit key: $header"
+        openssl pkey -in "$key" -noout -text 2>/dev/null | grep -q '^modulus:' || fail "$key is not an RSA key"
+        expect_eq "$(stat -c '%U:%G %a' "$key")" "root:root 600" "the owner and mode of $key"
+  - check_id: self-signed-and-valid
+    kind: command
+    target: node2
+    description: portal.crt is self-signed, matches the key, and is valid for 365 days.
+    parameters:
+      sudo: true
+      script: |
+        cert=/etc/pki/tls/certs/portal.crt
+        openssl x509 -in "$cert" -noout 2>/dev/null || fail "$cert is not a certificate"
+        openssl verify -CAfile "$cert" "$cert" >/dev/null 2>&1 || fail "$cert is not self-signed"
+        expect_eq "$(openssl x509 -in "$cert" -noout -pubkey)" \
+          "$(openssl pkey -in /etc/pki/tls/private/portal.key -pubout)" "the public key in the certificate"
+        start=$(date -d "$(openssl x509 -in "$cert" -noout -startdate | cut -d= -f2)" +%s)
+        end=$(date -d "$(openssl x509 -in "$cert" -noout -enddate | cut -d= -f2)" +%s)
+        days=$(( (end - start + 43200) / 86400 ))
+        expect_eq "$days" 365 "the certificate's lifetime in days"
+  - check_id: subject-and-names
+    kind: command
+    target: node2
+    description: The subject is CN=portal.lab.internal, with the DNS names portal.lab.internal and portal.
+    parameters:
+      script: |
+        cert=/etc/pki/tls/certs/portal.crt
+        subject=$(openssl x509 -in "$cert" -noout -subject -nameopt RFC2253 2>/dev/null | sed 's/^subject=//')
+        expect_eq "$subject" CN=portal.lab.internal "the certificate's subject"
+        names=$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ')
+        [[ -n "$names" ]] || fail "the certificate has no subject alternative names"
+        for name in DNS:portal.lab.internal DNS:portal; do
+          [[ ",$names," == *",$name,"* ]] || fail "the subject alternative names ($names) lack $name"
+        done
+persistence:
+  reboot: false
+setup: actions/exam-self-signed-certificate.setup.yaml
+reference_solution: actions/exam-self-signed-certificate.solution.yaml
+rejected_solutions:
+  - actions/exam-self-signed-certificate.rejected-no-names.yaml
+  - actions/exam-self-signed-certificate.rejected-readable-key.yaml

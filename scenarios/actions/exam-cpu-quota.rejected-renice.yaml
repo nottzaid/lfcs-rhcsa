@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: lower-its-priority
+    target: node2
+    arguments: [sudo, --, bash, -c, 'renice -n 19 -p "$(systemctl show -p MainPID --value lal-reindex.service)" >/dev/null']

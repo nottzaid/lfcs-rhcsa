@@ -1,0 +1,48 @@
+schema_version: 1
+actions:
+  - action_id: run-the-router-with-the-far-network
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.64.1.1/24 ipv6.method disabled >/dev/null
+        nmcli connection add type dummy ifname far0 con-name far ipv4.method manual \
+          ipv4.addresses 10.64.2.1/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null
+        nmcli connection up far >/dev/null
+        install -d -m 0755 /srv/far
+        printf '<h1>far network</h1>\n' > /srv/far/index.html
+        cat > /etc/systemd/system/lal-far.service <<'UNIT'
+        [Unit]
+        Description=Page on the far network
+        After=network-online.target
+        Wants=network-online.target
+
+        [Service]
+        ExecStart=/usr/bin/python3 -m http.server 80 --bind 10.64.2.1 --directory /srv/far
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now lal-far.service
+        firewall-cmd --quiet --permanent --add-service=http
+        firewall-cmd --quiet --reload
+  - action_id: address-node2
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.64.1.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null

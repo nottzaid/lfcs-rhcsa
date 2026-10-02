@@ -159,3 +159,24 @@ topology:
 
 The management NIC (`enp1s0`) on libvirt's default network carries SSH for the learner and
 the checker. Scenarios must not ask the learner to change it.
+
+## Exam tasks
+
+Exam rehearsals hold tasks that appear nowhere on the practice path, so a learner meets each
+one for the first time, as on the exam. An exam task is a scenario with
+`collection: exam`, listed in exactly one mock of `kind: exam`. It differs from a practice
+scenario in a few deliberate ways:
+
+- **The task says exactly what to do, and where**, like the exam's: "On node2, create a
+  logical volume `data` of 600 MiB in a new volume group `vgapp` on `/dev/vdb`, format it
+  XFS, and mount it at `/srv/app` persistently." It names every name, size, and path the
+  checks grade. It never names the command to use, because any valid method counts.
+- **No hints.** The exam has none. The debrief is where the teaching happens, so it has
+  three sections: `## One way to do it`, `## Check it yourself`, and `## Tempting but wrong`.
+- **The setup provides only what the task needs**: a disk, a server, a repository. It does
+  not hide a fault unless the task says to fix something.
+- Everything else holds: requirements, behavioral checks, persistence proven by reboot, and
+  at least one rejected solution that a careless answer would match.
+
+Each exam mock has twenty tasks at the published domain weights, and the exam mocks
+together ask for every competency. The contract tests enforce both.

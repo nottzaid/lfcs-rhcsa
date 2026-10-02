@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: renice-the-running-process
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl mask --now lal-statsd.service
+        renice -n 10 -p "$(systemctl show -p MainPID --value lal-batch.service)" >/dev/null

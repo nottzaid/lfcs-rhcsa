@@ -1,0 +1,23 @@
+schema_version: 1
+actions:
+  - action_id: run-it-as-root
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /  # rootless podman returns to the caller's directory, which app cannot enter
+        loginctl enable-linger app
+        uid=$(id -u app)
+        runuser -u app -- podman save --quiet -o /tmp/cache.tar localhost/lal-cache:1 2>/dev/null
+        podman load --quiet -i /tmp/cache.tar >/dev/null
+        rm -f /tmp/cache.tar
+        printf '%s\n' '[Container]' 'ContainerName=cache' 'Image=localhost/lal-cache:1' \
+          'Volume=cachedata:/data' '' '[Install]' 'WantedBy=multi-user.target' \
+          > /etc/containers/systemd/cache.container
+        systemctl daemon-reload
+        systemctl start cache.service

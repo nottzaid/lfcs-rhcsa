@@ -1,0 +1,130 @@
+schema_version: 1
+scenario_id: exam-static-addressing
+version: 1
+status: verified
+collection: exam
+title: Static IPv4 and IPv6, a hostname, and a local name
+summary: Address an interface statically for both protocols, rename the host, and resolve a name without DNS.
+estimated_minutes: 7
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`, all persistently:
+
+  - Configure the interface `lan0` with the static address `10.61.0.20/24` and the IPv6
+    address `fd61::20/64`, in a NetworkManager connection named `lan` that comes up at boot.
+  - Set node2's hostname to `app02.lab.internal`.
+  - Make the name `db.lab.internal` resolve to `10.61.0.30` on node2, without DNS.
+
+  `node1` already uses `10.61.0.30` and `fd61::30` on the same network.
+requirements:
+  - "The connection `lan` on `lan0` holds 10.61.0.20/24 and fd61::20/64 and starts at boot."
+  - "node2 reaches node1 at 10.61.0.30 and fd61::30."
+  - "The hostname is `app02.lab.internal`, now and after a reboot."
+  - "`db.lab.internal` resolves to 10.61.0.30 without DNS."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo nmcli connection add type ethernet ifname lan0 con-name lan \
+    ipv4.method manual ipv4.addresses 10.61.0.20/24 \
+    ipv6.method manual ipv6.addresses fd61::20/64
+  sudo nmcli connection up lan
+  sudo hostnamectl set-hostname app02.lab.internal
+  echo '10.61.0.30 db.lab.internal db' | sudo tee -a /etc/hosts
+  ```
+
+  A NetworkManager connection is stored in `/etc/NetworkManager/system-connections/` and
+  comes up at boot (`connection.autoconnect` defaults to yes). `hostnamectl set-hostname`
+  writes `/etc/hostname` and changes the running name together. `/etc/hosts` is consulted
+  before DNS because `nsswitch.conf` lists `files` first.
+
+  ## Check it yourself
+
+  ```bash
+  nmcli -g ipv4.addresses,ipv6.addresses,connection.autoconnect connection show lan
+  ip -br address show lan0
+  hostnamectl
+  getent hosts db.lab.internal
+  ping -c1 fd61::30
+  ```
+
+  ## Tempting but wrong
+
+  - **`ip address add`.** The addresses work until the reboot.
+  - **`hostname app02.lab.internal`.** It changes the running name only.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.ip-hostname
+    title: Configure IPv4 and IPv6 networking and hostname resolution
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Create and activate connections
+    man_page: nmcli(1)
+  - kind: man-page
+    title: Connection settings such as ipv6.addresses
+    man_page: nm-settings-nmcli(5)
+  - kind: man-page
+    title: Set the hostname
+    man_page: hostnamectl(1)
+  - kind: man-page
+    title: Static host names
+    man_page: hosts(5)
+topology:
+  networks:
+    - {name: lan, cidr: 10.61.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+checks:
+  - check_id: lan-connection
+    kind: command
+    target: node2
+    description: The connection lan on lan0 holds 10.61.0.20/24 and fd61::20/64 and starts at boot.
+    parameters:
+      script: |
+        settings=$(nmcli -g connection.interface-name,connection.autoconnect,ipv4.addresses,ipv6.addresses connection show lan 2>/dev/null) \
+          || fail "there is no NetworkManager connection called lan"
+        mapfile -t field <<<"$settings"
+        field=("${field[@]//\\:/:}")  # nmcli -g escapes colons inside values
+        expect_eq "${field[0]}" lan0 "the interface of the lan connection"
+        expect_eq "${field[1]}" yes "autoconnect for the lan connection"
+        expect_eq "${field[2]}" 10.61.0.20/24 "the IPv4 address of the lan connection"
+        expect_eq "${field[3]}" fd61::20/64 "the IPv6 address of the lan connection"
+  - check_id: reaches-node1
+    kind: command
+    target: node2
+    description: node2 reaches node1 at 10.61.0.30 and fd61::30.
+    parameters:
+      timeout_seconds: 40
+      script: |
+        retry 5 ping -c1 -W2 10.61.0.30 >/dev/null || fail "node2 cannot reach 10.61.0.30"
+        # IPv6 duplicate address detection takes a moment after the address appears.
+        retry 15 ping -6 -c1 -W2 fd61::30 >/dev/null || fail "node2 cannot reach fd61::30"
+  - check_id: hostname
+    kind: command
+    target: node2
+    description: The hostname is app02.lab.internal, statically and in the running system.
+    parameters:
+      script: |
+        expect_eq "$(hostnamectl hostname --static)" app02.lab.internal "the static hostname"
+        expect_eq "$(hostname)" app02.lab.internal "the running hostname"
+  - check_id: local-name
+    kind: command
+    target: node2
+    description: db.lab.internal resolves to 10.61.0.30 without DNS.
+    parameters:
+      script: |
+        address=$(getent -s files hosts db.lab.internal | awk '{print $1; exit}')
+        expect_eq "${address:-nothing}" 10.61.0.30 "what db.lab.internal resolves to from local files"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-static-addressing.setup.yaml
+reference_solution: actions/exam-static-addressing.solution.yaml
+rejected_solutions:
+  - actions/exam-static-addressing.rejected-runtime.yaml

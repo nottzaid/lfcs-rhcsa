@@ -1,10 +1,10 @@
 schema_version: 1
 mock_id: lfcs-mock-b
 status: verified
+kind: review
 title: LFCS Mock B — Networked Services
 summary: A balanced twenty-task rehearsal emphasizing multi-machine administration.
 suggested_minutes: 120
-time_policy: advisory-only
 tasks:
   - queued-handoff-job
   - libvirt-guest-recovery

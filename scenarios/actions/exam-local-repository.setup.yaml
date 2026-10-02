@@ -1,0 +1,43 @@
+schema_version: 1
+actions:
+  - action_id: build-signed-packages-without-metadata
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        export GNUPGHOME=$(mktemp -d)
+        gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
+          --quick-gen-key 'Media Team <media@lab.invalid>' rsa3072 sign never
+        top=$(mktemp -d)
+        install -d "$top"/{SPECS,RPMS,BUILD,SOURCES,SRPMS}
+        for name in lal-tools lal-docs; do
+          cat > "$top/SPECS/$name.spec" <<SPEC
+        Name: $name
+        Version: 1.4
+        Release: 1
+        Summary: Site tooling ($name)
+        License: MIT
+        BuildArch: noarch
+        %description
+        Site tooling.
+        %install
+        mkdir -p %{buildroot}/usr/share/$name
+        printf '$name 1.4\n' > %{buildroot}/usr/share/$name/VERSION
+        %files
+        /usr/share/$name/VERSION
+        SPEC
+          rpmbuild -bb --quiet --define "_topdir $top" "$top/SPECS/$name.spec" 2>/dev/null
+        done
+        install -d -m 0755 /srv/media
+        cp "$top"/RPMS/noarch/*.rpm /srv/media/
+        rpmsign --addsign --define '_gpg_name Media Team' --define "_gpg_path $GNUPGHOME" \
+          /srv/media/*.rpm >/dev/null
+        gpg --export --armor > /srv/media/RPM-GPG-KEY-media
+        rm -rf "$GNUPGHOME" "$top"
+        dnf config-manager --set-disabled baseos appstream extras >/dev/null
+        dnf clean all >/dev/null

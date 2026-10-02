@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: system-crontab-entry
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '30 2 * * 1-5 reports /usr/local/bin/lal-report\n' >> /etc/crontab
+        printf 'touch /var/tmp/cutover-done\n' | at 23:45 2027-01-15 2>/dev/null

@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: yearly-cron-entry-instead-of-at
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '30 2 * * 1-5 /usr/local/bin/lal-report\n' | crontab -u reports -
+        printf '45 23 15 1 * touch /var/tmp/cutover-done\n' | crontab -

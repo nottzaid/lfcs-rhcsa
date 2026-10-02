@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: configure-nginx-for-the-site
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -m 0755 /srv/site
+        printf '<h1>Exam site %s</h1>\n' "$(cat /proc/sys/kernel/random/uuid)" > /srv/site/index.html
+        printf '%s\n' 'server {' '    listen 8282;' '    root /srv/site;' '    index index.html;' '}' \
+          > /etc/nginx/conf.d/site.conf
+        nginx -t -q
+        systemctl enable nginx.service
+        systemctl start nginx.service || true

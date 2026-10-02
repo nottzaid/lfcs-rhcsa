@@ -1,0 +1,126 @@
+schema_version: 1
+scenario_id: exam-accounts-and-profile
+version: 1
+status: verified
+collection: exam
+title: Create an account to spec and a system-wide login variable
+summary: Create a group and a user with exact IDs and password ageing, and set a variable for every login.
+estimated_minutes: 6
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`:
+
+  - Create the group `finance` with GID 5100.
+  - Create the user `ana` with UID 5101, primary group `finance`, supplementary group
+    `wheel`, home directory `/home/ana`, and login shell `/bin/bash`. Her password must
+    expire every 90 days.
+  - Make every user's login shell set the environment variable `LEDGER_HOME` to
+    `/srv/ledger`, through the shell startup files all users share.
+requirements:
+  - "`finance` has GID 5100."
+  - "`ana` has UID 5101, primary group `finance`, supplementary group `wheel`, home `/home/ana`, and shell `/bin/bash`."
+  - "`ana`'s password expires every 90 days."
+  - "In every user's login shell, `LEDGER_HOME` is `/srv/ledger`."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo groupadd -g 5100 finance
+  sudo useradd -u 5101 -g finance -G wheel -m -d /home/ana -s /bin/bash ana
+  sudo chage -M 90 ana
+  echo 'export LEDGER_HOME=/srv/ledger' | sudo tee /etc/profile.d/ledger.sh
+  ```
+
+  `-g` sets the primary group and `-G` the supplementary ones. `chage -M` sets the maximum
+  number of days between password changes. A login shell reads `/etc/profile`, which runs
+  every `*.sh` file in `/etc/profile.d/`, so a file there reaches every user's login.
+
+  ## Check it yourself
+
+  ```bash
+  id ana
+  getent passwd ana
+  sudo chage -l ana | grep Maximum
+  sudo -iu ana printenv LEDGER_HOME
+  ```
+
+  ## Tempting but wrong
+
+  - **The export in `ana`'s `~/.bash_profile`.** Only `ana` gets it.
+  - **`usermod -g wheel`.** It replaces the primary group instead of adding a
+    supplementary one.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.local-accounts
+    title: Create and manage local user and group accounts
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.environment-profiles
+    title: Manage personal and system-wide environment profiles
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Create users with IDs, groups, and shells
+    man_page: useradd(8)
+  - kind: man-page
+    title: Password ageing
+    man_page: chage(1)
+  - kind: man-page
+    title: Login shell startup files
+    man_page: bash(1)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: finance-group
+    kind: command
+    target: node2
+    description: finance has GID 5100.
+    parameters:
+      script: |
+        expect_eq "$(getent group finance | cut -d: -f3)" 5100 "the GID of finance"
+  - check_id: ana-account
+    kind: command
+    target: node2
+    description: ana has the UID, groups, home, and shell the task asks for.
+    parameters:
+      script: |
+        entry=$(getent passwd ana) || fail "there is no user ana"
+        IFS=: read -r _ _ uid gid _ home shell <<<"$entry"
+        expect_eq "$uid" 5101 "ana's UID"
+        expect_eq "$gid" 5100 "ana's primary GID"
+        expect_eq "$home" /home/ana "ana's home directory"
+        expect_eq "$shell" /bin/bash "ana's login shell"
+        [[ " $(id -nG ana) " == *" wheel "* ]] || fail "ana is not in wheel (groups: $(id -nG ana))"
+        [[ -d /home/ana ]] || fail "/home/ana does not exist"
+        expect_eq "$(stat -c %U /home/ana)" ana "the owner of /home/ana"
+  - check_id: password-ageing
+    kind: command
+    target: node2
+    description: ana's password expires every 90 days.
+    parameters:
+      sudo: true
+      script: |
+        expect_eq "$(getent shadow ana | cut -d: -f5)" 90 "the maximum password age of ana in days"
+  - check_id: login-variable
+    kind: command
+    target: node2
+    description: In every user's login shell, LEDGER_HOME is /srv/ledger.
+    parameters:
+      sudo: true
+      script: |
+        for user in ana bob; do
+          value=$(runuser -l "$user" -c 'printf %s "$LEDGER_HOME"' 2>/dev/null)
+          expect_eq "$value" /srv/ledger "LEDGER_HOME in $user's login shell"
+        done
+persistence:
+  reboot: false
+setup: actions/exam-accounts-and-profile.setup.yaml
+reference_solution: actions/exam-accounts-and-profile.solution.yaml
+rejected_solutions:
+  - actions/exam-accounts-and-profile.rejected-personal-profile.yaml
+  - actions/exam-accounts-and-profile.rejected-primary-wheel.yaml

@@ -25,6 +25,10 @@ from whether a VM exists, and it must survive deletion of disposable resources.
   version. Updating a scenario version does not silently inherit its previous solved mark.
 - Estimated duration is advisory. Scenarios and mock rehearsals have no countdown or forced teardown.
 
+  Amended 2026-10-02: a learner may start a mock rehearsal as timed. Its deadline is the
+  mock's suggested minutes, and checks after it no longer count toward the score. Nothing
+  is torn down when time is up; machines stay until the learner destroys them.
+
 ## Consequences
 
 The current web process must run as a single worker. Durable session state still makes

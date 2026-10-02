@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: register-without-a-priority
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        fallocate -l 512M /swapfile
+        chmod 600 /swapfile
+        mkswap -q /swapfile
+        printf '/swapfile none swap defaults 0 0\n' >> /etc/fstab
+        systemctl daemon-reload
+        swapon -a

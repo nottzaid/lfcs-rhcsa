@@ -1,0 +1,101 @@
+schema_version: 1
+scenario_id: exam-port-redirection
+version: 1
+status: verified
+collection: exam
+title: Open a service and redirect a port with firewalld
+summary: Allow HTTP, redirect a second port to it, and keep everything else closed, persistently.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2` (10.63.0.20), a web server listens on port 80. Using firewalld, and so that it
+  survives a reboot:
+
+  - allow HTTP from the network node1 (10.63.0.10) is on;
+  - redirect TCP port 8080 to port 80 on node2, so clients can use either port;
+  - open nothing else: other services listening on node2 must stay unreachable from node1.
+requirements:
+  - "From node1, `http://10.63.0.20/` and `http://10.63.0.20:8080/` both return node2's page."
+  - "From node1, nothing else on node2 is reachable, such as the service on port 8443."
+  - "All of it holds after node2 reboots."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo firewall-cmd --permanent --add-service=http
+  sudo firewall-cmd --permanent --add-forward-port=port=8080:proto=tcp:toport=80
+  sudo firewall-cmd --reload
+  ```
+
+  `--permanent` writes the zone's configuration; `--reload` makes the running firewall
+  match it. Without `--permanent` a rule lives until the next reload or reboot. A forward
+  port without `toaddr=` redirects to node2 itself, before the packet reaches any service,
+  so nothing needs to listen on 8080. Both rules land in the zone of `lan0`, the default
+  zone `public`.
+
+  ## Check it yourself
+
+  ```bash
+  sudo firewall-cmd --list-all
+  curl http://10.63.0.20:8080/        # from node1
+  ```
+
+  ## Tempting but wrong
+
+  - **The same commands without `--permanent`.** Everything works until node2 reboots.
+  - **`--add-port=8080/tcp`.** It opens 8080, where nothing listens.
+  - **Setting the zone's target to `ACCEPT`.** HTTP works, and so does everything else.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.packet-filtering
+    title: Configure packet filtering, port redirection, and NAT
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Services, forward ports, and permanent configuration
+    man_page: firewall-cmd(1)
+  - kind: man-page
+    title: Zones and their targets
+    man_page: firewalld.zones(5)
+topology:
+  networks:
+    - {name: lan, cidr: 10.63.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+checks:
+  - check_id: http-on-both-ports
+    kind: command
+    target: node1
+    description: From node1, ports 80 and 8080 on node2 both return its page.
+    parameters:
+      timeout_seconds: 40
+      script: |
+        expected="node2 serves this page"
+        for port in 80 8080; do
+          fetch() { page=$(curl --silent --show-error --max-time 3 "http://10.63.0.20:$port/" 2>&1); }
+          retry 5 fetch || fail "node1 cannot reach port $port on node2: ${page##*: }"
+          [[ "$page" == *"$expected"* ]] || fail "port $port on node2 answers with something else"
+        done
+  - check_id: nothing-else-open
+    kind: command
+    target: node1
+    description: From node1, the service on port 8443 of node2 stays unreachable.
+    parameters:
+      timeout_seconds: 20
+      script: |
+        ! curl --silent --max-time 4 --output /dev/null http://10.63.0.20:8443/ \
+          || fail "node1 can reach the service on port 8443 of node2"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-port-redirection.setup.yaml
+reference_solution: actions/exam-port-redirection.solution.yaml
+rejected_solutions:
+  - actions/exam-port-redirection.rejected-runtime.yaml
+  - actions/exam-port-redirection.rejected-open-port.yaml
+  - actions/exam-port-redirection.rejected-accept-everything.yaml

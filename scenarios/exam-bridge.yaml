@@ -1,0 +1,108 @@
+schema_version: 1
+scenario_id: exam-bridge
+version: 1
+status: verified
+collection: exam
+title: Move an address onto a bridge
+summary: Create a bridge over an interface, without STP, and move the host's address onto it.
+estimated_minutes: 7
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, create a bridge `br0` with `lan1` as its only port and with the spanning tree
+  protocol (STP) disabled. Move node2's address `10.75.0.20/24` from `lan1` to `br0`. All of
+  it must persist across reboots.
+
+  `node1` (10.75.0.10) must stay reachable from node2.
+requirements:
+  - "`br0` is a bridge with `lan1` as its port and STP disabled, also after a reboot."
+  - "`br0` holds 10.75.0.20/24, and `lan1` holds no IPv4 address."
+  - "node2 reaches node1 at 10.75.0.10."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo nmcli connection add type bridge ifname br0 con-name br0 bridge.stp no \
+    ipv4.method manual ipv4.addresses 10.75.0.20/24 ipv6.method disabled
+  sudo nmcli connection add type ethernet ifname lan1 con-name br0-port controller br0 port-type bridge
+  sudo nmcli connection delete lan1
+  sudo nmcli connection up br0
+  ```
+
+  A port joins the bridge as a layer-2 member, so its address moves to the bridge
+  connection. NetworkManager enables STP on new bridges by default; with STP on, a bridge
+  waits about 30 seconds after every link change before forwarding, which looks like a
+  network that comes up late for no reason.
+
+  ## Check it yourself
+
+  ```bash
+  bridge link show
+  cat /sys/class/net/br0/bridge/stp_state      # 0
+  ip -br address show br0 lan1
+  ```
+
+  ## Tempting but wrong
+
+  - **A bridge with the default STP setting.** It is on.
+  - **Adding the bridge and keeping the address on `lan1`.** `lan1` cannot be a port and
+    keep its own IP configuration.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.bridges-bonds
+    title: Configure bridge and bonding devices
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Create bridge and port connections
+    man_page: nmcli(1)
+  - kind: man-page
+    title: bridge.stp and port settings
+    man_page: nm-settings-nmcli(5)
+  - kind: man-page
+    title: Inspect links
+    man_page: ip-link(8)
+topology:
+  networks:
+    - {name: lan, cidr: 10.75.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan1}]}
+checks:
+  - check_id: bridge-without-stp
+    kind: command
+    target: node2
+    description: br0 is a bridge with lan1 as its port and STP disabled.
+    parameters:
+      timeout_seconds: 20
+      script: |
+        exists() { [[ -d /sys/class/net/br0/bridge ]]; }
+        retry 10 exists || fail "there is no bridge br0"
+        expect_eq "$(basename "$(readlink -f /sys/class/net/lan1/master 2>/dev/null)")" br0 "the bridge lan1 belongs to"
+        expect_eq "$(cat /sys/class/net/br0/bridge/stp_state)" 0 "STP on br0 (0 is off)"
+  - check_id: address-moved
+    kind: command
+    target: node2
+    description: br0 holds 10.75.0.20/24, and lan1 holds no IPv4 address.
+    parameters:
+      script: |
+        ip -4 -o address show dev br0 | grep -q ' 10\.75\.0\.20/24 ' || fail "br0 does not hold 10.75.0.20/24"
+        [[ -z "$(ip -4 -o address show dev lan1)" ]] || fail "lan1 still holds an IPv4 address"
+  - check_id: reaches-node1
+    kind: command
+    target: node2
+    description: node2 reaches node1 at 10.75.0.10.
+    parameters:
+      timeout_seconds: 30
+      script: retry 10 ping -c1 -W2 10.75.0.10 >/dev/null || fail "node2 cannot reach node1 at 10.75.0.10"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-bridge.setup.yaml
+reference_solution: actions/exam-bridge.solution.yaml
+rejected_solutions:
+  - actions/exam-bridge.rejected-default-stp.yaml
+  - actions/exam-bridge.rejected-address-left-behind.yaml

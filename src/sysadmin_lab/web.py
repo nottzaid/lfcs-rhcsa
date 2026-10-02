@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import asdict
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 from uuid import UUID
@@ -30,7 +31,7 @@ from sysadmin_lab.application.lab_workspace import (
 from sysadmin_lab.application.learning_path import build_learning_path
 from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
 from sysadmin_lab.domain.mock_exams import MockExamManifest
-from sysadmin_lab.domain.models import ScenarioManifest, ScenarioStatus
+from sysadmin_lab.domain.models import ScenarioCollection, ScenarioManifest, ScenarioStatus
 from sysadmin_lab.domain.progress import ScenarioProgress
 from sysadmin_lab.domain.sessions import SessionState, SessionStatus
 
@@ -266,6 +267,15 @@ def create_app(
     def home() -> RedirectResponse:
         return RedirectResponse("/scenarios/topic/lfcs", status_code=307)
 
+    def exam_mock_of(manifest: ScenarioManifest) -> MockExamManifest | None:
+        """The exam rehearsal an exam task belongs to; practice scenarios have none."""
+        if manifest.collection is not ScenarioCollection.EXAM:
+            return None
+        return next(
+            (mock for mock in active_workspace.mock_exams() if manifest.scenario_id in mock.tasks),
+            None,
+        )
+
     def solved_now(manifest: ScenarioManifest) -> bool:
         return any(
             item.scenario_id == manifest.scenario_id
@@ -280,6 +290,7 @@ def create_app(
             scenario
             for scenario in active_workspace.scenarios()
             if scenario.status is ScenarioStatus.VERIFIED
+            and scenario.collection is ScenarioCollection.PRACTICE
         )
         path = build_learning_path(
             scenarios, active_workspace.curriculum(), active_workspace.progress()
@@ -314,7 +325,13 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="mock.html",
-            context={"mock": mock, "tasks": tasks, "rehearsal": rehearsal, "results": results},
+            context={
+                "mock": mock,
+                "tasks": tasks,
+                "rehearsal": rehearsal,
+                "results": results,
+                "time_is_up": bool(rehearsal and rehearsal.time_is_up(datetime.now(UTC))),
+            },
         )
 
     @app.get("/scenarios/{scenario_id}", response_class=HTMLResponse)
@@ -323,7 +340,11 @@ def create_app(
         return templates.TemplateResponse(
             request=request,
             name="scenario.html",
-            context={"scenario": manifest, "solved": solved_now(manifest)},
+            context={
+                "scenario": manifest,
+                "solved": solved_now(manifest),
+                "exam_mock": exam_mock_of(manifest),
+            },
         )
 
     @app.get("/sessions/{session_id}", response_class=HTMLResponse)
@@ -387,11 +408,11 @@ def create_app(
         "/api/mocks/{mock_id}/rehearsal",
         dependencies=[Depends(require_local_action)],
     )
-    def start_rehearsal(mock_id: str) -> JSONResponse:
+    def start_rehearsal(mock_id: str, timed: bool = False) -> JSONResponse:
         mock_or_404(mock_id)
 
         def start() -> dict[str, Any]:
-            active_workspace.start_rehearsal(mock_id)
+            active_workspace.start_rehearsal(mock_id, timed=timed)
             return {"redirect_url": f"/mocks/{mock_id}"}
 
         return submit_job(kind="rehearsal", resource_key=f"mock:{mock_id}", operation=start)

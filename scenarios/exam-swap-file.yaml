@@ -1,0 +1,104 @@
+schema_version: 1
+scenario_id: exam-swap-file
+version: 1
+status: verified
+collection: exam
+title: Add a swap file with a priority
+summary: Create a swap file, give it a priority, and keep it across reboots alongside existing swap.
+estimated_minutes: 5
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`, add 512 MiB of swap space as the file `/swapfile`, used with priority 10. It
+  must be active now and after every reboot. Keep the existing swap as it is.
+requirements:
+  - "`/swapfile` is active swap of 512 MiB with priority 10, also after a reboot."
+  - "`/swapfile` is readable and writable by root only."
+  - "The existing swap stays active."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo dd if=/dev/zero of=/swapfile bs=1M count=512
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  echo '/swapfile none swap pri=10 0 0' | sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload
+  sudo swapon -a
+  ```
+
+  `swapon -a` activates every swap entry in fstab, which also proves the new line works.
+  The priority comes from `pri=` in fstab, or `swapon -p` for the running system only.
+  Swap holds memory contents, so the file must not be readable by other users; `swapon`
+  warns about insecure permissions. `fallocate -l 512M /swapfile` is a faster way to
+  create the file on XFS.
+
+  ## Check it yourself
+
+  ```bash
+  swapon --show
+  ls -l /swapfile
+  ```
+
+  ## Tempting but wrong
+
+  - **`swapon -p 10 /swapfile` without an fstab entry.** Gone after the reboot.
+  - **An fstab entry without `pri=10`.** The file is used, at the default priority.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.swap
+    title: Configure and manage swap space
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Activate swap and set priorities
+    man_page: swapon(8)
+  - kind: man-page
+    title: Format swap space
+    man_page: mkswap(8)
+  - kind: man-page
+    title: Swap entries in fstab
+    man_page: fstab(5)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: swap-file-active
+    kind: command
+    target: node2
+    description: /swapfile is active swap of 512 MiB with priority 10.
+    parameters:
+      sudo: true
+      script: |
+        line=$(swapon --show=NAME,SIZE,PRIO --bytes --noheadings | awk '$1 == "/swapfile"')
+        [[ -n "$line" ]] || fail "/swapfile is not active swap"
+        read -r _ size priority <<<"$line"
+        (( size >= 500 * 1048576 && size <= 512 * 1048576 )) || fail "/swapfile is $((size / 1048576)) MiB of swap; expected 512"
+        expect_eq "$priority" 10 "the priority of /swapfile"
+  - check_id: root-only
+    kind: command
+    target: node2
+    description: /swapfile is readable and writable by root only.
+    parameters:
+      sudo: true
+      script: expect_eq "$(stat -c '%U %a' /swapfile)" "root 600" "the owner and mode of /swapfile"
+  - check_id: existing-swap-kept
+    kind: command
+    target: node2
+    description: The existing swap stays active.
+    parameters:
+      sudo: true
+      script: |
+        swapon --show=NAME --noheadings | grep -qx "$(cat /usr/share/lal-exam/existing-swap)" \
+          || fail "the existing swap, $(cat /usr/share/lal-exam/existing-swap), is no longer active"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-swap-file.setup.yaml
+reference_solution: actions/exam-swap-file.solution.yaml
+rejected_solutions:
+  - actions/exam-swap-file.rejected-runtime.yaml
+  - actions/exam-swap-file.rejected-no-priority.yaml

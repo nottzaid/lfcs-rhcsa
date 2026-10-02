@@ -1,0 +1,43 @@
+schema_version: 1
+actions:
+  - action_id: run-the-service-on-node1
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.67.0.10/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null
+        install -d -m 0755 /srv/site
+        printf '<h1>node1 service</h1>\n' > /srv/site/index.html
+        cat > /etc/systemd/system/lal-site.service <<'UNIT'
+        [Unit]
+        Description=Site on port 8000
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -m http.server 8000 --directory /srv/site
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now lal-site.service
+        firewall-cmd --quiet --permanent --add-port=8000/tcp
+        firewall-cmd --quiet --reload
+  - action_id: misroute-node1-from-node2
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.67.0.20/24 ipv4.routes '10.67.0.10/32 10.67.0.254' ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null

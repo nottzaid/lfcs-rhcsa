@@ -1,0 +1,16 @@
+schema_version: 1
+actions:
+  - action_id: mask-the-listener-and-set-nice-in-the-unit
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl mask --now lal-statsd.service
+        install -d /etc/systemd/system/lal-batch.service.d
+        printf '[Service]\nNice=10\n' > /etc/systemd/system/lal-batch.service.d/nice.conf
+        systemctl daemon-reload
+        systemctl restart lal-batch.service

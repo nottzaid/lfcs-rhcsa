@@ -24,10 +24,27 @@ class TaskScore:
 
 
 @dataclass(frozen=True, slots=True)
+class Rehearsal:
+    """When a rehearsal began and, if it is timed, when its checks stop counting."""
+
+    started_at: datetime
+    deadline: datetime | None = None
+
+    def counts(self, checked_at: datetime) -> bool:
+        return checked_at >= self.started_at and (
+            self.deadline is None or checked_at <= self.deadline
+        )
+
+
+@dataclass(frozen=True, slots=True)
 class RehearsalScore:
     started_at: datetime
     tasks: tuple[TaskScore, ...]
     passing_percent: int
+    deadline: datetime | None = None
+
+    def time_is_up(self, now: datetime) -> bool:
+        return self.deadline is not None and now > self.deadline
 
     @property
     def percent(self) -> int:
@@ -46,19 +63,20 @@ def score_rehearsal(
     tasks: Iterable[str],
     versions: Mapping[str, int],
     attempts: Iterable[CheckAttempt],
-    started_at: datetime,
+    rehearsal: Rehearsal,
     passing_percent: int,
 ) -> RehearsalScore:
-    """Score each task by the checks run on its current version since the rehearsal began.
+    """Score each task by the checks run on its current version during the rehearsal.
 
     An unsolved task earns partial credit for the requirements it meets, as candidates
     report the exam does (the Linux Foundation documents only that any valid method counts).
-    A check that errored says nothing about the learner's work and earns nothing.
+    A check that errored says nothing about the learner's work and earns nothing, and in a
+    timed rehearsal a check after the deadline does not count.
     """
     counted = [
         attempt
         for attempt in attempts
-        if attempt.checked_at >= started_at and not attempt.has_errors
+        if rehearsal.counts(attempt.checked_at) and not attempt.has_errors
     ]
     scores = []
     for scenario_id in tasks:
@@ -75,4 +93,4 @@ def score_rehearsal(
         else:
             best = max(attempt.earned_weight / attempt.available_weight for attempt in relevant)
             scores.append(TaskScore(scenario_id, TaskStatus.PARTIAL, best))
-    return RehearsalScore(started_at, tuple(scores), passing_percent)
+    return RehearsalScore(rehearsal.started_at, tuple(scores), passing_percent, rehearsal.deadline)

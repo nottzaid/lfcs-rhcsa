@@ -1,0 +1,122 @@
+schema_version: 1
+scenario_id: exam-ldap-client
+version: 1
+status: verified
+collection: exam
+title: Use LDAP accounts through SSSD
+summary: Configure SSSD and the name service so a host resolves users and groups from an LDAP directory.
+estimated_minutes: 8
+task_type: configure
+difficulty: advanced
+task: |
+  `node1` (10.74.0.10) runs an LDAP directory at `ldap://10.74.0.10` with the base
+  `dc=lab,dc=internal`. It allows anonymous reads of users and groups, without TLS.
+
+  Configure `node2` to get users and groups from it through SSSD, persistently, so that
+  `id ldapuser1` on node2 shows UID 3001 and membership in the group `ldapteam`.
+requirements:
+  - "SSSD on node2 resolves `ldapuser1` (UID 3001) and `ldapteam` from the directory."
+  - "`id ldapuser1` shows membership in `ldapteam`, through the system's name service."
+  - "SSSD starts at boot, and it all works after a reboot."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo tee /etc/sssd/sssd.conf <<'CONF'
+  [sssd]
+  services = nss, pam
+  domains = lab
+
+  [domain/lab]
+  id_provider = ldap
+  ldap_uri = ldap://10.74.0.10
+  ldap_search_base = dc=lab,dc=internal
+  ldap_id_use_start_tls = false
+  CONF
+  sudo chmod 600 /etc/sssd/sssd.conf
+  sudo authselect select sssd --force
+  sudo systemctl enable --now sssd
+  ```
+
+  SSSD refuses a configuration file that others can read. `authselect select sssd` adds
+  `sss` to `passwd` and `group` in `nsswitch.conf`, so every program's user lookups reach
+  SSSD; without it, SSSD answers only when asked directly. Lookups work without TLS;
+  password authentication against LDAP would need it.
+
+  ## Check it yourself
+
+  ```bash
+  getent -s sss passwd ldapuser1
+  id ldapuser1
+  sudo sssctl domain-status lab
+  ```
+
+  ## Tempting but wrong
+
+  - **Adding `ldapuser1` to `/etc/passwd`.** A local copy with the same UID, not the
+    directory's account.
+  - **Configuring SSSD without `authselect`.** SSSD works, and `id` never asks it.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.ldap-accounts
+    title: Configure the system to use LDAP user and group accounts
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: The SSSD configuration file
+    man_page: sssd.conf(5)
+  - kind: man-page
+    title: LDAP provider options
+    man_page: sssd-ldap(5)
+  - kind: man-page
+    title: Name service sources
+    man_page: nsswitch.conf(5)
+  - kind: man-page
+    title: Select the sssd profile
+    man_page: authselect(8)
+topology:
+  networks:
+    - {name: lan, cidr: 10.74.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 2048, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+checks:
+  - check_id: sssd-resolves
+    kind: command
+    target: node2
+    description: SSSD resolves ldapuser1 (UID 3001) and ldapteam from the directory.
+    parameters:
+      timeout_seconds: 60
+      script: |
+        found() { entry=$(getent -s sss passwd ldapuser1); }
+        retry 30 found || fail "SSSD does not know ldapuser1"
+        expect_eq "$(cut -d: -f3 <<<"$entry")" 3001 "ldapuser1's UID from SSSD"
+        getent -s sss group ldapteam >/dev/null || fail "SSSD does not know the group ldapteam"
+  - check_id: system-lookups
+    kind: command
+    target: node2
+    description: id ldapuser1 shows membership in ldapteam, through the system's name service.
+    parameters:
+      timeout_seconds: 40
+      script: |
+        member() { groups=$(id -nG ldapuser1 2>/dev/null); [[ " $groups " == *" ldapteam "* ]]; }
+        retry 20 member || fail "id ldapuser1 does not show ldapteam (${groups:-ldapuser1 is unknown to the system})"
+        ! grep -q '^ldapuser1:' /etc/passwd || fail "ldapuser1 is a local account in /etc/passwd"
+  - check_id: sssd-at-boot
+    kind: command
+    target: node2
+    description: SSSD starts at boot.
+    parameters:
+      script: |
+        expect_eq "$(systemctl is-enabled sssd.service)" enabled "sssd at boot"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-ldap-client.setup.yaml
+reference_solution: actions/exam-ldap-client.solution.yaml
+rejected_solutions:
+  - actions/exam-ldap-client.rejected-local-account.yaml
+  - actions/exam-ldap-client.rejected-no-authselect.yaml

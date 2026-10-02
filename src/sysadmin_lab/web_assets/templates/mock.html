@@ -4,10 +4,15 @@
   <nav class="crumbs" aria-label="Breadcrumb"><a href="/scenarios/topic/lfcs">LFCS</a><span>/</span><strong>{{ mock.title }}</strong></nav>
   <section class="topic-heading">
     <div>
-      <p class="eyebrow">Mock rehearsal</p>
+      <p class="eyebrow">{{ 'Exam rehearsal' if mock.kind == 'exam' else 'Review rehearsal' }}</p>
       <h1>{{ mock.title }}</h1>
       <p>{{ mock.summary }}</p>
-      <p>The suggested {{ mock.suggested_minutes }} minutes mirrors the published exam duration, but this local rehearsal never expires and never destroys your machines on a timer.</p>
+      {% if mock.kind == 'exam' %}
+        <p>These tasks appear nowhere on the practice path, so this is a first attempt. Like the exam's, each states exactly what to set up, on which host, and offers no hints. Every task's debrief explains one way to do it once you solve it or ask.</p>
+      {% else %}
+        <p>A review of practice scenarios, balanced like the exam. If you have worked through the practice path you have seen these before; the exam rehearsals are a first attempt.</p>
+      {% endif %}
+      <p>A timed rehearsal stops counting checks after {{ mock.suggested_minutes }} minutes, the exam's length. Your machines are never destroyed on a timer.</p>
     </div>
     <div class="topic-count"><strong>{{ tasks|length }}</strong><span>tasks</span></div>
   </section>
@@ -20,18 +25,36 @@
             <strong>{{ rehearsal.percent }}%</strong>: {{ rehearsal.solved }} of {{ tasks|length }} tasks solved since you started on {{ rehearsal.started_at.astimezone().strftime('%a %d %b, %H:%M') }}.
             The LFCS passes at {{ rehearsal.passing_percent }}%.
           </p>
-          <p>A task you check without solving earns the share of its requirements it met, as on the exam. Only checks run since the rehearsal began count.</p>
+          {% if rehearsal.deadline %}
+            {% if time_is_up %}
+              <p class="rehearsal-clock check-fail">Time was up at {{ rehearsal.deadline.astimezone().strftime('%H:%M') }}. Checks after that do not count.</p>
+            {% else %}
+              <p class="rehearsal-clock">Time left: <strong data-deadline="{{ rehearsal.deadline.isoformat() }}">until {{ rehearsal.deadline.astimezone().strftime('%H:%M') }}</strong>. Checks after that will not count.</p>
+            {% endif %}
+          {% else %}
+            <p class="rehearsal-clock">Untimed: every check from now on counts.</p>
+          {% endif %}
+          <p>A task you check without solving earns the share of its requirements it met; candidates report the exam does the same. Only checks run since the rehearsal began count.</p>
         {% else %}
           <p>Start a rehearsal to score the checks you run from now on against the exam's pass mark.</p>
         {% endif %}
       </div>
-      <button
-        class="button {{ 'button-secondary' if rehearsal else 'button-primary' }}"
-        type="button"
-        data-job-endpoint="/api/mocks/{{ mock.mock_id }}/rehearsal"
-        data-job-label="Starting the rehearsal"
-        {% if rehearsal %}data-job-confirm="Start over? Checks from the current rehearsal will no longer count."{% endif %}
-      >{{ 'Start over' if rehearsal else 'Start rehearsal' }}</button>
+      <div class="rehearsal-actions">
+        <button
+          class="button {{ 'button-secondary' if rehearsal else 'button-primary' }}"
+          type="button"
+          data-job-endpoint="/api/mocks/{{ mock.mock_id }}/rehearsal?timed=true"
+          data-job-label="Starting a timed rehearsal"
+          {% if rehearsal %}data-job-confirm="Start over with a {{ mock.suggested_minutes }}-minute limit? Checks from the current rehearsal will no longer count."{% endif %}
+        >{{ 'Start over, timed' if rehearsal else 'Start timed (' ~ mock.suggested_minutes ~ ' min)' }}</button>
+        <button
+          class="button button-secondary"
+          type="button"
+          data-job-endpoint="/api/mocks/{{ mock.mock_id }}/rehearsal"
+          data-job-label="Starting an untimed rehearsal"
+          {% if rehearsal %}data-job-confirm="Start over without a time limit? Checks from the current rehearsal will no longer count."{% endif %}
+        >{{ 'Start over, untimed' if rehearsal else 'Start untimed' }}</button>
+      </div>
     </div>
   </section>
   <section class="scenario-list" aria-labelledby="mock-tasks-title">

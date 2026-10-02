@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: enable-the-swap-file-until-reboot
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        fallocate -l 512M /swapfile
+        chmod 600 /swapfile
+        mkswap -q /swapfile
+        swapon -p 10 /swapfile

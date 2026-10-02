@@ -16,6 +16,9 @@
         </div>
         <h1>{{ scenario.title }}</h1>
         <p>{{ scenario.summary }}</p>
+        {% if exam_mock %}
+          <p class="exam-note">An exam task in <a href="/mocks/{{ exam_mock.mock_id }}">{{ exam_mock.title }}</a>. Like the exam, it has no hints.</p>
+        {% endif %}
       </div>
       <button
         class="button button-primary button-large"

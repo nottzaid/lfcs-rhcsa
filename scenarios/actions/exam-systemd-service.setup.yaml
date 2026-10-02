@@ -1,0 +1,23 @@
+schema_version: 1
+actions:
+  - action_id: install-the-program-and-its-user
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        useradd --system --shell /usr/sbin/nologin syncer
+        install -d -o syncer -g syncer -m 0755 /srv/sync
+        cat > /usr/local/bin/lal-sync <<'SH'
+        #!/usr/bin/bash
+        # Sync agent: reports its target and identity every few seconds.
+        [[ -n "${SYNC_TARGET:-}" ]] || { echo "lal-sync: SYNC_TARGET is not set" >&2; exit 2; }
+        while :; do
+          printf 'target=%s user=%s\n' "$SYNC_TARGET" "$(id -un)" > "$SYNC_TARGET/status" || exit 1
+          sleep 5
+        done
+        SH
+        chmod 0755 /usr/local/bin/lal-sync

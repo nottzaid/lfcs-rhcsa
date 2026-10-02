@@ -1,0 +1,28 @@
+schema_version: 1
+mock_id: lfcs-exam-d
+status: verified
+kind: exam
+title: LFCS Exam Rehearsal D
+summary: Twenty tasks found nowhere on the practice path, phrased like the exam's, with no hints.
+suggested_minutes: 120
+tasks:
+  - exam-kernel-parameters
+  - exam-service-control
+  - exam-local-repository
+  - exam-container-service
+  - exam-selinux-web-port
+  - exam-static-addressing
+  - exam-ssh-server-and-client
+  - exam-port-redirection
+  - exam-static-route
+  - exam-time-sync
+  - exam-lvm-create
+  - exam-partition-xfs
+  - exam-swap-file
+  - exam-autofs-homes
+  - exam-git-branch
+  - exam-systemd-service
+  - exam-disk-space
+  - exam-self-signed-certificate
+  - exam-accounts-and-profile
+  - exam-shared-acls

@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: shared-data-and-mount-points
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -m 0755 /srv/data/shared /srv/export
+        printf 'shared catalog\n' > /srv/data/shared/catalog.txt

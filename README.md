@@ -21,8 +21,9 @@ virt-manager, and [`uv`](https://docs.astral.sh/uv/) installed:
 That is the only project command needed. It opens the LFCS scenario collection at
 `http://127.0.0.1:8787/scenarios/topic/lfcs`.
 Choose **Info** to inspect a task or **Run** to acquire/verify its image and launch the
-disposable VM in the background. Active machines are visible in virt-manager. Scenario time
-values are advisory estimates; the local lab does not enforce a countdown.
+disposable VM in the background. Active machines are visible in virt-manager. Scenario times
+are estimates. Only a mock rehearsal started as timed has a deadline: checks after it stop
+counting, and machines are never destroyed on a timer.
 
 The first launch verifies or downloads the pinned Rocky Linux 10.2 DVD (about 10 GB) and
 builds the immutable lab image. Later launches reuse it after validating its provenance and
@@ -32,9 +33,12 @@ checksum. The equivalent development command is `uv run labctl up`.
 
 - 38 focused scenarios, with at least one for every published LFCS competency, and 7
   capstones: single incidents whose causes cross several domains.
-- 3 balanced 20-task mock rehearsals following the published domain weights, scored against
-  the exam's 67% pass mark. An unsolved task earns partial credit for the requirements it
-  meets; the Linux Foundation does not document partial credit, but candidates report it.
+- 5 mock rehearsals of 20 tasks at the published domain weights. Three review the practice
+  scenarios. Two are exam rehearsals: 40 tasks found nowhere on the practice path, phrased
+  like the exam's and without hints, so each is a first attempt; together they ask for every
+  competency. A rehearsal runs untimed or timed (two hours) and is scored against the exam's
+  67% pass mark. An unsolved task earns partial credit for the requirements it meets; the
+  Linux Foundation does not document partial credit, but candidates report it.
 - A practice path that orders scenarios by LFCS domain and difficulty, capstones last.
 - Fresh disposable Rocky Linux 10.2 VMs, including multi-machine labs on their own isolated
   networks (routers, partners, clients, directory, file, and time servers), extra disks,
@@ -92,8 +96,8 @@ official weighting, project and book audits, distribution decision, and coverage
 [`docs/research`](docs/research) and [`curricula`](curricula). Each scenario also records its
 competency mapping and upstream, distribution, or man-page sources in its manifest.
 
-All 45 released scenarios pass this contract against the pinned Rocky Linux 10.2 lab image
-(`rocky-10.2-lab-v2`). Maintainers can replay one with:
+All 45 practice scenarios and 40 exam tasks pass this contract against the pinned Rocky
+Linux 10.2 lab image (`rocky-10.2-lab-v2`). Maintainers can replay one with:
 
 ```bash
 uv run labctl scenario verify SCENARIO_ID
@@ -146,7 +150,7 @@ thing by live tests, each kind opted into by its own variable:
 | `LAL_RUN_BROWSER_LIVE=1` | a learner's journey through `labctl up` in headless Chromium |
 | `LAL_RUN_IMAGE_BUILD=1` | a complete Kickstart install of the lab image (about 20 minutes) |
 
-Guest-booting tests also need `LAL_BASE_IMAGE`. Replaying all 45 contracts takes hours;
+Guest-booting tests also need `LAL_BASE_IMAGE`. Replaying all 85 contracts takes hours;
 `-k` selects scenarios, and `LAL_LIVE_SHARD_TOTAL` with `LAL_LIVE_SHARD_INDEX` splits them
 across runs. Fast and live tests together cover every line:
 

@@ -1,0 +1,50 @@
+schema_version: 1
+actions:
+  - action_id: prepare-node1
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.62.0.10/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null
+        groupadd rescue
+        useradd --create-home ops
+        useradd --create-home --groups rescue rescue1
+        printf '%s\n' 'ops:Ops-Exam-2026' 'rescue1:Rescue-Exam-2026' | chpasswd
+        printf '%s\n' '# Legacy access policy from the old build.' 'PermitRootLogin yes' \
+          'PasswordAuthentication yes' > /etc/ssh/sshd_config.d/05-legacy.conf
+        systemctl restart sshd.service
+  - action_id: prepare-node2
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.62.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null
+        useradd --create-home ops
+        printf 'ops:Ops-Exam-2026\n' | chpasswd
+        install -d -o ops -g ops -m 0700 /home/ops/.ssh
+        cat > /home/ops/.ssh/id_ed25519 <<'KEY'
+        -----BEGIN OPENSSH PRIVATE KEY-----
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+        QyNTUxOQAAACCbw16oKyk2IlJHOwG+qkIzjeULvJY2YGpgEulOeWa7IAAAAJCGpbrEhqW6
+        xAAAAAtzc2gtZWQyNTUxOQAAACCbw16oKyk2IlJHOwG+qkIzjeULvJY2YGpgEulOeWa7IA
+        AAAECvAyBRXjsbo+2Bm+Hvn7ck9yDyH0QhEp3zukcG2uxjPJvDXqgrKTYiUkc7Ab6qQjON
+        5Qu8ljZgamAS6U55ZrsgAAAACW9wc0Bub2RlMgECAwQ=
+        -----END OPENSSH PRIVATE KEY-----
+        KEY
+        printf '%s\n' 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIJvDXqgrKTYiUkc7Ab6qQjON5Qu8ljZgamAS6U55Zrsg ops@node2' \
+          > /home/ops/.ssh/id_ed25519.pub
+        chown ops:ops /home/ops/.ssh/id_ed25519 /home/ops/.ssh/id_ed25519.pub
+        chmod 0600 /home/ops/.ssh/id_ed25519
+        chmod 0644 /home/ops/.ssh/id_ed25519.pub

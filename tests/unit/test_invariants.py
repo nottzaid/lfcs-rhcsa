@@ -65,7 +65,7 @@ def test_mock_exams_refuse_a_task_twice() -> None:
                 "title": "Mock",
                 "summary": "Mock",
                 "suggested_minutes": 120,
-                "time_policy": "advisory-only",
+                "kind": "review",
                 "tasks": tasks,
             }
         )

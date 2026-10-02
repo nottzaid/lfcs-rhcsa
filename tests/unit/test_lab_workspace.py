@@ -174,7 +174,7 @@ def test_a_rehearsal_scores_checks_made_after_it_starts(
             lambda _root: nullcontext(runtime),
         )
         assert workspace.rehearsal("lfcs-mock-a") is None
-        started = workspace.start_rehearsal("lfcs-mock-a")
+        started = workspace.start_rehearsal("lfcs-mock-a").started_at
 
         def check(scenario_id: str, minutes: int, earned: int, solved: bool) -> CheckAttempt:
             return CheckAttempt(
@@ -197,6 +197,13 @@ def test_a_rehearsal_scores_checks_made_after_it_starts(
         assert (score.solved, score.percent, score.passing_percent) == (1, 8, 67)  # 1.5 of 20
         with pytest.raises(LookupError, match="mock exam does not exist"):
             workspace.start_rehearsal("lfcs-mock-z")
+
+        timed = workspace.start_rehearsal("lfcs-mock-a", timed=True)
+        assert timed.deadline == timed.started_at + timedelta(minutes=mock.suggested_minutes)
+        progress.record(check(second, 125, 2, True))  # solved, but after the two hours
+        restarted = workspace.rehearsal("lfcs-mock-a")
+        assert restarted is not None and restarted.deadline == timed.deadline
+        assert (restarted.solved, restarted.percent) == (1, 8)  # the late solve earns nothing
 
 
 def test_nothing_is_provisioned_until_the_lab_image_is_built(

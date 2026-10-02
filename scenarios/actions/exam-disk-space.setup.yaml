@@ -1,0 +1,48 @@
+schema_version: 1
+actions:
+  - action_id: fill-the-data-filesystem
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkfs.ext4 -q -L DATA /dev/disk/by-id/virtio-lal-data
+        install -d /srv/data
+        printf 'LABEL=DATA /srv/data ext4 defaults 0 2\n' >> /etc/fstab
+        systemctl daemon-reload
+        mount /srv/data
+        install -d /srv/data/records /srv/data/logs /srv/data/.cache/old-dumps
+        for n in $(seq -w 1 20); do head -c 5M /dev/urandom > "/srv/data/records/record-$n.bin"; done
+        fallocate -l 400M /srv/data/.cache/old-dumps/core.2291
+        fallocate -l 300M /srv/data/logs/app.log
+        cat > /usr/local/bin/lal-writer <<'SH'
+        #!/usr/bin/bash
+        # Application writer: appends a heartbeat to its log every few seconds.
+        exec 3>>/srv/data/logs/app.log
+        while :; do printf 'tick %(%FT%T)T\n' -1 >&3; sleep 5; done
+        SH
+        chmod 0755 /usr/local/bin/lal-writer
+        cat > /etc/systemd/system/lal-writer.service <<'UNIT'
+        [Unit]
+        Description=Application writer
+        RequiresMountsFor=/srv/data
+
+        [Service]
+        ExecStart=/usr/local/bin/lal-writer
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now lal-writer.service
+        sleep 1
+        rm /srv/data/logs/app.log
+        available=$(df --output=avail -B1M /srv/data | tail -n 1 | tr -d ' ')
+        (( available > 2 )) && fallocate -l "$((available - 2))M" /srv/data/records/archive.bin
+        install -d -m 0755 /usr/share/lal-exam
+        (cd /srv/data/records && sha256sum ./*) > /usr/share/lal-exam/records.sha256
+        systemctl show -p MainPID --value lal-writer.service > /usr/share/lal-exam/writer-pid

@@ -1,0 +1,54 @@
+schema_version: 1
+actions:
+  - action_id: run-a-listener-a-dependent-and-a-batch-job
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cat > /usr/local/bin/lal-batch <<'SH'
+        #!/usr/bin/bash
+        # Batch worker: wakes every few seconds to look for queued work.
+        while :; do sleep 5; done
+        SH
+        chmod 0755 /usr/local/bin/lal-batch
+        cat > /usr/lib/systemd/system/lal-statsd.service <<'UNIT'
+        [Unit]
+        Description=Metrics collector
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -c "import socket, time; s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); s.bind(('0.0.0.0', 8125)); s.listen(); time.sleep(10 ** 9)"
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        cat > /usr/lib/systemd/system/lal-dashboard.service <<'UNIT'
+        [Unit]
+        Description=Metrics dashboard
+        Wants=lal-statsd.service
+        After=lal-statsd.service
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/sleep infinity
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        cat > /usr/lib/systemd/system/lal-batch.service <<'UNIT'
+        [Unit]
+        Description=Batch worker
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/local/bin/lal-batch
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now lal-statsd.service lal-dashboard.service lal-batch.service

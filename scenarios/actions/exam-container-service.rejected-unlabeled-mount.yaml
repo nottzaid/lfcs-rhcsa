@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: quadlet-unit-without-relabeling
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '%s\n' '[Container]' 'ContainerName=web' 'Image=localhost/lal-web:1' \
+          'PublishPort=8088:8080' 'Volume=/srv/web/content:/content:ro' '' \
+          '[Install]' 'WantedBy=multi-user.target' > /etc/containers/systemd/web.container
+        systemctl daemon-reload
+        systemctl start web.service

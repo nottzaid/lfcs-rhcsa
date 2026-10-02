@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: remove-the-host-route-from-the-connection
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection modify lan -ipv4.routes '10.67.0.10/32 10.67.0.254'
+        nmcli connection up lan >/dev/null

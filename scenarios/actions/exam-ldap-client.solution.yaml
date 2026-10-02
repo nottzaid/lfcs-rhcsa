@@ -1,0 +1,20 @@
+schema_version: 1
+actions:
+  - action_id: configure-sssd-and-select-it
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '%s\n' '[sssd]' 'services = nss, pam' 'domains = lab' '' '[domain/lab]' \
+          'id_provider = ldap' 'ldap_uri = ldap://10.74.0.10' 'ldap_search_base = dc=lab,dc=internal' \
+          'ldap_id_use_start_tls = false' > /etc/sssd/sssd.conf
+        chown root:root /etc/sssd/sssd.conf
+        chmod 0600 /etc/sssd/sssd.conf
+        authselect select sssd --force >/dev/null
+        systemctl enable sssd.service
+        systemctl restart sssd.service

@@ -189,3 +189,22 @@ for (const button of document.querySelectorAll("[data-reveal-debrief]")) {
   button.addEventListener("click", () => revealDebrief({scroll: true}));
 }
 document.addEventListener("lab:solved", () => revealDebrief({scroll: false}));
+
+// A timed rehearsal's countdown. The server decides what counts; when time is up the page
+// reloads so the score and the "time was up" notice come from it, not from this clock.
+for (const clock of document.querySelectorAll("[data-deadline]")) {
+  const deadline = Date.parse(clock.dataset.deadline);
+  const tick = () => {
+    const left = Math.round((deadline - Date.now()) / 1000);
+    if (left <= 0) {
+      window.location.reload();
+      return;
+    }
+    const hours = Math.floor(left / 3600);
+    const minutes = String(Math.floor((left % 3600) / 60)).padStart(2, "0");
+    const seconds = String(left % 60).padStart(2, "0");
+    clock.textContent = `${hours}:${minutes}:${seconds}`;
+    window.setTimeout(tick, 1000);
+  };
+  tick();
+}

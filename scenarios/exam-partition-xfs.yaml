@@ -1,0 +1,124 @@
+schema_version: 1
+scenario_id: exam-partition-xfs
+version: 1
+status: verified
+collection: exam
+title: Partition a disk and mount XFS with options
+summary: Create a GPT partition, a labeled XFS filesystem, and a persistent mount with options.
+estimated_minutes: 6
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`, with the empty 1.5 GiB disk `/dev/vdb` (also
+  `/dev/disk/by-id/virtio-lal-logs`):
+
+  - create a GPT partition table with one partition that uses the whole disk;
+  - make an XFS filesystem labeled `LOGS` on that partition;
+  - mount it at `/var/log/app` with the options `noatime` and `nodev`, now and after every
+    reboot, identifying it in `/etc/fstab` by its label or UUID.
+requirements:
+  - "The disk has a GPT partition table with one partition using it."
+  - "The partition holds XFS labeled `LOGS`."
+  - "It is mounted at `/var/log/app` with `noatime` and `nodev`, from an fstab entry by label or UUID."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo parted -s /dev/vdb mklabel gpt mkpart logs xfs 1MiB 100%
+  sudo mkfs.xfs -L LOGS /dev/vdb1
+  sudo mkdir -p /var/log/app
+  echo 'LABEL=LOGS /var/log/app xfs noatime,nodev 0 0' | sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload && sudo mount /var/log/app
+  ```
+
+  `parted` writes the partition table and partition in one go; starting at 1 MiB keeps the
+  partition aligned. A label or UUID is stored in the filesystem, so it finds the right
+  partition even if disks are discovered in a different order.
+
+  ## Check it yourself
+
+  ```bash
+  lsblk -f /dev/vdb
+  findmnt -o TARGET,SOURCE,OPTIONS /var/log/app
+  ```
+
+  ## Tempting but wrong
+
+  - **`mkfs.xfs /dev/vdb`.** A filesystem on the whole disk, with no partition table.
+  - **`/dev/vdb1` in fstab.** It works today and can point at another disk after the next
+    hardware change.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.filesystems
+    title: Create, manage, and troubleshoot filesystems
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Partition tables and partitions
+    man_page: parted(8)
+  - kind: man-page
+    title: Create an XFS filesystem
+    man_page: mkfs.xfs(8)
+  - kind: man-page
+    title: Mount options and persistent device names
+    man_page: fstab(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - {name: logs, size_mib: 1536, role: empty log disk}
+checks:
+  - check_id: one-gpt-partition
+    kind: command
+    target: node2
+    description: The disk has a GPT partition table with one partition using it.
+    parameters:
+      sudo: true
+      script: |
+        disk=$(readlink -f /dev/disk/by-id/virtio-lal-logs)
+        expect_eq "$(lsblk -dno PTTYPE "$disk")" gpt "the partition table type"
+        partitions=$(lsblk -lnbo NAME,SIZE,TYPE "$disk" | awk '$3 == "part"')
+        expect_eq "$(wc -l <<<"$partitions" | tr -d ' ')" 1 "the number of partitions"
+        size=$(awk '{print $2}' <<<"$partitions")
+        (( size * 100 >= $(blockdev --getsize64 "$disk") * 98 )) || fail "the partition does not use the whole disk"
+  - check_id: labeled-xfs
+    kind: command
+    target: node2
+    description: The partition holds XFS labeled LOGS.
+    parameters:
+      sudo: true
+      script: |
+        part=$(readlink -f /dev/disk/by-id/virtio-lal-logs-part1 2>/dev/null) || fail "the disk has no first partition"
+        expect_eq "$(blkid -s TYPE -o value "$part")" xfs "the filesystem on the partition"
+        expect_eq "$(blkid -s LABEL -o value "$part")" LOGS "the filesystem label"
+  - check_id: mounted-with-options
+    kind: command
+    target: node2
+    description: It is mounted at /var/log/app with noatime and nodev, from fstab by label or UUID.
+    parameters:
+      sudo: true
+      script: |
+        source=$(findmnt -n -o SOURCE --mountpoint /var/log/app) || fail "nothing is mounted at /var/log/app"
+        expect_eq "$(readlink -f "$source")" "$(readlink -f /dev/disk/by-id/virtio-lal-logs-part1)" "the device mounted at /var/log/app"
+        options=$(findmnt -n -o OPTIONS --mountpoint /var/log/app)
+        has_option "$options" noatime || fail "/var/log/app is mounted without noatime ($options)"
+        has_option "$options" nodev || fail "/var/log/app is mounted without nodev ($options)"
+        case "$(fstab_field /var/log/app SOURCE)" in
+          UUID=*|LABEL=*) ;;
+          "") fail "/etc/fstab has no entry for /var/log/app" ;;
+          *) fail "/etc/fstab names /var/log/app's device by $(fstab_field /var/log/app SOURCE); use LABEL= or UUID=" ;;
+        esac
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-partition-xfs.setup.yaml
+reference_solution: actions/exam-partition-xfs.solution.yaml
+rejected_solutions:
+  - actions/exam-partition-xfs.rejected-whole-disk.yaml
+  - actions/exam-partition-xfs.rejected-kernel-name.yaml

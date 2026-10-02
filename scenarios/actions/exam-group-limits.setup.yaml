@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: create-the-builders
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        groupadd builders
+        useradd --create-home --groups builders ci
+        useradd --create-home --groups builders ci2
+        useradd --create-home other
+        install -d -m 0755 /usr/share/lal-exam
+        runuser -l other -c 'echo $(ulimit -Hn) $(ulimit -Hu)' > /usr/share/lal-exam/default-limits

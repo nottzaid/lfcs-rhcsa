@@ -1,0 +1,138 @@
+schema_version: 1
+scenario_id: exam-ca-signed-certificate
+version: 1
+status: verified
+collection: exam
+title: Issue a certificate from a private CA and trust the CA
+summary: Create a key and request, sign it with a local CA for server use, and trust that CA system-wide.
+estimated_minutes: 8
+task_type: configure
+difficulty: advanced
+task: |
+  On `node2`, the private CA's key and certificate are in `/etc/pki/lab-ca/` (`ca.key`,
+  `ca.crt`).
+
+  - Create a private key `/etc/pki/tls/private/api.key` (RSA, at least 2048 bits), owned by
+    root and readable by root only.
+  - Create a certificate signing request for `CN=api.lab.internal`.
+  - Sign it with the CA to produce `/etc/pki/tls/certs/api.crt`, valid for 180 days, with the
+    subject alternative name `DNS:api.lab.internal` and usable for TLS servers (extended key
+    usage `serverAuth`).
+  - Make node2 trust the CA system-wide.
+requirements:
+  - "`api.key` is an RSA key of at least 2048 bits, owned by root with mode 0600."
+  - "`api.crt` is signed by the lab CA, matches the key, and is valid for 180 days."
+  - "It names `DNS:api.lab.internal` and allows TLS server authentication."
+  - "node2 trusts the lab CA system-wide, so `openssl verify` accepts `api.crt` with no extra options."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  cd /etc/pki/tls
+  sudo openssl req -new -newkey rsa:2048 -nodes -keyout private/api.key \
+    -subj /CN=api.lab.internal -out /tmp/api.csr
+  sudo chmod 600 private/api.key
+  printf 'subjectAltName=DNS:api.lab.internal\nextendedKeyUsage=serverAuth\n' > /tmp/api.ext
+  sudo openssl x509 -req -in /tmp/api.csr -CA /etc/pki/lab-ca/ca.crt \
+    -CAkey /etc/pki/lab-ca/ca.key -CAcreateserial -days 180 \
+    -extfile /tmp/api.ext -out certs/api.crt
+  sudo cp /etc/pki/lab-ca/ca.crt /etc/pki/ca-trust/source/anchors/lab-ca.crt
+  sudo update-ca-trust
+  ```
+
+  `openssl x509 -req` signs a request with the CA's key; extensions in the request are not
+  copied unless asked, so `-extfile` states them. `update-ca-trust` rebuilds the bundle in
+  `/etc/pki/ca-trust/extracted/` from the anchors, which every TLS client on the system
+  reads.
+
+  ## Check it yourself
+
+  ```bash
+  openssl verify /etc/pki/tls/certs/api.crt
+  openssl x509 -in /etc/pki/tls/certs/api.crt -noout -issuer -dates -ext subjectAltName,extendedKeyUsage
+  ```
+
+  ## Tempting but wrong
+
+  - **A self-signed `api.crt`.** It is not signed by the CA, so clients that trust the CA
+    reject it.
+  - **Skipping `update-ca-trust`.** The file is in `anchors/`, and nothing reads it yet.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.tls-certificates
+    title: Work with SSL certificates
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Create keys and requests
+    man_page: openssl-req(1ossl)
+  - kind: man-page
+    title: Sign requests and inspect certificates
+    man_page: openssl-x509(1ossl)
+  - kind: man-page
+    title: Extensions such as extendedKeyUsage
+    man_page: x509v3_config(5ossl)
+  - kind: man-page
+    title: The system trust store
+    man_page: update-ca-trust(8)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: private-key
+    kind: command
+    target: node2
+    description: api.key is an RSA key of at least 2048 bits, owned by root with mode 0600.
+    parameters:
+      sudo: true
+      script: |
+        key=/etc/pki/tls/private/api.key
+        [[ -f "$key" ]] || fail "$key does not exist"
+        text=$(openssl pkey -in "$key" -noout -text 2>/dev/null) || fail "$key is not a private key"
+        grep -q '^modulus:' <<<"$text" || fail "$key is not an RSA key"
+        bits=$(sed -n 's/.*Private-Key: (\([0-9]*\) bit.*/\1/p' <<<"$text")
+        (( bits >= 2048 )) || fail "$key has ${bits:-?} bits; expected at least 2048"
+        expect_eq "$(stat -c '%U:%G %a' "$key")" "root:root 600" "the owner and mode of $key"
+  - check_id: signed-by-the-ca
+    kind: command
+    target: node2
+    description: api.crt is signed by the lab CA, matches the key, and is valid for 180 days.
+    parameters:
+      sudo: true
+      script: |
+        cert=/etc/pki/tls/certs/api.crt
+        openssl x509 -in "$cert" -noout 2>/dev/null || fail "$cert is not a certificate"
+        openssl verify -CAfile /etc/pki/lab-ca/ca.crt "$cert" >/dev/null 2>&1 || fail "$cert is not signed by the lab CA"
+        expect_eq "$(openssl x509 -in "$cert" -noout -pubkey)" "$(openssl pkey -in /etc/pki/tls/private/api.key -pubout)" "the public key in the certificate"
+        start=$(date -d "$(openssl x509 -in "$cert" -noout -startdate | cut -d= -f2)" +%s)
+        end=$(date -d "$(openssl x509 -in "$cert" -noout -enddate | cut -d= -f2)" +%s)
+        expect_eq "$(( (end - start + 43200) / 86400 ))" 180 "the certificate's lifetime in days"
+  - check_id: name-and-usage
+    kind: command
+    target: node2
+    description: It names DNS:api.lab.internal and allows TLS server authentication.
+    parameters:
+      script: |
+        cert=/etc/pki/tls/certs/api.crt
+        names=$(openssl x509 -in "$cert" -noout -ext subjectAltName 2>/dev/null | tail -n +2 | tr -d ' ')
+        [[ ",$names," == *",DNS:api.lab.internal,"* ]] || fail "the certificate does not name DNS:api.lab.internal (${names:-no names})"
+        usage=$(openssl x509 -in "$cert" -noout -ext extendedKeyUsage 2>/dev/null | tail -n +2)
+        [[ "$usage" == *"TLS Web Server Authentication"* ]] || fail "the certificate does not allow TLS server authentication (${usage:-no extended key usage})"
+  - check_id: ca-trusted
+    kind: command
+    target: node2
+    description: node2 trusts the lab CA system-wide.
+    parameters:
+      script: |
+        openssl verify /etc/pki/tls/certs/api.crt >/dev/null 2>&1 \
+          || fail "openssl does not accept api.crt with the system trust store"
+persistence:
+  reboot: false
+setup: actions/exam-ca-signed-certificate.setup.yaml
+reference_solution: actions/exam-ca-signed-certificate.solution.yaml
+rejected_solutions:
+  - actions/exam-ca-signed-certificate.rejected-self-signed.yaml
+  - actions/exam-ca-signed-certificate.rejected-untrusted-ca.yaml

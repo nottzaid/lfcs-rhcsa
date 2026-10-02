@@ -1,0 +1,106 @@
+schema_version: 1
+scenario_id: exam-low-port-service
+version: 1
+status: verified
+collection: exam
+title: Let an unprivileged service bind port 443
+summary: Grant a service exactly the capability to bind a low port, without root.
+estimated_minutes: 6
+task_type: troubleshoot
+difficulty: advanced
+task: |
+  On `node2`, `lal-api.service` must run as the user `api` and listen on TCP port 443, but
+  it fails to start.
+
+  Give it exactly the privilege it needs to bind that port, without running it as root,
+  without changing the port, and without changing anything for other programs. It must
+  start at boot.
+requirements:
+  - "`lal-api.service` runs as `api`, listens on port 443, and starts at boot."
+  - "Its unit grants only `CAP_NET_BIND_SERVICE`."
+  - "Nothing else changes for other programs: no file capabilities on the interpreter, and the unprivileged port range is untouched."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  systemctl status lal-api.service       # PermissionError: [Errno 13] Permission denied
+  sudo systemctl edit lal-api.service    # [Service] then AmbientCapabilities=CAP_NET_BIND_SERVICE
+  sudo systemctl enable lal-api.service
+  sudo systemctl restart lal-api.service
+  ```
+
+  Ports below 1024 need `CAP_NET_BIND_SERVICE`. `AmbientCapabilities=` grants it to the
+  service's process even though it runs as an ordinary user, and to nothing else.
+
+  ## Check it yourself
+
+  ```bash
+  sudo ss -ltnp 'sport = :443'
+  systemctl show -p User,AmbientCapabilities lal-api.service
+  ```
+
+  ## Tempting but wrong
+
+  - **`User=root`.** It binds, with every privilege there is.
+  - **`setcap cap_net_bind_service+ep` on the Python interpreter.** Every Python program
+    on node2 gets the capability.
+  - **`net.ipv4.ip_unprivileged_port_start=443`.** Every user may now bind 443.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.constraints
+    title: Determine application and service specific constraints
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: AmbientCapabilities= and User=
+    man_page: systemd.exec(5)
+  - kind: man-page
+    title: CAP_NET_BIND_SERVICE
+    man_page: capabilities(7)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: runs-as-api-on-443
+    kind: command
+    target: node2
+    description: lal-api.service runs as api, listens on 443, and starts at boot.
+    parameters:
+      sudo: true
+      timeout_seconds: 30
+      script: |
+        expect_eq "$(systemctl is-enabled lal-api.service 2>/dev/null)" enabled "lal-api.service at boot"
+        active() { systemctl is-active --quiet lal-api.service; }
+        retry 10 active || fail "lal-api.service is $(systemctl is-active lal-api.service)"
+        pid=$(unit_value lal-api.service MainPID)
+        expect_eq "$(ps -o user= -p "$pid")" api "the user lal-api runs as"
+        listening() { ss -Hltnp 'sport = :443' | grep -q "pid=$pid,"; }
+        retry 10 listening || fail "lal-api's process does not listen on port 443"
+        expect_eq "$(curl --silent --max-time 3 http://localhost:443/)" "api ok" "the answer on port 443"
+  - check_id: only-the-needed-capability
+    kind: command
+    target: node2
+    description: The unit grants only CAP_NET_BIND_SERVICE.
+    parameters:
+      script: expect_eq "$(unit_value lal-api.service AmbientCapabilities)" cap_net_bind_service "the unit's ambient capabilities"
+  - check_id: nothing-else-changed
+    kind: command
+    target: node2
+    description: No file capabilities on the interpreter, and the unprivileged port range is untouched.
+    parameters:
+      script: |
+        python=$(readlink -f /usr/bin/python3)
+        [[ -z "$(getcap "$python")" ]] || fail "$python has file capabilities: $(getcap "$python")"
+        expect_eq "$(sysctl -n net.ipv4.ip_unprivileged_port_start)" 1024 "net.ipv4.ip_unprivileged_port_start"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-low-port-service.setup.yaml
+reference_solution: actions/exam-low-port-service.solution.yaml
+rejected_solutions:
+  - actions/exam-low-port-service.rejected-root.yaml
+  - actions/exam-low-port-service.rejected-file-capability.yaml
+  - actions/exam-low-port-service.rejected-port-range.yaml

@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: add-the-server-and-keep-the-pool
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf 'server 10.65.0.1 iburst\n' >> /etc/chrony.conf
+        systemctl restart chronyd.service
+        timedatectl set-timezone Europe/Amsterdam
