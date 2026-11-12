@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: run-the-program-by-hand
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -o collector -g collector /var/lib/lal-collector
+        cd /var/lib/lal-collector
+        setsid runuser -u collector -- /usr/local/bin/lal-collector </dev/null >/dev/null 2>&1 &

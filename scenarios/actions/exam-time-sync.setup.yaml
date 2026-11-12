@@ -1,0 +1,39 @@
+schema_version: 1
+actions:
+  - action_id: run-the-site-time-server
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname site0 con-name site ipv4.method manual \
+          ipv4.addresses 10.65.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection up site >/dev/null
+        cat > /etc/chrony.conf <<'CONF'
+        # Site time server: serves its own clock to the site network.
+        local stratum 8
+        allow 10.65.0.0/24
+        driftfile /var/lib/chrony/drift
+        makestep 1.0 3
+        rtcsync
+        logdir /var/log/chrony
+        CONF
+        systemctl enable chronyd.service
+        systemctl restart chronyd.service
+        firewall-cmd --quiet --permanent --add-service=ntp
+        firewall-cmd --quiet --reload
+  - action_id: address-node2
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname site0 con-name site ipv4.method manual \
+          ipv4.addresses 10.65.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up site >/dev/null

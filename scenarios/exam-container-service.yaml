@@ -1,0 +1,129 @@
+schema_version: 1
+scenario_id: exam-container-service
+version: 1
+status: verified
+collection: exam
+title: Run a web container as a boot-time service
+summary: Publish a port, mount content read-only, and have systemd start the container at boot.
+estimated_minutes: 7
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, run a container from the local image `localhost/lal-web:1`:
+
+  - It is named `web`.
+  - Its port 8080 is published on node2's port 8088.
+  - node2's directory `/srv/web/content` is mounted at `/content` inside it, read-only.
+  - systemd starts it automatically every time node2 boots.
+
+  The image serves the files in `/content` over HTTP on port 8080.
+requirements:
+  - "A container named `web` runs `localhost/lal-web:1`."
+  - "`curl http://localhost:8088/` on node2 returns the page in `/srv/web/content`."
+  - "`/srv/web/content` is mounted read-only at `/content`."
+  - "The container runs again after node2 reboots."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo tee /etc/containers/systemd/web.container <<'UNIT'
+  [Container]
+  ContainerName=web
+  Image=localhost/lal-web:1
+  PublishPort=8088:8080
+  Volume=/srv/web/content:/content:ro,Z
+
+  [Install]
+  WantedBy=multi-user.target
+  UNIT
+  sudo systemctl daemon-reload
+  sudo systemctl start web.service
+  ```
+
+  Quadlet turns the `.container` file into `web.service` at every daemon-reload, so systemd
+  starts the container at boot like any other service. `Z` relabels the directory for
+  container access; without it SELinux keeps the container from reading the files. `ro`
+  makes the mount read-only inside the container.
+
+  `podman generate systemd --new --name web` followed by enabling the unit it writes is the
+  older way to the same result.
+
+  ## Check it yourself
+
+  ```bash
+  sudo podman ps --filter name=web
+  curl http://localhost:8088/
+  sudo podman inspect web --format '{{range .Mounts}}{{.Destination}} rw={{.RW}}{{end}}'
+  ```
+
+  ## Tempting but wrong
+
+  - **`podman run --restart=always`.** It restarts the container if it exits, but nothing
+    starts it after a reboot.
+  - **A mount without `Z`.** The container starts, and SELinux denies every read, so the
+    page is a 403 or an error.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.containers
+    title: Configure container engines, create and manage containers
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Run containers, publish ports, and mount volumes
+    man_page: podman-run(1)
+  - kind: man-page
+    title: Quadlet units for containers
+    man_page: podman-systemd.unit(5)
+  - kind: man-page
+    title: SELinux labels for container mounts
+    man_page: container_selinux(8)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1536, vcpus: 1}
+checks:
+  - check_id: web-container
+    kind: command
+    target: node2
+    description: A container named web runs localhost/lal-web:1.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        state=$(podman inspect --format '{{.State.Status}} {{.ImageName}}' web 2>/dev/null) \
+          || fail "there is no container called web"
+        expect_eq "$state" "running localhost/lal-web:1" "the web container's state and image"
+  - check_id: page-served
+    kind: command
+    target: node2
+    description: curl http://localhost:8088/ returns the page in /srv/web/content.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        fetch() { page=$(curl --silent --show-error --max-time 3 http://localhost:8088/ 2>&1); }
+        retry 10 fetch || fail "nothing answers on port 8088: ${page##*: }"
+        [[ "$page" == *"$(cat /srv/web/content/index.html)"* ]] \
+          || fail "port 8088 answers with something else: ${page:0:80}"
+  - check_id: content-read-only
+    kind: command
+    target: node2
+    description: /srv/web/content is mounted read-only at /content.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        mounts=$(podman inspect --format '{{range .Mounts}}{{.Source}}:{{.Destination}}:{{.RW}} {{end}}' web 2>/dev/null) \
+          || fail "there is no container called web"
+        [[ " $mounts " == *" /srv/web/content:/content:false "* ]] \
+          || fail "/srv/web/content is not mounted read-only at /content (mounts: ${mounts:-none})"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-container-service.setup.yaml
+reference_solution: actions/exam-container-service.solution.yaml
+alternate_solutions: [actions/exam-container-service.alternate.yaml]
+rejected_solutions:
+  - actions/exam-container-service.rejected-restart-policy.yaml
+  - actions/exam-container-service.rejected-unlabeled-mount.yaml

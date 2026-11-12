@@ -1,0 +1,141 @@
+schema_version: 1
+actions:
+  - action_id: run-the-directory-and-the-team-leads-workstation
+    target: node1
+    timeout_seconds: 240
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname corp0 con-name corp ipv4.method manual \
+          ipv4.addresses 10.65.0.1/24 ipv6.method disabled >/dev/null
+        nmcli connection up corp >/dev/null
+        cat > /tmp/lal-ds.inf <<'EOF'
+        [general]
+        config_version = 2
+        [slapd]
+        instance_name = lal
+        root_dn = cn=Directory Manager
+        root_password = Directory-Lab-2026
+        port = 389
+        secure_port = 636
+        self_sign_cert = True
+        [backend-userroot]
+        suffix = dc=lab,dc=internal
+        create_suffix_entry = True
+        sample_entries = no
+        EOF
+        dscreate from-file /tmp/lal-ds.inf
+        systemctl enable --now dirsrv@lal.service
+        cat > /tmp/lal-team.ldif <<'EOF'
+        dn: ou=People,dc=lab,dc=internal
+        objectClass: organizationalUnit
+        ou: People
+
+        dn: ou=Groups,dc=lab,dc=internal
+        objectClass: organizationalUnit
+        ou: Groups
+
+        dn: uid=ldapdev,ou=People,dc=lab,dc=internal
+        objectClass: top
+        objectClass: account
+        objectClass: posixAccount
+        cn: LDAP Developer
+        uid: ldapdev
+        uidNumber: 2300
+        gidNumber: 2300
+        homeDirectory: /home/ldapdev
+        loginShell: /bin/bash
+
+        dn: cn=ldapops,ou=Groups,dc=lab,dc=internal
+        objectClass: top
+        objectClass: posixGroup
+        cn: ldapops
+        gidNumber: 2300
+        memberUid: ldapdev
+        EOF
+        ldapadd -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-team.ldif
+        cat > /tmp/lal-anonymous-posix-read.ldif <<'EOF'
+        dn: dc=lab,dc=internal
+        changetype: modify
+        add: aci
+        aci: (targetattr="uid || uidNumber || gidNumber || homeDirectory || loginShell || cn || memberUid || objectClass")(version 3.0; acl "Allow anonymous POSIX identity reads"; allow (read,search,compare) userdn="ldap:///anyone";)
+        EOF
+        ldapmodify -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-anonymous-posix-read.ldif
+        firewall-cmd --quiet --permanent --add-service=ldap
+        firewall-cmd --quiet --reload
+        id teamlead >/dev/null 2>&1 || useradd -m teamlead
+        install -d -o teamlead -g teamlead -m 0700 /home/teamlead/.ssh
+        rm -f /home/teamlead/.ssh/lal_teamlead*
+        cat > /home/teamlead/.ssh/lal_teamlead <<'EOF'
+        -----BEGIN OPENSSH PRIVATE KEY-----
+        b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+        QyNTUxOQAAACD9/k+S4/Md8/gwJF8MtjZ+AdTlwY8fbpL/+PX9GJpw1gAAAJhjRknUY0ZJ
+        1AAAAAtzc2gtZWQyNTUxOQAAACD9/k+S4/Md8/gwJF8MtjZ+AdTlwY8fbpL/+PX9GJpw1g
+        AAAECIvTeEuZuZ4aHJt+GkggofWKEOEWvyym/151itTnjE6v3+T5Lj8x3z+DAkXwy2Nn4B
+        1OXBjx9ukv/49f0YmnDWAAAAEmxhbC1kZXBsb3ktZml4dHVyZQECAw==
+        -----END OPENSSH PRIVATE KEY-----
+        EOF
+        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW teamlead@platform\n' > /home/teamlead/.ssh/lal_teamlead.pub
+        chown teamlead:teamlead /home/teamlead/.ssh/lal_teamlead*
+        chmod 0600 /home/teamlead/.ssh/lal_teamlead
+        chmod 0644 /home/teamlead/.ssh/lal_teamlead.pub
+  - action_id: onboard-the-team-in-a-hurry
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname corp0 con-name corp ipv4.method manual \
+          ipv4.addresses 10.65.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up corp >/dev/null
+        # A trial account from before the directory existed, never removed.
+        # (Created before SSSD knew the directory; useradd refuses names that NSS already resolves.)
+        useradd --uid 4300 --create-home ldapdev
+        authselect select sssd --force >/dev/null
+        cat > /etc/sssd/sssd.conf <<'CONF'
+        [sssd]
+        services = nss, pam
+        domains = lab
+
+        [domain/lab]
+        id_provider = ldap
+        auth_provider = ldap
+        ldap_uri = ldap://10.65.0.1
+        ldap_search_base = dc=lab,dc=internal
+        ldap_id_use_start_tls = false
+        CONF
+        chmod 0600 /etc/sssd/sssd.conf
+        systemctl enable sssd.service
+        systemctl restart sssd.service
+        groupadd --gid 3100 platform
+        # teamlead was created by hand from memory; the roster says UID 3100, group platform.
+        useradd --uid 3099 --create-home teamlead
+        install -d -m 0700 /srv/platform
+        printf 'platform-plan\n' > /srv/platform/plan
+        chown 3100:3100 /srv/platform/plan
+        chmod 0660 /srv/platform/plan
+        cat > /etc/profile.d/lal-team.conf <<'PROFILE'
+        # Platform team settings.
+        export TEAM_REGION=amman
+        PROFILE
+        cat > /etc/security/limits.d/80-lal-team.conf <<'LIMITS'
+        # Platform team: builds open many files.
+        platform    soft    nofile    4096
+        LIMITS
+        install -d -o teamlead -g teamlead -m 0700 /home/teamlead/.ssh
+        printf 'ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIP3+T5Lj8x3z+DAkXwy2Nn4B1OXBjx9ukv/49f0YmnDW teamlead@platform\n' \
+          > /home/teamlead/.ssh/authorized_keys
+        chown teamlead:teamlead /home/teamlead/.ssh/authorized_keys
+        chmod 0600 /home/teamlead/.ssh/authorized_keys
+        cat > /etc/ssh/sshd_config.d/60-platform-host.conf <<'SSHD'
+        # Host policy: administrators and the platform team only.
+        AllowGroups wheel platform
+        SSHD
+        systemctl restart sshd.service

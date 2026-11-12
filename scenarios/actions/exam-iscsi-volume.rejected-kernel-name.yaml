@@ -1,0 +1,24 @@
+schema_version: 1
+actions:
+  - action_id: log-in-format-and-mount
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf 'InitiatorName=iqn.2026-10.internal.lab:node2\n' > /etc/iscsi/initiatorname.iscsi
+        systemctl restart iscsid.service
+        iscsiadm -m discovery -t sendtargets -p 10.72.0.10 >/dev/null
+        iscsiadm -m node -T iqn.2026-10.internal.lab:vault -p 10.72.0.10 --login >/dev/null
+        udevadm settle
+        for _ in $(seq 20); do compgen -G '/dev/disk/by-path/*vault-lun-0' >/dev/null && break; sleep 0.5; done
+        disk=$(readlink -f /dev/disk/by-path/*iqn.2026-10.internal.lab:vault-lun-0)
+        mkfs.xfs -q -f "$disk"
+        install -d /srv/vault
+        printf "%s /srv/vault xfs _netdev 0 0\\n" "$disk" >> /etc/fstab
+        systemctl daemon-reload
+        mount /srv/vault

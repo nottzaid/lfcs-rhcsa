@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: address-node1
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.61.0.30/24 ipv6.method manual ipv6.addresses fd61::30/64 >/dev/null
+        nmcli connection up lan >/dev/null

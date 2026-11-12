@@ -1,0 +1,38 @@
+schema_version: 1
+actions:
+  - action_id: publish-the-target
+    target: node1
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname san0 con-name san ipv4.method manual \
+          ipv4.addresses 10.72.0.10/24 ipv6.method disabled >/dev/null
+        nmcli connection up san >/dev/null
+        target=iqn.2026-10.internal.lab:vault
+        systemctl enable --now target.service
+        targetcli /backstores/block create name=vault dev=/dev/disk/by-id/virtio-lal-target >/dev/null
+        targetcli /iscsi create "$target" >/dev/null
+        targetcli "/iscsi/$target/tpg1/luns" create /backstores/block/vault >/dev/null
+        targetcli "/iscsi/$target/tpg1/acls" create iqn.2026-10.internal.lab:node2 >/dev/null
+        targetcli "/iscsi/$target/tpg1" set attribute authentication=0 generate_node_acls=0 >/dev/null
+        targetcli saveconfig >/dev/null
+        firewall-cmd --quiet --permanent --add-port=3260/tcp
+        firewall-cmd --quiet --reload
+  - action_id: address-node2-with-a-generic-initiator
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname san0 con-name san ipv4.method manual \
+          ipv4.addresses 10.72.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up san >/dev/null
+        printf 'InitiatorName=%s\n' "$(iscsi-iname)" > /etc/iscsi/initiatorname.iscsi

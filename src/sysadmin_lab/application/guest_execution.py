@@ -92,3 +92,53 @@ class GuestReadiness:
         raise GuestReadinessError(
             f"guest SSH did not become ready after {attempts} attempts: {last_detail}"
         )
+
+    def wait_for_restart(
+        self,
+        endpoint: GuestEndpoint,
+        *,
+        offline_attempts: int = 30,
+        online_attempts: int = 60,
+        interval_seconds: float = 2.0,
+        command_timeout_seconds: float = 3.0,
+    ) -> None:
+        if offline_attempts < 1:
+            raise ValueError("offline attempts must be positive")
+        for attempt in range(offline_attempts):
+            try:
+                result = self._executor.run(
+                    endpoint, ("true",), timeout_seconds=command_timeout_seconds
+                )
+                if not result.succeeded:
+                    break
+            except GuestCommandTimeout:
+                break
+            if attempt + 1 < offline_attempts:
+                self._sleep(interval_seconds)
+        else:
+            raise GuestReadinessError(
+                f"guest SSH did not go offline after {offline_attempts} attempts"
+            )
+        self.wait(
+            endpoint,
+            attempts=online_attempts,
+            interval_seconds=interval_seconds,
+            command_timeout_seconds=command_timeout_seconds,
+        )
+        self.wait_for_boot(endpoint)
+
+    def wait_for_boot(self, endpoint: GuestEndpoint, *, timeout_seconds: float = 180.0) -> None:
+        """Wait until systemd has finished booting.
+
+        SSH answers long before units ordered after network-online.target have started, and
+        checks that run in between would grade a half-booted machine. A boot that never
+        finishes, for example because a unit waits forever, is left for the checks to report.
+        """
+        try:
+            self._executor.run(
+                endpoint,
+                ("systemctl", "is-system-running", "--wait"),
+                timeout_seconds=timeout_seconds,
+            )
+        except GuestCommandTimeout:
+            return

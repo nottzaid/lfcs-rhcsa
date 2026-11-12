@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: delete-everything-in-the-cache
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        systemctl disable --now lal-thumbnailer.timer
+        find /var/lib/lal-cache -mindepth 1 -maxdepth 1 ! -name lost+found -exec rm -rf {} +
+        install -d -o lalsess -g lalsess -m 0750 /var/lib/lal-cache/sessions

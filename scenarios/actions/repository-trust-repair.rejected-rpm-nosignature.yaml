@@ -1,0 +1,10 @@
+schema_version: 1
+actions:
+  - action_id: install-the-file-without-checking
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - rpm -ivh --nosignature /srv/lal-repo/lal-release-notes-*.rpm

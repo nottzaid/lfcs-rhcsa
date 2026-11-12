@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: schedule-it-with-cron
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl enable --now atd.service
+        echo '0 6 * * * echo approved > /var/lib/handoff/ready' | crontab -u handoff -

@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: do-everything-in-the-public-zone
+    target: router
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --zone=public --add-masquerade
+        firewall-cmd --quiet --permanent --zone=public --add-forward
+        firewall-cmd --quiet --permanent --zone=public --add-forward-port=port=80:proto=tcp:toport=8080
+        firewall-cmd --quiet --reload

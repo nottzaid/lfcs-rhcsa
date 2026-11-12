@@ -1,0 +1,46 @@
+schema_version: 1
+actions:
+  - action_id: correct-the-datacenter-address-and-route-the-vips
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection modify dc -ipv4.addresses 172.20.0.11/24 +ipv4.addresses 172.20.0.1/24
+        nmcli connection modify dc +ipv4.routes '172.21.0.10/32 172.20.0.2'
+        nmcli device reapply dc0
+  - action_id: replace-firewalld-with-an-nftables-ruleset
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl disable --now firewalld.service
+        cat > /etc/nftables/router.nft <<'NFT'
+        flush ruleset
+
+        table inet filter {
+          chain input {
+            type filter hook input priority filter; policy drop;
+            ct state established,related accept
+            iifname "lo" accept
+            meta l4proto { icmp, ipv6-icmp } accept
+            tcp dport 22 accept
+          }
+          chain forward {
+            type filter hook forward priority filter; policy drop;
+            ct state established,related accept
+            iifname "branch0" oifname "dc0" ip daddr 172.21.0.10 tcp dport 8080 accept
+          }
+        }
+        NFT
+        printf 'include "/etc/nftables/router.nft"\n' > /etc/sysconfig/nftables.conf
+        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-router.conf
+        sysctl --quiet --load /etc/sysctl.d/90-router.conf
+        systemctl enable --now nftables.service

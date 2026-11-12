@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: issue-correctly-but-leave-nginx-alone
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /etc/lal-pki
+        openssl req -new -newkey rsa:2048 -nodes -subj /CN=api.internal \
+          -keyout private/api.key -out /tmp/api.csr
+        printf 'subjectAltName=DNS:api.internal,IP:127.0.0.1\n' > /tmp/api.ext
+        openssl x509 -req -in /tmp/api.csr -CA ca.crt -CAkey private/ca.key -CAcreateserial \
+          -days 397 -extfile /tmp/api.ext -out api.crt
+        chmod 0600 private/api.key

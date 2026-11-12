@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -64,3 +65,31 @@ def test_acquirer_removes_failed_partial_download(tmp_path: Path) -> None:
     with pytest.raises(ImageVerificationError):
         ImageAcquirer(FakeDownloader(b"bad", [])).acquire(manifest, cache)
     assert not list(cache.iterdir())
+
+
+def test_the_downloader_streams_exact_bytes_and_never_overwrites(tmp_path: Path) -> None:
+    import functools
+    import threading
+    from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+    from sysadmin_lab.application.image_acquisition import HttpsDownloader
+
+    served = tmp_path / "served"
+    served.mkdir()
+    payload = os.urandom(3 * 1024 * 1024 + 17)  # several read chunks and a partial one
+    (served / "media.iso").write_bytes(payload)
+    handler = functools.partial(SimpleHTTPRequestHandler, directory=str(served))
+    server = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/media.iso"
+        destination = tmp_path / "download.iso"
+        HttpsDownloader(timeout_seconds=10).download(url, destination)
+        assert destination.read_bytes() == payload
+        with pytest.raises(FileExistsError):
+            HttpsDownloader(timeout_seconds=10).download(url, destination)
+        assert destination.read_bytes() == payload
+    finally:
+        server.shutdown()
+        server.server_close()

@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: generate-a-systemd-unit
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        podman create --name web -p 8088:8080 -v /srv/web/content:/content:ro,Z localhost/lal-web:1 >/dev/null
+        cd /etc/systemd/system
+        podman generate systemd --new --files --name web >/dev/null 2>&1
+        podman rm web >/dev/null
+        systemctl daemon-reload
+        systemctl enable --now container-web.service

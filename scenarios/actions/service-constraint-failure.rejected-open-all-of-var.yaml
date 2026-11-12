@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: open-all-of-var
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '[Service]\nReadWritePaths=/var\n' > /etc/systemd/system/lal-api.service.d/20-state.conf
+        systemctl daemon-reload
+        systemctl restart lal-api.service

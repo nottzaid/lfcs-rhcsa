@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: extend-the-group-then-grow-each-layer
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        vgextend vgdata "$(readlink -f /dev/disk/by-id/virtio-lal-spare)"
+        lvextend --extents +100%FREE /dev/vgdata/lvlogs
+        resize2fs /dev/mapper/vgdata-lvlogs

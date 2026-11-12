@@ -1,0 +1,24 @@
+schema_version: 1
+actions:
+  - action_id: replace-the-profile-using-pathmunge
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        rm /etc/profile.d/lal-operations.sh
+        printf '%s\n' '# Operations team defaults' 'pathmunge /opt/lal/bin' \
+          'EDITOR=/usr/bin/vi' 'export EDITOR' > /etc/profile.d/operations.sh
+        chmod 0644 /etc/profile.d/operations.sh
+  - action_id: move-the-preference-into-bashrc
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        sed -i '/REPORT_FORMAT=/d' /home/opsanalyst/.bash_profile
+        printf 'REPORT_FORMAT=compact\nexport REPORT_FORMAT\n' >> /home/opsanalyst/.bashrc

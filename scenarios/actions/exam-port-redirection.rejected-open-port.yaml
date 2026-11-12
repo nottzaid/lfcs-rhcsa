@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: open-8080-instead-of-redirecting-it
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --add-service=http
+        firewall-cmd --quiet --permanent --add-port=8080/tcp
+        firewall-cmd --quiet --reload

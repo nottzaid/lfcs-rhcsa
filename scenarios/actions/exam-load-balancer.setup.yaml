@@ -1,0 +1,46 @@
+schema_version: 1
+actions:
+  - action_id: run-two-backends-on-node1
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.69.0.10/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null
+        for port in 8081 8082; do
+          install -d -m 0755 "/srv/backend-$port"
+          printf 'backend-%s' "$port" > "/srv/backend-$port/index.html"
+          printf 'status of backend-%s' "$port" > "/srv/backend-$port/status"
+          cat > "/etc/systemd/system/lal-backend-$port.service" <<UNIT
+        [Unit]
+        Description=Backend on port $port
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -m http.server $port --directory /srv/backend-$port
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+          firewall-cmd --quiet --permanent --add-port="$port/tcp"
+        done
+        systemctl daemon-reload
+        systemctl enable --now lal-backend-8081.service lal-backend-8082.service
+        firewall-cmd --quiet --reload
+  - action_id: address-node2
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.69.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null

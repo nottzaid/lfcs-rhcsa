@@ -1,0 +1,117 @@
+schema_version: 1
+scenario_id: exam-local-repository
+version: 1
+status: verified
+collection: exam
+title: Serve packages from a local repository
+summary: Turn a directory of signed packages into a verified dnf repository and install from it.
+estimated_minutes: 7
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, the directory `/srv/media` holds signed RPM packages but no repository
+  metadata, and node2 has no other repositories it can reach.
+
+  Turn `/srv/media` into a dnf repository with the id `media`. It must be enabled and verify
+  package signatures with the key in `/srv/media/RPM-GPG-KEY-media`. Then install the
+  package `lal-tools` from it.
+requirements:
+  - "A repository with the id `media` serves `/srv/media`, is enabled, and checks signatures."
+  - "rpm trusts the key in `/srv/media/RPM-GPG-KEY-media`."
+  - "`lal-tools` is installed from the `media` repository."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo createrepo_c /srv/media
+  sudo tee /etc/yum.repos.d/media.repo <<'REPO'
+  [media]
+  name=Local media
+  baseurl=file:///srv/media
+  enabled=1
+  gpgcheck=1
+  gpgkey=file:///srv/media/RPM-GPG-KEY-media
+  REPO
+  sudo dnf install -y lal-tools
+  ```
+
+  A repository is a directory of packages plus the `repodata/` that `createrepo_c` writes.
+  With `gpgcheck=1` and `gpgkey=`, dnf imports the key the first time it needs it and
+  refuses any package the key did not sign. `sudo rpm --import /srv/media/RPM-GPG-KEY-media`
+  imports it up front instead.
+
+  ## Check it yourself
+
+  ```bash
+  dnf repolist
+  dnf config-manager --dump media | grep -E '^(enabled|gpgcheck)'
+  dnf repoquery --installed --qf '%{name} from %{from_repo}' lal-tools
+  ```
+
+  ## Tempting but wrong
+
+  - **`rpm -i /srv/media/lal-tools-*.rpm`.** The package is installed, but from no
+    repository, and the next package will need the same workaround.
+  - **`gpgcheck=0`.** Everything installs, signed or not.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.packages-repositories
+    title: Search for, install, validate, and maintain software packages or repositories
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Install packages and manage repositories
+    man_page: dnf(8)
+  - kind: man-page
+    title: Repository options such as gpgcheck and gpgkey
+    man_page: dnf.conf(5)
+  - kind: man-page
+    title: Import keys and verify package signatures
+    man_page: rpmkeys(8)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: media-repository
+    kind: command
+    target: node2
+    description: The media repository serves /srv/media, is enabled, and checks signatures.
+    parameters:
+      timeout_seconds: 60
+      sudo: true
+      script: |
+        settings=$(dnf config-manager --dump media 2>/dev/null) || fail "dnf does not know a repository called media"
+        expect_eq "$(sed -n 's/^enabled = //p' <<<"$settings")" 1 "enabled for media"
+        expect_eq "$(sed -n 's/^gpgcheck = //p' <<<"$settings")" 1 "gpgcheck for media"
+        [[ "$(sed -n 's/^baseurl = //p' <<<"$settings")" == *"/srv/media"* ]] \
+          || fail "the media repository does not serve /srv/media"
+        [[ -f /srv/media/repodata/repomd.xml ]] || fail "/srv/media has no repository metadata"
+  - check_id: key-trusted
+    kind: command
+    target: node2
+    description: rpm trusts the media key.
+    parameters:
+      script: |
+        package=$(ls /srv/media/lal-tools-*.rpm | head -n 1)
+        verdict=$(rpm -K "$package" 2>&1) || fail "rpm does not trust the media key: ${verdict##*: }"
+  - check_id: installed-from-media
+    kind: command
+    target: node2
+    description: lal-tools is installed from the media repository.
+    parameters:
+      timeout_seconds: 60
+      sudo: true
+      script: |
+        rpm -q lal-tools >/dev/null || fail "lal-tools is not installed"
+        expect_eq "$(dnf -q repoquery --installed --qf '%{from_repo}' lal-tools 2>/dev/null)" media \
+          "the repository lal-tools was installed from"
+persistence:
+  reboot: false
+setup: actions/exam-local-repository.setup.yaml
+reference_solution: actions/exam-local-repository.solution.yaml
+rejected_solutions:
+  - actions/exam-local-repository.rejected-rpm-install.yaml
+  - actions/exam-local-repository.rejected-no-gpgcheck.yaml

@@ -21,11 +21,30 @@ from sysadmin_lab.application.machines import DomainLeaseReadiness
 from sysadmin_lab.application.resources import ResourceManager
 from sysadmin_lab.application.session_artifacts import SessionArtifactBuilder, SubprocessRunner
 from sysadmin_lab.application.sessions import SessionCoordinator
-from sysadmin_lab.application.vm_sessions import SingleHostVmSessionService
+from sysadmin_lab.application.vm_sessions import VmSessionService
+from sysadmin_lab.catalog import load_catalog
 from sysadmin_lab.domain.models import CheckKind, CheckSpec
 from sysadmin_lab.domain.sessions import SessionStatus
 
 pytestmark = pytest.mark.live
+
+
+def cited_man_pages_script() -> str:
+    """A check script that fails naming every cited man page missing from the guest."""
+    root = Path(__file__).parents[2]
+    pages = sorted(
+        {
+            source.man_page
+            for scenario in load_catalog(root / "scenarios")
+            for source in scenario.sources
+            if source.man_page
+        }
+    )
+    lookups = "\n".join(
+        f"man -w {section} {name} >/dev/null 2>&1 || missing+=' {name}({section})'"
+        for name, section in (page[:-1].split("(") for page in pages)
+    )
+    return f'missing=\n{lookups}\n[[ -z $missing ]] || fail "not installed:$missing"'
 
 
 @pytest.mark.skipif(
@@ -47,7 +66,7 @@ def test_guarded_rocky_session_service_lifecycle() -> None:
         SqliteSessionMachineRepository(state_path) as machine_repository,
     ):
         executor = SshGuestExecutor(BoundedSubprocessRunner())
-        service = SingleHostVmSessionService(
+        service = VmSessionService(
             sessions=SessionCoordinator(session_repository),
             machines=machine_repository,
             resources=ResourceManager(gateway, resource_registry),
@@ -102,6 +121,13 @@ def test_guarded_rocky_session_service_lifecycle() -> None:
                     parameters={"name": "qemu-guest-agent.service", "active": True},
                 ),
                 CheckSpec(
+                    check_id="cited-documentation",
+                    kind=CheckKind.COMMAND,
+                    target="node1",
+                    description="Every man page a scenario cites is installed on the image.",
+                    parameters={"script": cited_man_pages_script(), "timeout_seconds": 60},
+                ),
+                CheckSpec(
                     check_id="deliberate-failure",
                     kind=CheckKind.FILE,
                     target="node1",
@@ -123,8 +149,9 @@ def test_guarded_rocky_session_service_lifecycle() -> None:
                 True,
                 True,
                 True,
+                True,
                 False,
-            ]
+            ], [result.observation.message for result in report.results]
         finally:
             destroyed = service.destroy(provisioned.state.session_id)
 

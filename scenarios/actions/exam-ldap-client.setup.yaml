@@ -1,0 +1,97 @@
+schema_version: 1
+actions:
+  - action_id: publish-the-directory-on-node1
+    target: node1
+    timeout_seconds: 240
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.74.0.10/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null
+        dsctl lal remove --do-it >/dev/null 2>&1 || true
+        cat > /tmp/lal-ds.inf <<'EOF'
+        [general]
+        config_version = 2
+
+        [slapd]
+        instance_name = lal
+        root_dn = cn=Directory Manager
+        root_password = Directory-Lab-2026
+        port = 389
+        secure_port = 636
+        self_sign_cert = True
+
+        [backend-userroot]
+        suffix = dc=lab,dc=internal
+        create_suffix_entry = True
+        sample_entries = no
+        EOF
+        dscreate from-file /tmp/lal-ds.inf
+        systemctl enable --now dirsrv@lal.service
+        cat > /tmp/lal-identities.ldif <<'EOF'
+        dn: ou=People,dc=lab,dc=internal
+        objectClass: organizationalUnit
+        ou: People
+
+        dn: ou=Groups,dc=lab,dc=internal
+        objectClass: organizationalUnit
+        ou: Groups
+
+        dn: uid=ldapuser1,ou=People,dc=lab,dc=internal
+        objectClass: top
+        objectClass: account
+        objectClass: posixAccount
+        cn: LDAP User 1
+        uid: ldapuser1
+        uidNumber: 3001
+        gidNumber: 3000
+        homeDirectory: /home/ldapuser1
+        loginShell: /bin/bash
+
+        dn: uid=ldapuser2,ou=People,dc=lab,dc=internal
+        objectClass: top
+        objectClass: account
+        objectClass: posixAccount
+        cn: LDAP User 2
+        uid: ldapuser2
+        uidNumber: 3002
+        gidNumber: 3000
+        homeDirectory: /home/ldapuser2
+        loginShell: /bin/bash
+
+        dn: cn=ldapteam,ou=Groups,dc=lab,dc=internal
+        objectClass: top
+        objectClass: posixGroup
+        cn: ldapteam
+        gidNumber: 3000
+        memberUid: ldapuser1
+        memberUid: ldapuser2
+        EOF
+        ldapadd -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-identities.ldif
+        cat > /tmp/lal-anonymous-posix-read.ldif <<'EOF'
+        dn: dc=lab,dc=internal
+        changetype: modify
+        add: aci
+        aci: (targetattr="uid || uidNumber || gidNumber || homeDirectory || loginShell || cn || memberUid || objectClass")(version 3.0; acl "Allow anonymous POSIX identity reads"; allow (read,search,compare) userdn="ldap:///anyone";)
+        EOF
+        ldapmodify -x -H ldap://127.0.0.1 -D 'cn=Directory Manager' -w Directory-Lab-2026 -f /tmp/lal-anonymous-posix-read.ldif
+        firewall-cmd --quiet --permanent --add-service=ldap
+        firewall-cmd --quiet --reload
+  - action_id: address-node2
+    target: node2
+    timeout_seconds: 60
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname lan0 con-name lan ipv4.method manual \
+          ipv4.addresses 10.74.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up lan >/dev/null

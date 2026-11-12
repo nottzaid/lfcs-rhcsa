@@ -83,6 +83,35 @@ def test_lease_readiness_times_out_and_validates_attempts() -> None:
         readiness.wait("lal-domain", attempts=0)
 
 
+def test_waiting_for_a_released_lease_gives_up_quietly() -> None:
+    class Source:
+        def __init__(self, leased_for: int) -> None:
+            self.remaining = leased_for
+
+        def domain_ipv4_addresses(self, name: str) -> tuple[str, ...]:
+            self.remaining -= 1
+            return ("192.0.2.10",) if self.remaining >= 0 else ()
+
+    sleeps: list[float] = []
+    released = DomainLeaseReadiness(Source(leased_for=2), sleep=sleeps.append)
+    assert released.wait_released("lal-domain")
+    assert sleeps == [0.3, 0.3]
+
+    held = DomainLeaseReadiness(Source(leased_for=99), sleep=lambda _seconds: None)
+    assert not held.wait_released("lal-domain", attempts=3)  # expiry will free it
+
+
+def test_an_address_is_held_only_while_libvirt_leases_it_to_the_domain() -> None:
+    class Source:
+        def domain_ipv4_addresses(self, name: str) -> tuple[str, ...]:
+            return ("192.0.2.10",) if name == "lal-running" else ()
+
+    readiness = DomainLeaseReadiness(Source())
+    assert readiness.holds("lal-running", "192.0.2.10")
+    assert not readiness.holds("lal-running", "192.0.2.11")
+    assert not readiness.holds("lal-gone", "192.0.2.10")
+
+
 @pytest.mark.parametrize(
     "changes,match",
     [

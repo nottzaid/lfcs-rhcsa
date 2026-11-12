@@ -1,0 +1,23 @@
+schema_version: 1
+actions:
+  - action_id: install-a-unit-that-cannot-start
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        useradd --system --shell /usr/sbin/nologin collector
+        printf '%s\n' '#!/usr/bin/bash' '# Metrics collector: records that it is running, in the foreground.' \
+          'while :; do printf "running %(%s)T\n" -1 > state; sleep 5; done' > /usr/local/bin/lal-collector
+        chmod 0755 /usr/local/bin/lal-collector
+        install -d -m 0755 /usr/share/lal-exam
+        sha256sum < /usr/local/bin/lal-collector | cut -d' ' -f1 > /usr/share/lal-exam/collector.sha256
+        printf '%s\n' '[Unit]' 'Description=Metrics collector' '' '[Service]' 'Type=forking' 'User=collector' \
+          'WorkingDirectory=/var/lib/lal-collector' 'ExecStart=/usr/local/bin/lal-collector' 'TimeoutStartSec=15' '' \
+          '[Install]' 'WantedBy=multi-user.target' > /etc/systemd/system/lal-collector.service
+        systemctl daemon-reload
+        systemctl enable lal-collector.service
+        systemctl start lal-collector.service || true

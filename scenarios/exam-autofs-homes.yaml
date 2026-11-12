@@ -1,0 +1,113 @@
+schema_version: 1
+scenario_id: exam-autofs-homes
+version: 1
+status: verified
+collection: exam
+title: Mount home directories on demand with autofs
+summary: Mount any user's NFS home directory under /remote/home the moment it is used.
+estimated_minutes: 7
+task_type: configure
+difficulty: intermediate
+task: |
+  `node1` (10.66.0.10) exports one directory per user under `/exports/home` over NFS.
+
+  On `node2`, configure autofs so that `/remote/home/NAME` mounts
+  `10.66.0.10:/exports/home/NAME` on demand, read-write, with NFS version 4, for any `NAME`,
+  using a single wildcard map entry. It must keep working after node2 reboots.
+
+  The users `alice` and `bob` exist on both hosts.
+requirements:
+  - "autofs runs at boot and manages `/remote/home`."
+  - "Using `/remote/home/alice` or `/remote/home/bob` mounts that user's NFS directory, read-write, over NFSv4."
+  - "Each user can work in their own directory."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  echo '/remote/home /etc/auto.home' | sudo tee /etc/auto.master.d/home.autofs
+  echo '* -fstype=nfs4,rw 10.66.0.10:/exports/home/&' | sudo tee /etc/auto.home
+  sudo systemctl enable --now autofs
+  ls /remote/home/alice
+  ```
+
+  `auto.master` (and the `.autofs` files in `auto.master.d`) maps a directory to a map
+  file. In the map, `*` matches any name looked up under that directory, and `&` stands for
+  the matched name, so one line serves every user. Nothing is mounted until a path is used,
+  and autofs unmounts it again after a while idle.
+
+  ## Check it yourself
+
+  ```bash
+  findmnt -t autofs /remote/home
+  ls /remote/home/bob && findmnt /remote/home/bob
+  ```
+
+  ## Tempting but wrong
+
+  - **A map entry per user.** It works for `alice` and `bob` today, and for nobody else.
+  - **Mounting `/exports/home` at `/remote/home` from fstab.** Every home is visible, all
+    the time, without the automounter.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.automounters
+    title: Configure filesystem automounters
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: The master map
+    man_page: auto.master(5)
+  - kind: man-page
+    title: Map entries, wildcards, and substitution
+    man_page: autofs(5)
+  - kind: man-page
+    title: NFS mount options
+    man_page: nfs(5)
+topology:
+  networks:
+    - {name: lan, cidr: 10.66.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+checks:
+  - check_id: automounter-running
+    kind: command
+    target: node2
+    description: autofs runs at boot and manages /remote/home.
+    parameters:
+      timeout_seconds: 20
+      script: |
+        expect_eq "$(systemctl is-enabled autofs.service)" enabled "autofs at boot"
+        expect_eq "$(systemctl is-active autofs.service)" active "autofs"
+        retry 10 findmnt -n -t autofs --mountpoint /remote/home >/dev/null || fail "autofs does not manage /remote/home"
+  - check_id: homes-on-demand
+    kind: command
+    target: node2
+    description: Each user's directory mounts on use, read-write, over NFSv4.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        for user in alice bob; do
+          content=$(runuser -u "$user" -- cat "/remote/home/$user/welcome.txt" 2>&1) \
+            || fail "$user cannot read /remote/home/$user/welcome.txt: ${content##*: }"
+          expect_eq "$content" "welcome, $user" "/remote/home/$user/welcome.txt"
+          mount=$(findmnt -n -o FSTYPE,SOURCE,OPTIONS --mountpoint "/remote/home/$user") \
+            || fail "/remote/home/$user is not a mount"
+          read -r fstype source options <<<"$mount"
+          expect_eq "$fstype" nfs4 "the filesystem type of /remote/home/$user"
+          expect_eq "$source" "10.66.0.10:/exports/home/$user" "the source of /remote/home/$user"
+          has_option "$options" rw || fail "/remote/home/$user is mounted read-only"
+          runuser -u "$user" -- touch "/remote/home/$user/.check" || fail "$user cannot write to /remote/home/$user"
+          rm -f "/remote/home/$user/.check" 2>/dev/null || runuser -u "$user" -- rm -f "/remote/home/$user/.check"
+        done
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-autofs-homes.setup.yaml
+reference_solution: actions/exam-autofs-homes.solution.yaml
+rejected_solutions:
+  - actions/exam-autofs-homes.rejected-one-user.yaml
+  - actions/exam-autofs-homes.rejected-fstab.yaml

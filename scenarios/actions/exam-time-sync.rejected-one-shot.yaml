@@ -1,0 +1,16 @@
+schema_version: 1
+actions:
+  - action_id: set-the-clock-once
+    target: node2
+    timeout_seconds: 60
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl stop chronyd.service
+        chronyd -q -t 20 'server 10.65.0.1 iburst' >/dev/null 2>&1 || true
+        systemctl start chronyd.service
+        timedatectl set-timezone Europe/Amsterdam

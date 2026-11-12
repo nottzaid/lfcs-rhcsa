@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: memory-disk-autostart-and-start
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        virsh -q setmaxmem tiny 384M --config
+        virsh -q setmem tiny 384M --config
+        virsh -q attach-disk tiny /var/lib/libvirt/images/tiny-data.img vdb \
+          --targetbus virtio --driver qemu --subdriver raw --config >/dev/null
+        virsh -q autostart tiny >/dev/null
+        virsh -q start tiny >/dev/null

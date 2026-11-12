@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: fix-the-account-but-not-what-it-owns
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        groupmod -g 4200 releaseops
+        usermod -u 4201 -g releaseops -d /srv/deploysvc -m -s /bin/bash deploysvc
+        chown -R deploysvc:releaseops /srv/deploysvc
+        chmod 0750 /srv/deploysvc

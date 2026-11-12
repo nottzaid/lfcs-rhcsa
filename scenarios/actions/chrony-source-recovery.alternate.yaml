@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: add-a-source-file
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i '/^server 10\.40\.0\.100 /d' /etc/chrony.conf
+        grep -q '^sourcedir /etc/chrony.d$' /etc/chrony.conf || echo 'sourcedir /etc/chrony.d' >> /etc/chrony.conf
+        install -d /etc/chrony.d
+        echo 'server 10.40.0.1 iburst' > /etc/chrony.d/site.sources
+        systemctl enable chronyd.service
+        systemctl restart chronyd.service

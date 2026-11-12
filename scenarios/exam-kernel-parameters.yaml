@@ -1,0 +1,115 @@
+schema_version: 1
+scenario_id: exam-kernel-parameters
+version: 1
+status: verified
+collection: exam
+title: Tune kernel parameters, persistent and not
+summary: Set two kernel parameters for good and one for the running kernel only.
+estimated_minutes: 6
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`:
+
+  - Set `vm.swappiness` to `15` and `net.ipv4.ip_local_port_range` to `20000 40000`. Both
+    must take effect now and still be set after a reboot.
+  - Set `kernel.sysrq` to `1` for the running kernel only. After a reboot it must be back to
+    its default value.
+requirements:
+  - "`vm.swappiness` is 15, now and after a reboot."
+  - "`net.ipv4.ip_local_port_range` is `20000 40000`, now and after a reboot."
+  - "`kernel.sysrq` is 1 until node2 reboots, and nothing sets it to 1 at boot."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  printf '%s\n' 'vm.swappiness = 15' 'net.ipv4.ip_local_port_range = 20000 40000' \
+    | sudo tee /etc/sysctl.d/90-tuning.conf
+  sudo sysctl --system
+  sudo sysctl -w kernel.sysrq=1
+  ```
+
+  `sysctl -w` changes the running kernel and nothing else. A file in `/etc/sysctl.d/` is
+  applied by `systemd-sysctl` at every boot, and `sysctl --system` applies all of them now.
+
+  Two orders matter. The files in `/usr/lib/sysctl.d/`, `/run/sysctl.d/`, and
+  `/etc/sysctl.d/` are applied as one list sorted by file name, and a later file wins. On
+  node2, the directory server's `/usr/lib/sysctl.d/70-dirsrv.conf` sets
+  `vm.swappiness = 20`, so a `60-tuning.conf` loses to it; `90-tuning.conf` does not. And
+  `sysctl --system` re-applies every file, including `50-default.conf`, which sets
+  `kernel.sysrq = 16`, so set the runtime-only value last.
+
+  ## Check it yourself
+
+  ```bash
+  sysctl vm.swappiness net.ipv4.ip_local_port_range kernel.sysrq
+  systemd-analyze cat-config sysctl.d | grep -E '^# /|swappiness|port_range|sysrq'
+  ```
+
+  ## Tempting but wrong
+
+  - **All three in a sysctl.d file.** `kernel.sysrq = 1` then survives every reboot, which
+    the task rules out.
+  - **`/etc/sysctl.d/60-tuning.conf`.** `70-dirsrv.conf` is applied after it and sets
+    `vm.swappiness` back to 20.
+  - **`sysctl -w` for all three.** Everything is right until the reboot.
+  - **`sysctl -w kernel.sysrq=1` first, then `sysctl --system`.** The second command quietly
+    puts `kernel.sysrq` back to 16.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.kernel-parameters
+    title: Configure kernel parameters, persistent and non-persistent
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Read and set kernel parameters
+    man_page: sysctl(8)
+  - kind: man-page
+    title: Kernel parameters applied at boot
+    man_page: sysctl.d(5)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: swappiness
+    kind: command
+    target: node2
+    description: vm.swappiness is 15.
+    parameters:
+      script: expect_eq "$(sysctl -n vm.swappiness)" 15 "vm.swappiness"
+  - check_id: port-range
+    kind: command
+    target: node2
+    description: net.ipv4.ip_local_port_range is 20000 40000.
+    parameters:
+      script: |
+        read -r low high < /proc/sys/net/ipv4/ip_local_port_range
+        expect_eq "$low $high" "20000 40000" "net.ipv4.ip_local_port_range"
+  - check_id: sysrq-runtime-only
+    kind: command
+    target: node2
+    description: kernel.sysrq is 1 until the next reboot, and nothing sets it to 1 at boot.
+    parameters:
+      script: |
+        [[ "$(sysctl_configured kernel.sysrq)" != 1 ]] \
+          || fail "the sysctl configuration sets kernel.sysrq = 1, so it survives reboots"
+        if [[ "$(cat /proc/sys/kernel/random/boot_id)" == "$(cat /usr/share/lal-exam/boot-id)" ]]; then
+          expect_eq "$(sysctl -n kernel.sysrq)" 1 "kernel.sysrq in the running kernel"
+        else
+          expect_eq "$(sysctl -n kernel.sysrq)" "$(cat /usr/share/lal-exam/sysrq-default)" \
+            "kernel.sysrq after the reboot"
+        fi
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-kernel-parameters.setup.yaml
+reference_solution: actions/exam-kernel-parameters.solution.yaml
+alternate_solutions: [actions/exam-kernel-parameters.alternate.yaml]
+rejected_solutions:
+  - actions/exam-kernel-parameters.rejected-all-persistent.yaml
+  - actions/exam-kernel-parameters.rejected-early-file.yaml
+  - actions/exam-kernel-parameters.rejected-runtime-only.yaml
+  - actions/exam-kernel-parameters.rejected-system-after-runtime.yaml

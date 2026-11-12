@@ -1,0 +1,19 @@
+schema_version: 1
+actions:
+  - action_id: zones-policy-and-forward-port
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --zone=internal --change-interface=int0
+        firewall-cmd --quiet --permanent --zone=external --change-interface=ext0
+        firewall-cmd --quiet --permanent --new-policy inside-out
+        firewall-cmd --quiet --permanent --policy inside-out --add-ingress-zone internal
+        firewall-cmd --quiet --permanent --policy inside-out --add-egress-zone external
+        firewall-cmd --quiet --permanent --policy inside-out --set-target ACCEPT
+        firewall-cmd --quiet --permanent --zone=external --add-forward-port=port=2080:proto=tcp:toport=80
+        firewall-cmd --quiet --reload

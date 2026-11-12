@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: deploy-without-recovery
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '%s\n' '[Service]' 'User=collector' 'Group=collector' \
+          'EnvironmentFile=/etc/lal-collector.conf' 'WorkingDirectory=/var/lib/lal-collector' \
+          'ExecStart=/opt/lal/bin/collector' '' '[Install]' 'WantedBy=multi-user.target' \
+          > /etc/systemd/system/lal-collector.service
+        systemctl daemon-reload
+        systemctl enable --now lal-collector.service

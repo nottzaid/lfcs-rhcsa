@@ -1,0 +1,47 @@
+schema_version: 1
+actions:
+  - action_id: replace-firewalld-with-an-nftables-ruleset
+    target: router
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl disable --now firewalld.service
+        cat > /etc/nftables/router.nft <<'NFT'
+        flush ruleset
+
+        table inet filter {
+          chain input {
+            type filter hook input priority filter; policy drop;
+            ct state established,related accept
+            ct state invalid drop
+            iifname "lo" accept
+            meta l4proto { icmp, ipv6-icmp } accept
+            tcp dport 22 accept
+            iifname "wan0" tcp dport 8080 ct status dnat accept
+          }
+          chain forward {
+            type filter hook forward priority filter; policy drop;
+            ct state established,related accept
+            iifname "lan0" oifname "wan0" accept
+          }
+        }
+
+        table ip nat {
+          chain prerouting {
+            type nat hook prerouting priority dstnat; policy accept;
+            iifname "wan0" tcp dport 80 redirect to :8080
+          }
+          chain postrouting {
+            type nat hook postrouting priority srcnat; policy accept;
+            oifname "wan0" masquerade
+          }
+        }
+        NFT
+        printf 'include "/etc/nftables/router.nft"\n' > /etc/sysconfig/nftables.conf
+        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-router.conf
+        sysctl --quiet --load /etc/sysctl.d/90-router.conf
+        systemctl enable --now nftables.service

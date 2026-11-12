@@ -1,0 +1,25 @@
+schema_version: 1
+actions:
+  - action_id: restore-the-policy-labels-of-the-pki
+    target: node2
+    arguments: [sudo, --, restorecon, -Rv, /etc/lal-pki]
+  - action_id: serve-the-certificate-with-its-issuer
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cat /etc/lal-pki/service.crt /etc/lal-pki/issuing-ca.crt > /etc/lal-pki/service-chain.crt
+        sed -i 's#^\( *ssl_certificate \+\)/etc/lal-pki/service.crt;#\1/etc/lal-pki/service-chain.crt;#' /etc/nginx/conf.d/lal-secure.conf
+  - action_id: label-the-content-for-web-servers
+    target: node2
+    arguments: [sudo, --, bash, -c, "semanage fcontext -a -t httpd_sys_content_t '/srv/lal-secure(/.*)?' && restorecon -Rv /srv/lal-secure"]
+  - action_id: open-the-port
+    target: node2
+    arguments: [sudo, --, bash, -c, "firewall-cmd --quiet --permanent --add-port=8443/tcp && firewall-cmd --quiet --reload"]
+  - action_id: restart-nginx
+    target: node2
+    arguments: [sudo, --, bash, -c, "nginx -t && systemctl restart nginx.service"]

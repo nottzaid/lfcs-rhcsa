@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: route-in-the-connection
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection modify lan +ipv4.routes '10.64.2.0/24 10.64.1.1'
+        nmcli connection up lan >/dev/null

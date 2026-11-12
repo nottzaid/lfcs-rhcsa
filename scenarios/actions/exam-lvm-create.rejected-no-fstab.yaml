@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: mount-by-hand-only
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-data
+        pvcreate -q "$disk"
+        vgcreate -q -s 8M vgdata "$disk"
+        lvcreate -q -y -l 100 -n lvweb vgdata
+        mkfs.ext4 -q /dev/vgdata/lvweb
+        install -d /srv/web
+        mount /dev/vgdata/lvweb /srv/web

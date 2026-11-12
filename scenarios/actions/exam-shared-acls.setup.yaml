@@ -1,0 +1,20 @@
+schema_version: 1
+actions:
+  - action_id: create-the-project-and-its-people
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        groupadd auditors
+        useradd --create-home lead
+        useradd --create-home --groups auditors audit1
+        useradd --create-home visitor
+        install -d -m 0750 /srv/projects /srv/projects/atlas /srv/projects/atlas/drafts
+        chmod 0755 /srv/projects
+        printf 'Q3 plan\n' > /srv/projects/atlas/plan.txt
+        printf 'draft notes\n' > /srv/projects/atlas/drafts/notes.txt
+        chmod 0640 /srv/projects/atlas/plan.txt /srv/projects/atlas/drafts/notes.txt

@@ -1,0 +1,116 @@
+schema_version: 1
+scenario_id: exam-selinux-web-port
+version: 1
+status: verified
+collection: exam
+title: Serve a site from /srv on a custom port under SELinux
+summary: Label web content and a port so nginx works with SELinux enforcing, persistently.
+estimated_minutes: 7
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, nginx is configured to serve `/srv/site` on TCP port 8282, but it does not
+  work. With SELinux enforcing, make `curl http://localhost:8282/` return the site, now and
+  after a reboot:
+
+  - label the content in `/srv/site` for the web server, in a way that survives a relabel;
+  - allow the web server to use port 8282.
+
+  Do not disable SELinux, and do not make the web server's domain permissive.
+requirements:
+  - "`curl http://localhost:8282/` returns `/srv/site/index.html`, also after a reboot."
+  - "Every file in `/srv/site` has the label SELinux policy assigns to it, so a relabel changes nothing."
+  - "SELinux is enforcing, and the web server's domain is not permissive."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo semanage port -a -t http_port_t -p tcp 8282
+  sudo semanage fcontext -a -t httpd_sys_content_t '/srv/site(/.*)?'
+  sudo restorecon -Rv /srv/site
+  sudo systemctl enable --now nginx
+  ```
+
+  The audit log says why it failed: `ausearch -m AVC -ts recent` shows `name_bind` denied on
+  port 8282 and `read` denied on `var_t` files. `semanage port` and `semanage fcontext` change
+  the policy itself, so they persist; `restorecon` applies the file rule now.
+
+  ## Check it yourself
+
+  ```bash
+  curl http://localhost:8282/
+  ls -Z /srv/site
+  sudo restorecon -Rnv /srv/site      # prints nothing when every label is right
+  sudo semanage port -l | grep -w 8282
+  ```
+
+  ## Tempting but wrong
+
+  - **`chcon -t httpd_sys_content_t`.** The site works until something relabels the
+    filesystem, because the policy still says `var_t`.
+  - **`setenforce 0`.** Everything works, with SELinux off.
+  - **`semanage permissive -a httpd_t`.** The same, for the web server only.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.selinux
+    title: Create and enforce MAC using SELinux
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Label ports for a service
+    man_page: semanage-port(8)
+  - kind: man-page
+    title: Persistent file context rules
+    man_page: semanage-fcontext(8)
+  - kind: man-page
+    title: Apply the policy's labels to files
+    man_page: restorecon(8)
+  - kind: man-page
+    title: Find the denials in the audit log
+    man_page: ausearch(8)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: site-served
+    kind: command
+    target: node2
+    description: curl http://localhost:8282/ returns the site.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        fetch() { page=$(curl --silent --show-error --max-time 3 http://localhost:8282/ 2>&1); }
+        retry 10 fetch || fail "nothing answers on port 8282: ${page##*: }"
+        [[ "$page" == *"$(cat /srv/site/index.html)"* ]] \
+          || fail "port 8282 answers, but not with the site: ${page:0:80}"
+  - check_id: labels-match-policy
+    kind: command
+    target: node2
+    description: Every file in /srv/site has the label the policy assigns it.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        changes=$(restorecon -Rnv /srv/site)
+        [[ -z "$changes" ]] || fail "a relabel would change /srv/site: ${changes%%$'\n'*}"
+        [[ "$(stat -c %C /srv/site/index.html)" == *:httpd_sys_content_t:* ]] \
+          || fail "index.html is labeled $(stat -c %C /srv/site/index.html), not for web content"
+  - check_id: selinux-enforcing
+    kind: command
+    target: node2
+    description: SELinux is enforcing, and httpd_t is not permissive.
+    parameters:
+      script: |
+        expect_eq "$(getenforce)" Enforcing "SELinux"
+        ! permissive_domain httpd_t || fail "httpd_t, the web server's domain, is permissive"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-selinux-web-port.setup.yaml
+reference_solution: actions/exam-selinux-web-port.solution.yaml
+rejected_solutions:
+  - actions/exam-selinux-web-port.rejected-chcon.yaml
+  - actions/exam-selinux-web-port.rejected-permissive.yaml

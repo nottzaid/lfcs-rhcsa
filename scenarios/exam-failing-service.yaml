@@ -1,0 +1,112 @@
+schema_version: 1
+scenario_id: exam-failing-service
+version: 1
+status: verified
+collection: exam
+title: Get a failing service running
+summary: Read why a unit fails, fix its configuration, and have it start at boot.
+estimated_minutes: 7
+task_type: troubleshoot
+difficulty: intermediate
+task: |
+  On `node2`, `lal-collector.service` does not start. Find out why and fix it so that it
+  runs and starts at boot.
+
+  Do not change the program `/usr/local/bin/lal-collector`, and keep running it as the user
+  `collector`.
+requirements:
+  - "`lal-collector.service` runs as `collector` and starts at boot."
+  - "The collector writes its state file, so it is really running."
+  - "`/usr/local/bin/lal-collector` is unchanged."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  systemctl status lal-collector.service      # status=200/CHDIR
+  journalctl -u lal-collector.service -n 20   # Changing to the requested working directory failed
+  sudo install -d -o collector -g collector /var/lib/lal-collector
+  sudo systemctl restart lal-collector.service   # now: start operation timed out
+  sudo systemctl edit lal-collector.service      # [Service] then Type=simple
+  sudo systemctl restart lal-collector.service
+  sudo systemctl enable lal-collector.service
+  ```
+
+  There are two faults. The unit names a working directory that does not exist, so the
+  service fails before the program runs. Then `Type=forking` tells systemd to wait for the
+  program to fork into the background, which this program never does, so the start times
+  out. `Type=simple` (or `exec`) matches a program that stays in the foreground.
+  `StateDirectory=lal-collector` in the unit is another way to get the directory, created
+  and owned for the service's user.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl status lal-collector.service
+  sudo cat /var/lib/lal-collector/state
+  ```
+
+  ## Tempting but wrong
+
+  - **Creating the directory and stopping there.** The start still times out.
+  - **Running the program by hand in the background.** It runs, and nothing starts it at
+    boot or restarts it.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.services
+    title: Create, configure, and troubleshoot services
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Type= and start timeouts
+    man_page: systemd.service(5)
+  - kind: man-page
+    title: WorkingDirectory= and StateDirectory=
+    man_page: systemd.exec(5)
+  - kind: man-page
+    title: A unit's log
+    man_page: journalctl(1)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: running-at-boot
+    kind: command
+    target: node2
+    description: lal-collector.service runs as collector and starts at boot.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        expect_eq "$(systemctl is-enabled lal-collector.service 2>/dev/null)" enabled "lal-collector.service at boot"
+        active() { systemctl is-active --quiet lal-collector.service; }
+        retry 15 active || fail "lal-collector.service is $(systemctl is-active lal-collector.service)"
+        expect_eq "$(ps -o user= -p "$(unit_value lal-collector.service MainPID)")" collector "the user lal-collector runs as"
+  - check_id: writes-state
+    kind: command
+    target: node2
+    description: The collector writes its state file.
+    parameters:
+      sudo: true
+      timeout_seconds: 30
+      script: |
+        fresh() { [[ -n "$(find /var/lib/lal-collector/state -newermt '-20 seconds' 2>/dev/null)" ]]; }
+        retry 15 fresh || fail "/var/lib/lal-collector/state has not been written in the last 20 seconds"
+  - check_id: program-unchanged
+    kind: command
+    target: node2
+    description: /usr/local/bin/lal-collector is unchanged.
+    parameters:
+      script: |
+        expect_eq "$(sha256sum < /usr/local/bin/lal-collector | cut -d' ' -f1)" "$(cat /usr/share/lal-exam/collector.sha256)" \
+          "the checksum of /usr/local/bin/lal-collector"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-failing-service.setup.yaml
+reference_solution: actions/exam-failing-service.solution.yaml
+alternate_solutions: [actions/exam-failing-service.alternate.yaml]
+rejected_solutions:
+  - actions/exam-failing-service.rejected-directory-only.yaml
+  - actions/exam-failing-service.rejected-by-hand.yaml

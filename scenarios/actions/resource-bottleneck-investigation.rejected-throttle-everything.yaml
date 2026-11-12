@@ -1,0 +1,16 @@
+schema_version: 1
+actions:
+  - action_id: cap-every-service-at-once
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        systemctl set-property system.slice CPUQuota=25%
+        install -d /etc/systemd/system/lal-search-indexer.service.d
+        printf '[Service]\nNice=10\n' > /etc/systemd/system/lal-search-indexer.service.d/limits.conf
+        systemctl daemon-reload
+        systemctl restart lal-search-indexer.service

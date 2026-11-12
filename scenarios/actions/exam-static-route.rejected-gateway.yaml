@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: default-gateway-instead-of-a-route
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection modify lan ipv4.gateway 10.64.1.1 ipv4.route-metric 50
+        nmcli connection up lan >/dev/null

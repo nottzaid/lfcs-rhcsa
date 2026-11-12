@@ -1,0 +1,106 @@
+schema_version: 1
+scenario_id: exam-libvirt-guest
+version: 1
+status: verified
+collection: exam
+title: Resize, extend, and autostart a libvirt guest
+summary: Change a guest's memory and disks in its persistent definition and have it start with the host.
+estimated_minutes: 7
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, the libvirt guest `tiny` is defined but stopped.
+
+  - Give it 384 MiB of memory, both maximum and current, in its persistent configuration.
+  - Attach the image `/var/lib/libvirt/images/tiny-data.img` to it as an additional virtio
+    disk `vdb`, permanently.
+  - Make it start automatically when node2 boots, and start it now.
+requirements:
+  - "`tiny`'s persistent configuration has 384 MiB of maximum and current memory."
+  - "Its persistent configuration has `tiny-data.img` as the virtio disk `vdb`."
+  - "`tiny` is running and starts when node2 boots."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo virsh setmaxmem tiny 384M --config
+  sudo virsh setmem tiny 384M --config
+  sudo virsh attach-disk tiny /var/lib/libvirt/images/tiny-data.img vdb \
+    --targetbus virtio --driver qemu --subdriver raw --config
+  sudo virsh autostart tiny
+  sudo virsh start tiny
+  ```
+
+  `--config` changes the persistent definition, which is what the next start uses; on a
+  stopped guest it is the only one there is. `--live` changes a running guest until it
+  stops. `virsh edit tiny` makes the same changes in the XML directly. `autostart` makes
+  libvirt start the guest when its daemon starts at boot.
+
+  ## Check it yourself
+
+  ```bash
+  sudo virsh dominfo tiny
+  sudo virsh domblklist tiny --inactive
+  sudo virsh dumpxml --inactive tiny | grep -E 'memory|currentMemory'
+  ```
+
+  ## Tempting but wrong
+
+  - **`attach-disk` on the running guest without `--config`.** The disk is gone the next
+    time the guest starts.
+  - **Starting the guest without `virsh autostart`.** It stays off after node2 reboots.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.libvirt
+    title: Manage Virtual Machines (libvirt)
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Memory, disks, autostart, and live versus config changes
+    man_page: virsh(1)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 2048, vcpus: 2}
+checks:
+  - check_id: memory
+    kind: command
+    target: node2
+    description: tiny's persistent configuration has 384 MiB of maximum and current memory.
+    parameters:
+      sudo: true
+      script: |
+        xml=$(virsh dumpxml --inactive tiny 2>/dev/null) || fail "libvirt has no guest called tiny"
+        expect_eq "$(sed -n "s|.*<memory unit='KiB'>\([0-9]*\)</memory>.*|\1|p" <<<"$xml")" 393216 "tiny's maximum memory in KiB"
+        expect_eq "$(sed -n "s|.*<currentMemory unit='KiB'>\([0-9]*\)</currentMemory>.*|\1|p" <<<"$xml")" 393216 "tiny's current memory in KiB"
+  - check_id: data-disk
+    kind: command
+    target: node2
+    description: Its persistent configuration has tiny-data.img as the virtio disk vdb.
+    parameters:
+      sudo: true
+      script: |
+        disk=$(virsh domblklist tiny --inactive 2>/dev/null | awk '$1 == "vdb" {print $2}')
+        expect_eq "${disk:-none}" /var/lib/libvirt/images/tiny-data.img "the image attached as vdb"
+        virsh dumpxml --inactive tiny | grep -q "<target dev='vdb' bus='virtio'/>" || fail "vdb is not a virtio disk"
+  - check_id: running-with-autostart
+    kind: command
+    target: node2
+    description: tiny is running and starts when node2 boots.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        expect_eq "$(virsh dominfo tiny | sed -n 's/^Autostart: *//p')" enable "autostart for tiny"
+        running() { [[ "$(virsh domstate tiny 2>/dev/null)" == running ]]; }
+        retry 30 running || fail "tiny is $(virsh domstate tiny 2>/dev/null)"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-libvirt-guest.setup.yaml
+reference_solution: actions/exam-libvirt-guest.solution.yaml
+rejected_solutions:
+  - actions/exam-libvirt-guest.rejected-live-disk.yaml
+  - actions/exam-libvirt-guest.rejected-no-autostart.yaml

@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: set-all-three-at-runtime
+    target: node2
+    arguments: [sudo, --, sysctl, -w, vm.swappiness=15, "net.ipv4.ip_local_port_range=20000 40000", kernel.sysrq=1]

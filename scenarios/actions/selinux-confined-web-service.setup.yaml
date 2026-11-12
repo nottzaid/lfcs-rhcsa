@@ -1,0 +1,29 @@
+schema_version: 1
+actions:
+  - action_id: install-mislabeled-web-service
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        setenforce 1
+        rm -rf /srv/lal-web
+        install -d /srv/lal-web
+        printf 'selinux-ready\n' > /srv/lal-web/index.html
+        semanage fcontext -d '/srv/lal-web(/.*)?' >/dev/null 2>&1 || true
+        semanage port -d -t http_port_t -p tcp 8088 >/dev/null 2>&1 || true
+        restorecon -RF /srv/lal-web
+        cat > /etc/nginx/conf.d/lal-selinux.conf <<'EOF'
+        server {
+            listen 8088;
+            root /srv/lal-web;
+            location / { try_files $uri =404; }
+        }
+        EOF
+        systemctl enable nginx.service
+        systemctl restart nginx.service || true
+        firewall-cmd --quiet --permanent --add-port=8088/tcp
+        firewall-cmd --quiet --reload

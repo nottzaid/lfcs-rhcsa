@@ -1,0 +1,107 @@
+schema_version: 1
+scenario_id: exam-time-sync
+version: 1
+status: verified
+collection: exam
+title: Synchronize time from the site server
+summary: Use one NTP server and nothing else, and set the time zone.
+estimated_minutes: 6
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`:
+
+  - Synchronize the system clock with the NTP server `10.65.0.1` (node1) and no other time
+    source, using chrony, persistently.
+  - Set the time zone to `Europe/Amsterdam`.
+requirements:
+  - "chrony's configuration names `10.65.0.1` as its only time source."
+  - "chrony on node2 is synchronized to 10.65.0.1, now and after a reboot."
+  - "The time zone is `Europe/Amsterdam`."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo sed -i 's/^pool .*/server 10.65.0.1 iburst/' /etc/chrony.conf
+  sudo systemctl restart chronyd
+  sudo timedatectl set-timezone Europe/Amsterdam
+  ```
+
+  Rocky's `/etc/chrony.conf` starts with a `pool` line. Leaving it there keeps a second
+  source configured even when it cannot be resolved today. `iburst` makes the first
+  synchronization take seconds instead of minutes. `timedatectl set-timezone` points
+  `/etc/localtime` at the zone's file.
+
+  ## Check it yourself
+
+  ```bash
+  chronyc sources            # ^* marks the selected source
+  sudo chronyd -p | grep -E '^(server|pool|peer)'
+  timedatectl
+  ```
+
+  ## Tempting but wrong
+
+  - **Adding the server and keeping the `pool` line.** node2 then has two sources.
+  - **`chronyd -q 'server 10.65.0.1 iburst'`.** It sets the clock once and configures
+    nothing.
+  - **`TZ=Europe/Amsterdam` in a shell profile.** It changes what some programs display,
+    not the system's time zone.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.time
+    title: Set and synchronize system time using time servers
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Time sources and options
+    man_page: chrony.conf(5)
+  - kind: man-page
+    title: Inspect synchronization
+    man_page: chronyc(1)
+  - kind: man-page
+    title: Set the time zone
+    man_page: timedatectl(1)
+topology:
+  networks:
+    - {name: site, cidr: 10.65.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: site, name: site0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: site, name: site0}]}
+checks:
+  - check_id: only-source
+    kind: command
+    target: node2
+    description: chrony's configuration names 10.65.0.1 as its only time source.
+    parameters:
+      sudo: true
+      script: |
+        sources=$(chronyd -p 2>/dev/null | awk '$1 == "server" || $1 == "pool" || $1 == "peer" {print $1, $2}')
+        expect_eq "$(echo $sources)" "server 10.65.0.1" "the time sources chrony is configured with"
+  - check_id: synchronized
+    kind: command
+    target: node2
+    description: chrony on node2 is synchronized to 10.65.0.1.
+    parameters:
+      timeout_seconds: 90
+      script: |
+        [[ "$(systemctl is-enabled chronyd.service)" == enabled ]] || fail "chronyd does not start at boot"
+        selected() { chronyc -n sources 2>/dev/null | grep -q '^\^\* *10\.65\.0\.1 '; }
+        retry 75 selected || fail "chrony has not selected 10.65.0.1: $(chronyc -n sources 2>&1 | tail -n 1)"
+  - check_id: time-zone
+    kind: command
+    target: node2
+    description: The time zone is Europe/Amsterdam.
+    parameters:
+      script: expect_eq "$(timedatectl show --property Timezone --value)" Europe/Amsterdam "the time zone"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-time-sync.setup.yaml
+reference_solution: actions/exam-time-sync.solution.yaml
+rejected_solutions:
+  - actions/exam-time-sync.rejected-second-source.yaml
+  - actions/exam-time-sync.rejected-one-shot.yaml

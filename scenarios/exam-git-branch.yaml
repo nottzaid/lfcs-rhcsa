@@ -1,0 +1,117 @@
+schema_version: 1
+scenario_id: exam-git-branch
+version: 1
+status: verified
+collection: exam
+title: Branch, commit, and push a change with Git
+summary: Clone a repository, change a file on a new branch, commit as a given author, and push it.
+estimated_minutes: 6
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`, as the user `dev`:
+
+  1. Clone the repository `/srv/git/app.git` into `/home/dev/app`.
+  2. Create a branch `fix-timeout`.
+  3. In `config.ini`, change `timeout=30` to `timeout=60`.
+  4. Commit the change with the message `Raise timeout to 60`, as the author
+     `Dev Ops <dev@lab.internal>`.
+  5. Push the branch to the origin repository. `main` must stay as it is.
+requirements:
+  - "`/home/dev/app` is a clone of `/srv/git/app.git`."
+  - "The origin repository has a branch `fix-timeout`: one commit on top of `main`, by `Dev Ops <dev@lab.internal>`, with the message `Raise timeout to 60`."
+  - "On that branch, `config.ini` says `timeout=60`."
+  - "`main` in the origin repository is unchanged."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  git clone /srv/git/app.git ~/app
+  cd ~/app
+  git config user.name 'Dev Ops'
+  git config user.email dev@lab.internal
+  git switch -c fix-timeout
+  sed -i 's/^timeout=30$/timeout=60/' config.ini
+  git commit -am 'Raise timeout to 60'
+  git push -u origin fix-timeout
+  ```
+
+  `git config` without `--global` sets the identity for this repository only. `git switch
+  -c` creates the branch and moves to it, so the commit lands there and not on `main`.
+  `git push -u origin fix-timeout` creates the branch in the origin and remembers it as
+  the upstream.
+
+  ## Check it yourself
+
+  ```bash
+  git log --oneline --decorate -2
+  git -C /srv/git/app.git log --format='%an <%ae> %s' -1 fix-timeout
+  ```
+
+  ## Tempting but wrong
+
+  - **Committing on `main` and pushing.** The change reaches everyone at once, and `main`
+    is no longer as it was.
+  - **Committing and stopping there.** The branch exists only in the clone.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.git
+    title: Basic Git Operations
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: upstream
+    title: git clone
+    url: https://git-scm.com/docs/git-clone
+  - kind: upstream
+    title: git switch
+    url: https://git-scm.com/docs/git-switch
+  - kind: upstream
+    title: git push
+    url: https://git-scm.com/docs/git-push
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: cloned
+    kind: command
+    target: node2
+    description: /home/dev/app is a clone of /srv/git/app.git.
+    parameters:
+      sudo: true
+      script: |
+        origin=$(runuser -u dev -- git -C /home/dev/app remote get-url origin 2>&1) || fail "/home/dev/app is not a git clone"
+        expect_eq "$origin" /srv/git/app.git "the origin of /home/dev/app"
+  - check_id: branch-pushed
+    kind: command
+    target: node2
+    description: fix-timeout in the origin is one commit on main, by Dev Ops, with the given message.
+    parameters:
+      sudo: true
+      script: |
+        git() { command git -c safe.directory='*' -C /srv/git/app.git "$@"; }
+        git rev-parse --verify -q refs/heads/fix-timeout >/dev/null || fail "the origin has no branch fix-timeout"
+        expect_eq "$(git rev-list --count main..fix-timeout)" 1 "the number of commits fix-timeout adds to main"
+        expect_eq "$(git log -1 --format='%an <%ae>' fix-timeout)" "Dev Ops <dev@lab.internal>" "the author of the commit"
+        expect_eq "$(git log -1 --format=%s fix-timeout)" "Raise timeout to 60" "the commit message"
+        config=$(git show fix-timeout:config.ini)
+        grep -qx 'timeout=60' <<<"$config" || fail "config.ini on fix-timeout does not say timeout=60"
+        ! grep -qx 'timeout=30' <<<"$config" || fail "config.ini on fix-timeout still says timeout=30"
+  - check_id: main-unchanged
+    kind: command
+    target: node2
+    description: main in the origin is unchanged.
+    parameters:
+      sudo: true
+      script: |
+        expect_eq "$(git -c safe.directory='*' -C /srv/git/app.git rev-parse main)" \
+          "$(cat /usr/share/lal-exam/main)" "main in the origin"
+persistence:
+  reboot: false
+setup: actions/exam-git-branch.setup.yaml
+reference_solution: actions/exam-git-branch.solution.yaml
+rejected_solutions:
+  - actions/exam-git-branch.rejected-commit-on-main.yaml
+  - actions/exam-git-branch.rejected-not-pushed.yaml

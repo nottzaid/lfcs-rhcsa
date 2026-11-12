@@ -1,0 +1,119 @@
+schema_version: 1
+scenario_id: exam-disk-space
+version: 1
+status: verified
+collection: exam
+title: Free space on a full filesystem without stopping its writer
+summary: Find what is really using a full filesystem and reclaim it while its service keeps running.
+estimated_minutes: 8
+task_type: troubleshoot
+difficulty: advanced
+task: |
+  On `node2`, the filesystem mounted at `/srv/data` is full.
+
+  Free at least 500 MiB on it:
+
+  - without unmounting it;
+  - without stopping or restarting `lal-writer.service`;
+  - without removing or changing anything under `/srv/data/records`.
+requirements:
+  - "`/srv/data` has at least 500 MiB available."
+  - "Every file under `/srv/data/records` is unchanged."
+  - "`lal-writer.service` runs the same process it ran before."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  df -h /srv/data
+  sudo du -xah /srv/data | sort -h | tail       # .cache/old-dumps/core.2291 is 400M
+  sudo rm /srv/data/.cache/old-dumps/core.2291
+  sudo lsof +L1 /srv/data                        # app.log (deleted), held by lal-writer
+  sudo truncate -s 0 /proc/<PID>/fd/<FD>
+  df -h /srv/data
+  ```
+
+  `du` only sees files that still have a name, so a hidden directory shows up there but a
+  deleted file does not. A deleted file that a process still holds open keeps its blocks
+  until the process closes it. `lsof +L1` lists open files with no links left, and
+  truncating the file through `/proc/PID/fd/FD` releases the space while the process keeps
+  writing.
+
+  ## Check it yourself
+
+  ```bash
+  df -h /srv/data
+  sudo lsof +L1 /srv/data
+  systemctl show -p MainPID lal-writer.service
+  ```
+
+  ## Tempting but wrong
+
+  - **Removing the core dump and stopping there.** It frees 400 MiB, not 500.
+  - **Restarting `lal-writer.service`.** It releases the deleted log, and breaks the rule
+    about keeping the service running.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.diskspace
+    title: Troubleshoot diskspace issues
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Free space per filesystem
+    man_page: df(1)
+  - kind: man-page
+    title: Space used per directory
+    man_page: du(1)
+  - kind: man-page
+    title: Open files, including deleted ones
+    man_page: lsof(1)
+  - kind: man-page
+    title: File descriptors under /proc
+    man_page: proc_pid_fd(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - {name: data, size_mib: 1024, role: data disk}
+checks:
+  - check_id: space-available
+    kind: command
+    target: node2
+    description: /srv/data has at least 500 MiB available.
+    parameters:
+      script: |
+        mountpoint -q /srv/data || fail "/srv/data is not mounted"
+        available=$(df --output=avail -B1M /srv/data | tail -n 1 | tr -d ' ')
+        (( available >= 500 )) || fail "/srv/data has ${available} MiB available; free at least 500"
+  - check_id: records-intact
+    kind: command
+    target: node2
+    description: Every file under /srv/data/records is unchanged.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        cd /srv/data/records || fail "/srv/data/records is gone"
+        damaged=$(sha256sum --check --quiet /usr/share/lal-exam/records.sha256 2>/dev/null | wc -l)
+        (( damaged == 0 )) || fail "$damaged files under /srv/data/records are missing or changed"
+  - check_id: writer-kept-running
+    kind: command
+    target: node2
+    description: lal-writer.service runs the same process it ran before.
+    parameters:
+      script: |
+        expect_eq "$(systemctl is-active lal-writer.service)" active "lal-writer.service"
+        expect_eq "$(unit_value lal-writer.service MainPID)" "$(cat /usr/share/lal-exam/writer-pid)" \
+          "lal-writer's process ID (it was stopped or restarted)"
+persistence:
+  reboot: false
+setup: actions/exam-disk-space.setup.yaml
+reference_solution: actions/exam-disk-space.solution.yaml
+rejected_solutions:
+  - actions/exam-disk-space.rejected-core-only.yaml
+  - actions/exam-disk-space.rejected-restart.yaml

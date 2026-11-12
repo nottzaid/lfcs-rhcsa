@@ -1,0 +1,31 @@
+schema_version: 1
+actions:
+  - action_id: create-dev-and-the-repository
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        useradd --create-home dev
+        install -d -o dev -g dev /srv/git
+        runuser -u dev -- git init --quiet --bare --initial-branch=main /srv/git/app.git
+        work=$(runuser -u dev -- mktemp -d)
+        runuser -u dev -- bash -c "
+          set -euo pipefail
+          cd '$work'
+          git init --quiet --initial-branch=main
+          git config user.name 'Platform Bot'
+          git config user.email bot@lab.internal
+          printf '%s\n' '[server]' 'port=8080' 'timeout=30' > config.ini
+          printf '# app\nService configuration.\n' > README.md
+          git add config.ini README.md
+          git commit --quiet -m 'Initial configuration'
+          git remote add origin /srv/git/app.git
+          git push --quiet origin main
+        "
+        rm -rf "$work"
+        install -d -m 0755 /usr/share/lal-exam
+        git -c safe.directory='*' -C /srv/git/app.git rev-parse main > /usr/share/lal-exam/main

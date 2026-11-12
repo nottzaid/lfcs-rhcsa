@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: set-the-preference-for-everyone
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        printf '%s\n' 'export EDITOR=/usr/bin/vi' 'pathmunge /opt/lal/bin' 'export REPORT_FORMAT=compact' \
+          > /etc/profile.d/lal-operations.sh
+        sed -i '/REPORT_FORMAT=/d' /home/opsanalyst/.bash_profile

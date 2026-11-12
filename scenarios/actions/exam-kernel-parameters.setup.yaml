@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: record-this-boot-and-the-sysrq-default
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -m 0755 /usr/share/lal-exam
+        cat /proc/sys/kernel/random/boot_id > /usr/share/lal-exam/boot-id
+        sysctl -n kernel.sysrq > /usr/share/lal-exam/sysrq-default

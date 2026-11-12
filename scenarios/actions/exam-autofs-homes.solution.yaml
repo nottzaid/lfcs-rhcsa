@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: wildcard-map
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '/remote/home /etc/auto.home\n' > /etc/auto.master.d/home.autofs
+        printf '* -fstype=nfs4,rw 10.66.0.10:/exports/home/&\n' > /etc/auto.home
+        systemctl enable autofs.service
+        systemctl restart autofs.service

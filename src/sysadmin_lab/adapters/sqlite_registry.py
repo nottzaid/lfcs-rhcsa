@@ -56,6 +56,13 @@ class SqliteResourceRegistry:
             return None
         return self._record_from_row(row)
 
+    def list_session(self, session_id: UUID, kind: ResourceKind) -> tuple[ResourceRecord, ...]:
+        rows = self._connection.execute(
+            "SELECT * FROM resources WHERE session_id = ? AND kind = ? ORDER BY name",
+            (str(session_id), kind.value),
+        ).fetchall()
+        return tuple(self._record_from_row(row) for row in rows)
+
     def add(self, record: ResourceRecord) -> None:
         identity = record.identity
         try:

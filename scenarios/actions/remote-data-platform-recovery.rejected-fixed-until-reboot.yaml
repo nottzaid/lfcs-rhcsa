@@ -1,0 +1,19 @@
+schema_version: 1
+actions:
+  - action_id: fix-everything-in-the-running-system
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i 's/files\.old\.invalid:/10.80.0.1:/' /etc/auto.data
+        systemctl enable --now autofs.service
+        mount -o remount,size=96M /run/lal-data-cache
+        mkswap -q /dev/disk/by-id/virtio-lal-remoteswap
+        swapon -p 50 /dev/disk/by-id/virtio-lal-remoteswap
+        sed -i 's/^server ntp\.old\.invalid iburst$/server 10.80.0.1 iburst/' /etc/chrony.conf
+        systemctl restart chronyd.service
+        chronyc waitsync 30 0.5 0 1 >/dev/null

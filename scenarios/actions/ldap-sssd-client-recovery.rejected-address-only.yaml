@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: fix-the-address-but-not-the-permissions
+    target: node2
+    timeout_seconds: 90
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        sed -i 's#^ldap_uri *=.*#ldap_uri = ldap://{{host.node1.address}}#' /etc/sssd/sssd.conf
+        systemctl restart sssd.service || true

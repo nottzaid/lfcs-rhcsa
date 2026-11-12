@@ -1,0 +1,51 @@
+schema_version: 1
+actions:
+  - action_id: run-the-monitoring-host
+    target: mon
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname ops0 con-name ops ipv4.method manual \
+          ipv4.addresses 10.35.0.8/24 ipv6.method disabled >/dev/null
+        nmcli connection up ops >/dev/null
+        install -d /srv/lal-monitor
+        printf 'monitor-ready\n' > /srv/lal-monitor/index.html
+        cat > /etc/systemd/system/lal-monitor.service <<'UNIT'
+        [Unit]
+        Description=Monitoring dashboard
+        After=network-online.target
+
+        [Service]
+        DynamicUser=yes
+        Environment=MONITOR_BIND=0.0.0.0
+        ExecStart=/usr/bin/bash -c 'exec python3 -m http.server 9180 --bind "$MONITOR_BIND" --directory /srv/lal-monitor'
+        Restart=always
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        install -d /etc/systemd/system/lal-monitor.service.d
+        cat > /etc/systemd/system/lal-monitor.service.d/debug.conf <<'UNIT'
+        # Temporary, while debugging the dashboard (ticket OPS-381). Remove when done.
+        [Service]
+        Environment=MONITOR_BIND=127.0.0.1
+        UNIT
+        systemctl daemon-reload
+        systemctl enable --now lal-monitor.service
+  - action_id: leave-node2-with-the-old-address
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection add type ethernet ifname ops0 con-name ops ipv4.method manual \
+          ipv4.addresses 10.35.0.20/24 ipv6.method disabled >/dev/null
+        nmcli connection up ops >/dev/null
+        printf '10.35.0.99   monitor.internal   # dashboard\n' >> /etc/hosts

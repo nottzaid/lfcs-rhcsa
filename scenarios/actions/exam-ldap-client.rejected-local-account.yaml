@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: local-copies-of-the-directory-accounts
+    target: node2
+    timeout_seconds: 60
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        groupadd -g 3000 ldapteam
+        useradd -u 3001 -g 3000 -M ldapuser1

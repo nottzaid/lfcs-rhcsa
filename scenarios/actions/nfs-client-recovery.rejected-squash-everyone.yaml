@@ -1,0 +1,28 @@
+schema_version: 1
+actions:
+  - action_id: map-every-client-user-to-the-share-owner
+    target: node1
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '/srv/teamshare {{host.node2.address}}/32(rw,sync,no_subtree_check,all_squash,anonuid=2200,anongid=2200)\n' \
+          > /etc/exports.d/lal-teamshare.exports
+        exportfs -ra
+  - action_id: fix-the-client-mount
+    target: node2
+    timeout_seconds: 90
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i '\#/mnt/teamshare#d' /etc/fstab
+        printf '{{host.node1.address}}:/srv/teamshare /mnt/teamshare nfs4 defaults,_netdev 0 0\n' >> /etc/fstab
+        systemctl daemon-reload
+        mount /mnt/teamshare

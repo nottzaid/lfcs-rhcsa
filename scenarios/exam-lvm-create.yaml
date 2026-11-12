@@ -1,0 +1,116 @@
+schema_version: 1
+scenario_id: exam-lvm-create
+version: 1
+status: verified
+collection: exam
+title: Build a volume group and a logical volume to size
+summary: Create LVM storage with a chosen extent size and an exact extent count, and mount it.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, use the empty 2 GiB disk `/dev/vdb` (also `/dev/disk/by-id/virtio-lal-data`)
+  to create:
+
+  - a volume group `vgdata` whose physical extents are 8 MiB;
+  - a logical volume `lvweb` of exactly 100 extents in it;
+  - an ext4 filesystem on `lvweb`, mounted at `/srv/web` now and after every reboot.
+requirements:
+  - "The volume group `vgdata` uses the disk and has 8 MiB extents."
+  - "`lvweb` is exactly 100 extents."
+  - "`lvweb` holds ext4, mounted at `/srv/web`, also after a reboot."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo pvcreate /dev/vdb
+  sudo vgcreate -s 8M vgdata /dev/vdb
+  sudo lvcreate -l 100 -n lvweb vgdata
+  sudo mkfs.ext4 /dev/vgdata/lvweb
+  sudo mkdir -p /srv/web
+  echo '/dev/vgdata/lvweb /srv/web ext4 defaults 0 2' | sudo tee -a /etc/fstab
+  sudo systemctl daemon-reload && sudo mount /srv/web
+  ```
+
+  The extent size is fixed when the volume group is created (`-s`); `lvcreate -l` counts
+  extents, `-L` counts bytes. The device mapper path `/dev/vgdata/lvweb` names the volume,
+  not a disk, so it is stable in fstab.
+
+  ## Check it yourself
+
+  ```bash
+  sudo vgs -o vg_name,vg_extent_size vgdata
+  sudo lvs -o lv_name,seg_size_pe vgdata
+  findmnt /srv/web
+  ```
+
+  ## Tempting but wrong
+
+  - **`vgcreate vgdata /dev/vdb` and `lvcreate -L 800M`.** The volume has the right size,
+    but 200 extents of 4 MiB, not 100 of 8 MiB.
+  - **Mounting without an fstab entry.** Everything is right until the reboot.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.lvm
+    title: Configure and manage LVM storage
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Create a volume group with an extent size
+    man_page: vgcreate(8)
+  - kind: man-page
+    title: Create a logical volume by extents
+    man_page: lvcreate(8)
+  - kind: man-page
+    title: Persistent mounts
+    man_page: fstab(5)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - {name: data, size_mib: 2048, role: empty data disk}
+checks:
+  - check_id: volume-group
+    kind: command
+    target: node2
+    description: vgdata uses the data disk and has 8 MiB extents.
+    parameters:
+      sudo: true
+      script: |
+        disk=$(readlink -f /dev/disk/by-id/virtio-lal-data)
+        expect_eq "$(pvs --noheadings -o vg_name "$disk" 2>/dev/null | tr -d ' ')" vgdata "the volume group on the data disk"
+        expect_eq "$(vgs --noheadings --units m --nosuffix -o vg_extent_size vgdata | tr -d ' ')" 8.00 "the extent size of vgdata in MiB"
+  - check_id: exact-extents
+    kind: command
+    target: node2
+    description: lvweb is exactly 100 extents.
+    parameters:
+      sudo: true
+      script: |
+        extents=$(lvs --noheadings -o seg_size_pe vgdata/lvweb 2>/dev/null | tr -d ' ') || fail "vgdata has no logical volume lvweb"
+        expect_eq "$extents" 100 "the size of lvweb in extents"
+  - check_id: mounted-ext4
+    kind: command
+    target: node2
+    description: lvweb holds ext4 mounted at /srv/web, and fstab mounts it there.
+    parameters:
+      sudo: true
+      script: |
+        expect_eq "$(blkid -s TYPE -o value /dev/vgdata/lvweb)" ext4 "the filesystem on lvweb"
+        source=$(findmnt -n -o SOURCE --mountpoint /srv/web) || fail "nothing is mounted at /srv/web"
+        expect_eq "$(readlink -f "$source")" "$(readlink -f /dev/vgdata/lvweb)" "the device mounted at /srv/web"
+        [[ -n "$(fstab_field /srv/web SOURCE)" ]] || fail "/etc/fstab has no entry for /srv/web"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-lvm-create.setup.yaml
+reference_solution: actions/exam-lvm-create.solution.yaml
+rejected_solutions:
+  - actions/exam-lvm-create.rejected-default-extents.yaml
+  - actions/exam-lvm-create.rejected-no-fstab.yaml

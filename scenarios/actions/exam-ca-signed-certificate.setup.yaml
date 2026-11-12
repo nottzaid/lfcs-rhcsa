@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: create-the-lab-ca
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -m 0700 /etc/pki/lab-ca
+        openssl req -x509 -newkey rsa:3072 -nodes -days 3650 -subj '/CN=Lab Internal CA' \
+          -addext 'basicConstraints=critical,CA:TRUE' -addext 'keyUsage=critical,keyCertSign,cRLSign' \
+          -keyout /etc/pki/lab-ca/ca.key -out /etc/pki/lab-ca/ca.crt 2>/dev/null
+        chmod 0600 /etc/pki/lab-ca/ca.key
+        chmod 0644 /etc/pki/lab-ca/ca.crt

@@ -100,3 +100,27 @@ def test_scenario_objectives_resolve_against_versioned_curriculum() -> None:
     )
     with pytest.raises(CatalogError, match="unknown objective"):
         validate_objective_references((wrong,), (curriculum,))
+
+    retitled = scenario.model_copy(
+        update={"objectives": (scenario.objectives[0].model_copy(update={"title": "Daemons"}),)}
+    )
+    with pytest.raises(CatalogError, match="is titled 'Daemons'; the curriculum says 'Services'"):
+        validate_objective_references((retitled,), (curriculum,))
+
+    future = scenario.model_copy(
+        update={"objectives": (scenario.objectives[0].model_copy(update={"version": "lfcs-2099"}),)}
+    )
+    with pytest.raises(CatalogError, match="unknown lfcs curriculum lfcs-2099"):
+        validate_objective_references((future,), (curriculum,))
+
+    other_track = scenario.model_copy(
+        update={
+            "objectives": (
+                scenario.objectives[0],
+                scenario.objectives[0].model_copy(
+                    update={"track": "professional", "version": "v1", "objective_id": "anything"}
+                ),
+            )
+        }
+    )
+    validate_objective_references((other_track,), (curriculum,))  # no curriculum, no claim

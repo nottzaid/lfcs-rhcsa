@@ -1,0 +1,166 @@
+schema_version: 1
+scenario_id: ssh-client-server-policy
+version: 2
+status: verified
+title: Deployments stopped after the SSH hardening
+summary: A deploy pipeline's SSH login fails at four layers after a new port policy; fix it without weakening the policy.
+estimated_minutes: 45
+task_type: troubleshoot
+difficulty: advanced
+task: |
+  The deploy pipeline on **runner** logs in to **node2** as `deploy` with
+  `ssh app-node`, using the key `~/.ssh/lal_deploy`. Yesterday security rolled out policy
+  SEC-114 on node2 (`/etc/ssh/sshd_config.d/40-deployment-port.conf`): port 22 is for
+  administrators in `wheel`, and deployments use port 2222, open only to the `opsssh`
+  group. Since then every deployment fails.
+
+  | Host | Address on the deploy network |
+  | --- | --- |
+  | **runner** | 10.15.0.10 |
+  | **node2** | 10.15.0.20 |
+
+  Get deployments working again, within SEC-114.
+requirements:
+  - "On **runner**, `ssh app-node id -un` run as `deploy` prints `deploy` without asking for anything but, on first contact, the host key."
+  - "That login arrives on node2's deployment port, 2222."
+  - "SEC-114 stands: port 22 admits only `wheel`, port 2222 admits only `opsssh`, `deploy` is not an administrator, and sshd keeps checking file permissions (`StrictModes`)."
+  - "SELinux stays enforcing and firewalld keeps running on node2."
+  - "Deployments still work after node2 reboots."
+hints:
+  - "Work outward from the client: `ssh -v app-node` on runner shows which port and key it uses and where it stops. On node2, `journalctl -u sshd` says why a login was refused, and `ss -ltnp` shows what sshd listens on."
+  - "sshd reads its port list at startup and logs every port it cannot bind. SELinux decides which ports sshd may bind (`semanage port -l | grep ssh`), and firewalld which ports are reachable."
+  - "`StrictModes` makes sshd ignore `authorized_keys` when the home directory, `~/.ssh`, or the file itself is writable by anyone other than the user. `ssh_config(5)` documents the `Port` option for a `Host` alias."
+debrief: |
+  ## What was wrong
+
+  Four things, each hiding the next:
+
+  1. **The alias still used port 22**, where SEC-114 admits only `wheel`. node2 logged:
+     `User deploy from 10.15.0.10 not allowed because none of user's groups are listed in AllowGroups`.
+  2. **sshd could not listen on 2222.** SELinux lets sshd bind only ports labeled
+     `ssh_port_t`, and at every start sshd logged
+     `error: Bind to port 2222 on 0.0.0.0 failed: Permission denied.`
+  3. **firewalld did not allow 2222.** Its rejection reaches the client as
+     `ssh: connect to host 10.15.0.20 port 2222: No route to host`, which looks like a
+     routing problem and is not one: firewalld answers with an ICMP "host prohibited".
+  4. **`/home/deploy` was group-writable** (`drwxrwsr-x`), shared for release drops. With
+     `StrictModes`, sshd then ignores the key:
+     `Authentication refused: bad ownership or modes for directory /home/deploy`.
+
+  ## A clean fix
+
+  ```bash
+  # runner, in ~deploy/.ssh/config under Host app-node
+      Port 2222
+
+  # node2
+  sudo semanage port -a -t ssh_port_t -p tcp 2222
+  sudo firewall-cmd --permanent --add-port=2222/tcp && sudo firewall-cmd --reload
+  sudo chmod g-w /home/deploy
+  sudo systemctl restart sshd
+  ```
+
+  The release directory can stay group-writable: StrictModes checks only the path to
+  `authorized_keys`. A `Host app-node` block with `Port 2222` in
+  `/etc/ssh/ssh_config.d/` works too, for every user on runner.
+
+  ## Check it yourself
+
+  ```bash
+  # runner
+  sudo -u deploy ssh app-node 'id -un; echo $SSH_CONNECTION'   # last field: 2222
+  # node2
+  sudo sshd -T -C lport=2222,user=deploy,host=runner,addr=10.15.0.10 | grep allowgroups
+  sudo ss -ltnp | grep sshd
+  ```
+
+  ## Tempting but wrong
+
+  - **Adding `deploy` to `wheel`.** Deployments work again, on the administrators' port,
+    as an administrator: SEC-114 in reverse.
+  - **`StrictModes no`.** sshd then trusts any `authorized_keys` it finds, including one
+    that someone else in the group could have written.
+  - **`firewall-cmd --add-port` without `--permanent`.** Deployments work until the next
+    reboot.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.openssh
+    title: Configure the OpenSSH server and client
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Port, Match, AllowGroups, and StrictModes
+    man_page: sshd_config(5)
+  - kind: man-page
+    title: Host aliases and Port
+    man_page: ssh_config(5)
+  - kind: man-page
+    title: Port labels
+    man_page: semanage-port(8)
+  - kind: man-page
+    title: Opening ports
+    man_page: firewall-cmd(1)
+topology:
+  networks:
+    - {name: deploy, cidr: 10.15.0.0/24}
+  hosts:
+    - name: runner
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: deploy, name: deploy0}]
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: deploy, name: deploy0}]
+checks:
+  - check_id: pipeline-logs-in
+    kind: command
+    target: runner
+    description: deploy's ssh app-node logs in as deploy on port 2222.
+    parameters:
+      sudo: true
+      timeout_seconds: 30
+      script: |
+        errors=$(mktemp)
+        output=$(runuser -u deploy -- ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -o LogLevel=ERROR \
+          -o ConnectTimeout=5 app-node 'id -un; echo "$SSH_CONNECTION"' 2>"$errors") ||
+          fail "ssh app-node fails: $(tr -d '\r' <"$errors" | tail -n 1)"
+        expect_eq "$(sed -n 1p <<<"$output")" deploy "the user ssh app-node logs in as"
+        read -r _ _ _ port <<<"$(sed -n 2p <<<"$output")"
+        [[ $port == 2222 ]] || fail "ssh app-node arrives on node2's port $port; deployments must use 2222"
+  - check_id: policy-stands
+    kind: command
+    target: node2
+    description: SEC-114 stands, deploy is not an administrator, and StrictModes is on.
+    parameters:
+      sudo: true
+      script: |
+        groups_on() { sshd -T -C "lport=$1,user=deploy,host=runner,addr=10.15.0.10" | sed -n 's/^allowgroups //p'; }
+        expect_eq "$(groups_on 22)" wheel "the groups port 22 admits"
+        expect_eq "$(groups_on 2222)" opsssh "the groups port 2222 admits"
+        ! id -nG deploy | grep -qw wheel || fail "deploy is in wheel, which makes it an administrator"
+        expect_eq "$(sshd -T -C lport=2222,user=deploy,host=runner,addr=10.15.0.10 | sed -n 's/^strictmodes //p')" yes "StrictModes"
+  - check_id: controls-on
+    kind: command
+    target: node2
+    description: SELinux is enforcing and firewalld is running.
+    parameters:
+      sudo: true
+      script: |
+        expect_eq "$(getenforce)" Enforcing "the SELinux mode"
+        systemctl is-active --quiet firewalld.service || fail "firewalld is not running"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/ssh-client-server-policy.setup.yaml
+reference_solution: actions/ssh-client-server-policy.solution.yaml
+alternate_solutions: [actions/ssh-client-server-policy.alternate.yaml]
+rejected_solutions:
+  - actions/ssh-client-server-policy.rejected-deploy-in-wheel.yaml
+  - actions/ssh-client-server-policy.rejected-strictmodes-off.yaml
+  - actions/ssh-client-server-policy.rejected-runtime-firewall.yaml

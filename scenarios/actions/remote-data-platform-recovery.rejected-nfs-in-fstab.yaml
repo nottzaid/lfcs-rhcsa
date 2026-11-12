@@ -1,0 +1,23 @@
+schema_version: 1
+actions:
+  - action_id: mount-the-projects-at-boot-instead
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d /data/projects
+        echo '10.80.0.1:/srv/lal-data/projects /data/projects nfs4 rw,_netdev 0 0' >> /etc/fstab
+        sed -i 's#^tmpfs /run/lal-data-cache tmpfs size=96,#tmpfs /run/lal-data-cache tmpfs size=96M,#' /etc/fstab
+        mkswap -q -L LAL_REMOTE_SWAP /dev/disk/by-id/virtio-lal-remoteswap
+        sed -i 's#^UUID=5d1b7c1e-0f3a-4c55-9a0e-2f6c1b7a9e44 none swap#LABEL=LAL_REMOTE_SWAP none swap#' /etc/fstab
+        systemctl daemon-reload
+        mount /data/projects
+        mount -o remount /run/lal-data-cache
+        swapon -a
+        sed -i 's/^server ntp\.old\.invalid iburst$/server 10.80.0.1 iburst/' /etc/chrony.conf
+        systemctl restart chronyd.service
+        chronyc waitsync 30 0.5 0 1 >/dev/null

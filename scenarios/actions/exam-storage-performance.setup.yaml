@@ -1,0 +1,38 @@
+schema_version: 1
+actions:
+  - action_id: start-a-writer-on-the-bulk-disk
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mkfs.xfs -q -L BULK /dev/disk/by-id/virtio-lal-bulk
+        install -d /srv/bulk
+        printf 'LABEL=BULK /srv/bulk xfs defaults 0 0\n' >> /etc/fstab
+        systemctl daemon-reload
+        mount /srv/bulk
+        cat > /usr/local/bin/lal-ingest <<'PY'
+        #!/usr/bin/python3
+        """Ingest worker: rewrites its staging file and syncs it, over and over."""
+        import os
+
+        block = os.urandom(1 << 20)
+        while True:
+            with open("/srv/bulk/staging.dat", "wb") as staging:
+                for _ in range(64):
+                    staging.write(block)
+                    staging.flush()
+                    os.fsync(staging.fileno())
+        PY
+        chmod 0755 /usr/local/bin/lal-ingest
+        printf '%s\n' '[Unit]' 'Description=Ingest worker' 'RequiresMountsFor=/srv/bulk' '' \
+          '[Service]' 'ExecStart=/usr/local/bin/lal-ingest' 'Restart=always' '' \
+          '[Install]' 'WantedBy=multi-user.target' > /etc/systemd/system/lal-ingest.service
+        systemctl daemon-reload
+        systemctl enable --now lal-ingest.service
+        sleep 1
+        install -d -m 0755 /usr/share/lal-exam
+        systemctl show -p MainPID --value lal-ingest.service > /usr/share/lal-exam/writer-pid

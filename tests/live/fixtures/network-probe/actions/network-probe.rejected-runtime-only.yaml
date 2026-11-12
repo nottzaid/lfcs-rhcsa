@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: address-router-until-reboot
+    target: router
+    arguments: [sudo, --, bash, -c, "ip link set lan0 up && ip address add 10.99.0.1/24 dev lan0 && printf 'net.ipv4.ip_forward=1\\n' > /etc/sysctl.d/90-probe.conf && mkdir -p /mnt/probe && printf 'tmpfs /mnt/probe tmpfs size=16m 0 0\\n' >> /etc/fstab && systemctl daemon-reload && mount /mnt/probe"]

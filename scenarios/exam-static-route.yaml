@@ -1,0 +1,103 @@
+schema_version: 1
+scenario_id: exam-static-route
+version: 1
+status: verified
+collection: exam
+title: Reach another network through a router
+summary: Add a persistent static route for one network, without touching the default route.
+estimated_minutes: 5
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`, the network `10.64.2.0/24` is reachable through the router `10.64.1.1` on the
+  network of `lan0`. Add a static route for it to node2's NetworkManager connection `lan`, so
+  that it is in place now and after every reboot. Do not change node2's default route.
+
+  `curl http://10.64.2.1/` on node2 must return a page.
+requirements:
+  - "node2 routes 10.64.2.0/24 via 10.64.1.1 on `lan0`, from the connection `lan`."
+  - "`curl http://10.64.2.1/` on node2 returns the page, also after a reboot."
+  - "The default route is unchanged."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo nmcli connection modify lan +ipv4.routes '10.64.2.0/24 10.64.1.1'
+  sudo nmcli connection up lan
+  ```
+
+  `ipv4.routes` stores the route in the connection, so NetworkManager adds it whenever the
+  connection comes up. `nmcli connection up` re-applies the connection now.
+
+  ## Check it yourself
+
+  ```bash
+  ip route get 10.64.2.1          # via 10.64.1.1 dev lan0
+  nmcli -g ipv4.routes connection show lan
+  curl http://10.64.2.1/
+  ```
+
+  ## Tempting but wrong
+
+  - **`ip route add 10.64.2.0/24 via 10.64.1.1`.** Correct until the next reboot or
+    connection restart.
+  - **`ipv4.gateway 10.64.1.1`.** It sends every unknown destination to the router, which
+    is a different and much bigger change.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.static-routing
+    title: Configure static routing
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Connection routes
+    man_page: nm-settings-nmcli(5)
+  - kind: man-page
+    title: Inspect the routing table
+    man_page: ip-route(8)
+topology:
+  networks:
+    - {name: lan, cidr: 10.64.1.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+checks:
+  - check_id: route-in-the-connection
+    kind: command
+    target: node2
+    description: node2 routes 10.64.2.0/24 via 10.64.1.1 on lan0, from the connection lan.
+    parameters:
+      script: |
+        route=$(ip -4 route show 10.64.2.0/24)
+        [[ "$route" == *"via 10.64.1.1 dev lan0"* ]] || fail "node2 has no route to 10.64.2.0/24 via 10.64.1.1 (${route:-none})"
+        [[ "$(nmcli -g ipv4.routes connection show lan 2>/dev/null)" == *"10.64.2.0/24 10.64.1.1"* ]] \
+          || fail "the connection lan does not hold the route, so it will not come back"
+  - check_id: page-reachable
+    kind: command
+    target: node2
+    description: curl http://10.64.2.1/ on node2 returns the page.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        fetch() { page=$(curl --silent --show-error --max-time 3 http://10.64.2.1/ 2>&1); }
+        retry 5 fetch || fail "node2 cannot reach http://10.64.2.1/: ${page##*: }"
+        [[ "$page" == *"far network"* ]] || fail "http://10.64.2.1/ answers with something else"
+  - check_id: default-route-unchanged
+    kind: command
+    target: node2
+    description: The default route still leaves through the management interface.
+    parameters:
+      script: |
+        default=$(ip -4 route show default | head -n 1)
+        [[ "$default" == *" dev enp1s0 "* ]] || fail "the default route changed: ${default:-none}"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-static-route.setup.yaml
+reference_solution: actions/exam-static-route.solution.yaml
+rejected_solutions:
+  - actions/exam-static-route.rejected-runtime.yaml
+  - actions/exam-static-route.rejected-gateway.yaml

@@ -1,0 +1,19 @@
+schema_version: 1
+actions:
+  - action_id: mount-by-kernel-name
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-logs
+        parted -s "$disk" mklabel gpt mkpart logs xfs 1MiB 100%
+        udevadm settle
+        mkfs.xfs -q -L LOGS "$disk-part1"
+        install -d /var/log/app
+        printf '%s /var/log/app xfs noatime,nodev 0 0\n' "$(readlink -f "$disk-part1")" >> /etc/fstab
+        systemctl daemon-reload
+        mount /var/log/app

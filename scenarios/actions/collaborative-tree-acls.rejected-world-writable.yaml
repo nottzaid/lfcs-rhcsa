@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: open-the-tree-to-everyone
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        setfacl -R -b /srv/project
+        chgrp -R project /srv/project
+        find /srv/project -type d -exec chmod 2777 {} +
+        find /srv/project -type f -exec chmod 0666 {} +
+        setfacl -R -m u:auditor:rX /srv/project
+        find /srv/project -type d -exec setfacl -d -m g::rwx,u:auditor:rx,o::rwx {} +

@@ -1,0 +1,30 @@
+schema_version: 1
+actions:
+  - action_id: database-volume-and-its-writer
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        disk=/dev/disk/by-id/virtio-lal-db
+        wipefs --all --quiet /dev/disk/by-id/virtio-lal-extra
+        pvcreate -q "$disk"
+        vgcreate -q vgapp "$disk"
+        lvcreate -q -y -L 400M -n lvdb vgapp
+        mkfs.xfs -q /dev/vgapp/lvdb
+        install -d /srv/db
+        printf '/dev/vgapp/lvdb /srv/db xfs defaults 0 0\n' >> /etc/fstab
+        systemctl daemon-reload
+        mount /srv/db
+        printf '#!/usr/bin/bash\nexec 3>>/srv/db/journal.log\nwhile :; do printf "commit %%(%%s)T\\n" -1 >&3; sleep 2; done\n' > /usr/local/bin/lal-db
+        chmod 0755 /usr/local/bin/lal-db
+        printf '%s\n' '[Unit]' 'Description=Database' 'RequiresMountsFor=/srv/db' '' '[Service]' \
+          'ExecStart=/usr/local/bin/lal-db' '' '[Install]' 'WantedBy=multi-user.target' > /etc/systemd/system/lal-db.service
+        systemctl daemon-reload
+        systemctl enable --now lal-db.service
+        sleep 1
+        install -d -m 0755 /usr/share/lal-exam
+        systemctl show -p MainPID --value lal-db.service > /usr/share/lal-exam/db-pid

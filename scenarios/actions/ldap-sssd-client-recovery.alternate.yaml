@@ -1,0 +1,21 @@
+schema_version: 1
+actions:
+  - action_id: override-the-server-in-a-drop-in
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        chmod o-rwx /etc/sssd/sssd.conf
+        install -d -m 0711 /etc/sssd/conf.d
+        printf '[domain/lab]\nldap_uri = ldap://%s\n' '{{host.node1.address}}' > /etc/sssd/conf.d/50-directory.conf
+        chmod 0600 /etc/sssd/conf.d/50-directory.conf
+        systemctl enable --now sssd.service || true
+        systemctl restart sssd.service
+        sss_cache -E
+        for attempt in $(seq 1 30); do id ldapdev >/dev/null 2>&1 && exit 0; sleep 1; done
+        exit 1

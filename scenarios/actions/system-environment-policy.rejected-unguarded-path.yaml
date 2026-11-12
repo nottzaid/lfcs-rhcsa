@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: prepend-without-a-guard
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        printf '%s\n' 'export EDITOR=/usr/bin/vi' 'export PATH=/opt/lal/bin:$PATH' \
+          > /etc/profile.d/lal-operations.sh
+        sed -i 's/^export REPORT_FORMAT=.*/export REPORT_FORMAT=compact/' /home/opsanalyst/.bash_profile

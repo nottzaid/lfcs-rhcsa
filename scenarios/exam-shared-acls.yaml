@@ -1,0 +1,129 @@
+schema_version: 1
+scenario_id: exam-shared-acls
+version: 1
+status: verified
+collection: exam
+title: Grant access to a directory with ACLs
+summary: Give one user write access and one group read access, now and for files created later.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, for the directory `/srv/projects/atlas`, for everything already in it, and for
+  everything created in it later:
+
+  - the user `lead` can read and write;
+  - members of the group `auditors` can read but not write;
+  - other users have no access.
+
+  Keep the owner and group `root:root`, and do not make anything accessible to everyone.
+requirements:
+  - "`lead` can read and change the existing files and create new ones."
+  - "Members of `auditors` can read, and cannot change or create anything."
+  - "Other users cannot enter the directory."
+  - "Files created later carry the same access, through default ACLs."
+  - "Everything stays owned by `root:root`, with no access for others."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  cd /srv/projects
+  sudo setfacl -R -m u:lead:rwX,g:auditors:rX atlas
+  sudo setfacl -R -d -m u:lead:rwX,g:auditors:rX atlas
+  sudo chmod -R o-rwx atlas
+  ```
+
+  `-m` changes the access ACL of what exists; `-d` sets the default ACL, which new files
+  and directories inherit. `X` grants execute only to directories (and files already
+  executable), so directories are enterable without making every file executable. The ACL
+  mask, shown by `getfacl`, limits named entries; `setfacl` widens it as needed.
+
+  ## Check it yourself
+
+  ```bash
+  getfacl /srv/projects/atlas
+  sudo -u lead touch /srv/projects/atlas/new && getfacl /srv/projects/atlas/new
+  ```
+
+  ## Tempting but wrong
+
+  - **`chmod -R 777`.** `lead` can write, and so can everyone else.
+  - **ACLs without `-d`.** Existing files are right; every new file shuts `lead` out.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.acls
+    title: Configure and manage ACLs
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Set access and default ACLs
+    man_page: setfacl(1)
+  - kind: man-page
+    title: How ACL entries and the mask combine
+    man_page: acl(5)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: lead-reads-and-writes
+    kind: command
+    target: node2
+    description: lead can read and change existing files and create new ones.
+    parameters:
+      sudo: true
+      script: |
+        dir=/srv/projects/atlas
+        runuser -u lead -- cat "$dir/plan.txt" >/dev/null 2>&1 || fail "lead cannot read plan.txt"
+        runuser -u lead -- bash -c ": >> '$dir/plan.txt'" 2>/dev/null || fail "lead cannot change plan.txt"
+        runuser -u lead -- cat "$dir/drafts/notes.txt" >/dev/null 2>&1 || fail "lead cannot read drafts/notes.txt"
+        probe=$dir/.lead-probe
+        runuser -u lead -- touch "$probe" 2>/dev/null || fail "lead cannot create files in $dir"
+        rm -f "$probe"
+  - check_id: auditors-read-only
+    kind: command
+    target: node2
+    description: Members of auditors can read, and cannot change or create anything.
+    parameters:
+      sudo: true
+      script: |
+        dir=/srv/projects/atlas
+        runuser -u audit1 -- cat "$dir/plan.txt" >/dev/null 2>&1 || fail "audit1, in auditors, cannot read plan.txt"
+        runuser -u audit1 -- cat "$dir/drafts/notes.txt" >/dev/null 2>&1 || fail "audit1 cannot read drafts/notes.txt"
+        ! runuser -u audit1 -- bash -c ": >> '$dir/plan.txt'" 2>/dev/null || fail "audit1 can change plan.txt"
+        ! runuser -u audit1 -- touch "$dir/.audit-probe" 2>/dev/null || { rm -f "$dir/.audit-probe"; fail "audit1 can create files"; }
+  - check_id: others-shut-out
+    kind: command
+    target: node2
+    description: Other users cannot enter the directory, and ownership and other bits stay closed.
+    parameters:
+      sudo: true
+      script: |
+        dir=/srv/projects/atlas
+        ! runuser -u visitor -- ls "$dir" >/dev/null 2>&1 || fail "visitor, in neither, can list $dir"
+        expect_eq "$(stat -c %U:%G "$dir")" root:root "the owner of $dir"
+        open=$(find "$dir" -perm /o=rwx | head -n 1)
+        [[ -z "$open" ]] || fail "$open is accessible to others"
+  - check_id: inherited-by-new-files
+    kind: command
+    target: node2
+    description: Files created later carry the same access, through default ACLs.
+    parameters:
+      sudo: true
+      script: |
+        probe=/srv/projects/atlas/.inherit-probe
+        rm -f "$probe"; printf 'probe\n' > "$probe"
+        trap 'rm -f "$probe"' EXIT
+        runuser -u lead -- bash -c ": >> '$probe'" 2>/dev/null || fail "lead cannot write a file created later in the directory"
+        runuser -u audit1 -- cat "$probe" >/dev/null 2>&1 || fail "audit1 cannot read a file created later"
+        ! runuser -u audit1 -- bash -c ": >> '$probe'" 2>/dev/null || fail "audit1 can change a file created later"
+        ! runuser -u visitor -- cat "$probe" >/dev/null 2>&1 || fail "visitor can read a file created later"
+persistence:
+  reboot: false
+setup: actions/exam-shared-acls.setup.yaml
+reference_solution: actions/exam-shared-acls.solution.yaml
+rejected_solutions:
+  - actions/exam-shared-acls.rejected-world-writable.yaml
+  - actions/exam-shared-acls.rejected-no-defaults.yaml

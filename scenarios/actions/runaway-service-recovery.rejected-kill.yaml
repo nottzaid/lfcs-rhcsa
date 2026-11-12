@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: kill-the-busy-process
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        pkill -9 -f '^/usr/bin/python3 /opt/legacy/bin/collect-v1'
+        sed -i 's/^BATCH_SIZE=.*/BATCH_SIZE=50/' /etc/sysconfig/lal-metrics
+        systemctl reset-failed lal-metrics.service
+        systemctl restart lal-metrics.service

@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: point-the-alias-at-the-deployment-port
+    target: runner
+    arguments: [sudo, -u, deploy, --, sed, -i, '/^    HostName 10.15.0.20$/a\    Port 2222', /home/deploy/.ssh/config]
+  - action_id: fix-the-server-but-open-the-port-until-reboot
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        semanage port -a -t ssh_port_t -p tcp 2222
+        firewall-cmd --quiet --add-port=2222/tcp
+        chmod g-w /home/deploy
+        systemctl restart sshd.service

@@ -69,13 +69,6 @@ class CurriculumManifest(StrictModel):
         domain_ids = [domain.domain_id for domain in self.domains]
         if len(domain_ids) != len(set(domain_ids)):
             raise ValueError("curriculum domain identifiers must be unique")
-        objective_ids = [
-            f"{domain.domain_id}.{competency.competency_id}"
-            for domain in self.domains
-            for competency in domain.competencies
-        ]
-        if len(objective_ids) != len(set(objective_ids)):
-            raise ValueError("curriculum objective identifiers must be unique")
         source_ids = [source.source_id for source in self.sources]
         if len(source_ids) != len(set(source_ids)):
             raise ValueError("curriculum source identifiers must be unique")
@@ -88,8 +81,12 @@ class CurriculumManifest(StrictModel):
 
     @property
     def objective_ids(self) -> frozenset[str]:
-        return frozenset(
-            f"{domain.domain_id}.{competency.competency_id}"
+        return frozenset(self.objective_titles)
+
+    @property
+    def objective_titles(self) -> dict[str, str]:
+        return {
+            f"{domain.domain_id}.{competency.competency_id}": competency.title
             for domain in self.domains
             for competency in domain.competencies
-        )
+        }

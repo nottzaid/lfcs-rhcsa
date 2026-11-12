@@ -1,0 +1,43 @@
+schema_version: 1
+actions:
+  - action_id: fix-the-accounts
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        userdel --remove ldapdev
+        systemctl restart sssd.service
+        usermod --uid 3100 teamlead
+        usermod --gid platform teamlead
+        find / -xdev -uid 3099 -exec chown -h teamlead {} +
+  - action_id: share-the-tree-with-explicit-entries
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        chown root:platform /srv/platform
+        chmod 0770 /srv/platform
+        setfacl -m g:ldapops:rwx,d:u::rwx,d:g::rwx,d:g:platform:rwx,d:g:ldapops:rwx,d:m::rwx,d:o::--- /srv/platform
+        setfacl -m g:platform:rw,g:ldapops:rw /srv/platform/plan
+  - action_id: settings-in-new-files
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        rm /etc/profile.d/lal-team.conf
+        echo 'export TEAM_REGION=amman' > /etc/profile.d/team-region.sh
+        rm /etc/security/limits.d/80-lal-team.conf
+        printf '@platform soft nofile 4096\n@ldapops soft nofile 4096\n' > /etc/security/limits.d/90-team.conf

@@ -1,0 +1,22 @@
+schema_version: 1
+actions:
+  - action_id: mount-it-like-a-local-disk
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        portal={{host.node1.address}}
+        printf 'InitiatorName=iqn.2026-09.internal.lab:node2-database\n' > /etc/iscsi/initiatorname.iscsi
+        systemctl restart iscsid.service
+        iscsiadm -m discovery -t sendtargets -p "$portal"
+        iscsiadm -m node -T iqn.2026-08.internal.lab:storage -p "$portal" --login
+        udevadm settle
+        mkfs.xfs -q -f -L LAL_DATABASE "/dev/disk/by-path/ip-$portal:3260-iscsi-iqn.2026-08.internal.lab:storage-lun-0"
+        printf 'LABEL=LAL_DATABASE /srv/database xfs defaults 0 0\n' >> /etc/fstab
+        systemctl daemon-reload
+        mount /srv/database

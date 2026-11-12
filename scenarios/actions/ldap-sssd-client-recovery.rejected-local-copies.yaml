@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: create-local-stand-ins
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        groupadd --gid 2300 ldapops
+        useradd --uid 2300 --gid ldapops --home-dir /home/ldapdev --shell /bin/bash --no-create-home ldapdev

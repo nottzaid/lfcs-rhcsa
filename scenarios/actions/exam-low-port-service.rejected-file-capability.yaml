@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: capability-on-the-interpreter
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        setcap cap_net_bind_service+ep "$(readlink -f /usr/bin/python3)"
+        systemctl enable lal-api.service
+        systemctl restart lal-api.service

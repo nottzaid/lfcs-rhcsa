@@ -1,0 +1,29 @@
+schema_version: 1
+actions:
+  - action_id: edit-maintenance-policy
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sed
+      - --in-place
+      - s/RETENTION_DAYS=90/RETENTION_DAYS=14/
+      - /etc/sysconfig/lal-maintenance
+  - action_id: override-stale-timer
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - sh
+      - -c
+      - >-
+        install -d -m 0755 /etc/systemd/system/lal-maintenance.timer.d &&
+        printf '%s\n' '[Timer]' 'OnCalendar=' 'OnCalendar=*-*-* 02:15:00 UTC'
+        'Persistent=yes' > /etc/systemd/system/lal-maintenance.timer.d/schedule.conf &&
+        systemctl daemon-reload
+  - action_id: prove-maintenance-through-service
+    target: node2
+    arguments: [sudo, --, systemctl, start, lal-maintenance.service]
+  - action_id: start-persistent-timer
+    target: node2
+    arguments: [sudo, --, systemctl, enable, --now, lal-maintenance.timer]

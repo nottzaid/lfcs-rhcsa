@@ -1,0 +1,103 @@
+schema_version: 1
+scenario_id: exam-network-troubleshoot
+version: 1
+status: verified
+collection: exam
+title: Find why a neighbor's service is unreachable
+summary: Trace why one host cannot reach a service on its own network, and fix it for good.
+estimated_minutes: 6
+task_type: troubleshoot
+difficulty: intermediate
+task: |
+  On `node2`, `curl http://10.67.0.10:8000/` (a service on node1, on the same network as
+  node2's `lan0`) does not work, although other hosts can reach it.
+
+  Find the cause on node2 and fix it so the page loads from node2, now and after a reboot.
+  Do not change node1, and keep node2's address `10.67.0.20/24`.
+requirements:
+  - "`curl http://10.67.0.10:8000/` on node2 returns node1's page, also after a reboot."
+  - "node2 reaches 10.67.0.10 directly on `lan0`."
+  - "node2 keeps the address 10.67.0.20/24."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  ip route get 10.67.0.10                 # via 10.67.0.254 dev lan0: not direct
+  nmcli -g ipv4.routes connection show lan
+  sudo nmcli connection modify lan -ipv4.routes '10.67.0.10/32 10.67.0.254'
+  sudo nmcli connection up lan
+  ```
+
+  `ip route get` shows the route the kernel picks for one destination. A host route (`/32`)
+  is more specific than the network route, so it wins, and here it sends node1's traffic
+  to a gateway that does not exist. The route belongs to the `lan` connection, so removing
+  it there is what keeps it from coming back.
+
+  ## Check it yourself
+
+  ```bash
+  ip route get 10.67.0.10                 # dev lan0 src 10.67.0.20
+  curl http://10.67.0.10:8000/
+  ```
+
+  ## Tempting but wrong
+
+  - **`ip route del 10.67.0.10`.** The page loads until the connection comes up again.
+  - **Changing node2's address or prefix.** The host route still wins.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.troubleshoot
+    title: Monitor and troubleshoot networking
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Which route the kernel picks
+    man_page: ip-route(8)
+  - kind: man-page
+    title: Connection routes
+    man_page: nm-settings-nmcli(5)
+  - kind: man-page
+    title: Neighbor (ARP) state
+    man_page: ip-neighbour(8)
+topology:
+  networks:
+    - {name: lan, cidr: 10.67.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+checks:
+  - check_id: page-loads
+    kind: command
+    target: node2
+    description: curl http://10.67.0.10:8000/ on node2 returns node1's page.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        fetch() { page=$(curl --silent --show-error --max-time 3 http://10.67.0.10:8000/ 2>&1); }
+        retry 5 fetch || fail "node2 cannot reach http://10.67.0.10:8000/: ${page##*: }"
+        [[ "$page" == *"node1 service"* ]] || fail "http://10.67.0.10:8000/ answers with something else"
+  - check_id: direct-route
+    kind: command
+    target: node2
+    description: node2 reaches 10.67.0.10 directly on lan0.
+    parameters:
+      script: |
+        route=$(ip -4 route get 10.67.0.10)
+        [[ "$route" == *" dev lan0 "* && "$route" != *" via "* ]] || fail "node2 routes 10.67.0.10 as: ${route%%$'\n'*}"
+  - check_id: address-kept
+    kind: command
+    target: node2
+    description: node2 keeps the address 10.67.0.20/24.
+    parameters:
+      script: |
+        ip -4 -o address show dev lan0 | grep -q ' 10\.67\.0\.20/24 ' || fail "lan0 no longer has 10.67.0.20/24"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-network-troubleshoot.setup.yaml
+reference_solution: actions/exam-network-troubleshoot.solution.yaml
+rejected_solutions:
+  - actions/exam-network-troubleshoot.rejected-runtime.yaml

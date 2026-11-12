@@ -1,0 +1,31 @@
+schema_version: 1
+actions:
+  - action_id: fix-labels-the-other-way
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        restorecon -RFv /etc/lal-pki
+        semanage fcontext -a -e /var/www /srv/lal-secure
+        restorecon -RFv /srv/lal-secure
+  - action_id: append-the-issuer-to-the-certificate
+    target: node2
+    arguments: [sudo, --, bash, -c, "cat /etc/lal-pki/issuing-ca.crt >> /etc/lal-pki/service.crt"]
+  - action_id: open-the-port-to-the-intranet-only
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --add-rich-rule='rule family="ipv4" source address="10.45.0.0/24" port port="8443" protocol="tcp" accept'
+        firewall-cmd --quiet --reload
+  - action_id: restart-nginx
+    target: node2
+    arguments: [sudo, --, bash, -c, "nginx -t && systemctl restart nginx.service"]

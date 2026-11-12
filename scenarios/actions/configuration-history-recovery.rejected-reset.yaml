@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: reset-the-branch-to-the-tag
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        git -C /etc/lal-app reset --quiet --hard approved-v1
+        systemctl restart lal-app.service

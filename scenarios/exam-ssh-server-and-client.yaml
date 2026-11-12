@@ -1,0 +1,151 @@
+schema_version: 1
+scenario_id: exam-ssh-server-and-client
+version: 1
+status: verified
+collection: exam
+title: Harden an SSH server and set up key login to it
+summary: Restrict root and password logins, add a port, and give a user a key-based alias.
+estimated_minutes: 8
+task_type: configure
+difficulty: advanced
+task: |
+  `node1` (10.62.0.10) still runs a legacy SSH policy that lets root and every user log in
+  with a password. On node1, configure the SSH server so that:
+
+  - `root` cannot log in over SSH at all;
+  - password authentication is refused for everyone except members of the group `rescue`;
+  - it listens on port 2022 as well as port 22, reachable from node2.
+
+  On `node2` (10.62.0.20), set up the user `ops` so that `ssh n1`, run as `ops`, logs in to
+  node1 as `ops` on port 2022 with a key and without a password. `ops` exists on both hosts
+  and already has a key pair on node2.
+requirements:
+  - "sshd on node1 refuses root logins and password logins, except passwords for members of `rescue`."
+  - "sshd on node1 listens on ports 22 and 2022, after a reboot too."
+  - "On node2, `ssh n1` as `ops` logs in to node1 as `ops` on port 2022 with a key."
+debrief: |
+  ## One way to do it
+
+  On node2, as `ops`, while node1 still accepts passwords:
+
+  ```bash
+  ssh-copy-id -i ~/.ssh/id_ed25519.pub ops@10.62.0.10
+  printf 'Host n1\n    HostName 10.62.0.10\n    User ops\n    Port 2022\n' >> ~/.ssh/config
+  ```
+
+  On node1:
+
+  ```bash
+  sudo grep -r . /etc/ssh/sshd_config.d/        # 05-legacy.conf allows root and passwords
+  sudo tee /etc/ssh/sshd_config.d/05-legacy.conf <<'CONF'
+  Port 22
+  Port 2022
+  PermitRootLogin no
+  PasswordAuthentication no
+  Match Group rescue
+      PasswordAuthentication yes
+  CONF
+  sudo semanage port -a -t ssh_port_t -p tcp 2022
+  sudo firewall-cmd --permanent --add-port=2022/tcp && sudo firewall-cmd --reload
+  sudo sshd -t && sudo systemctl restart sshd
+  ```
+
+  sshd keeps the **first** value it reads for most keywords, and the drop-ins in
+  `/etc/ssh/sshd_config.d/` are read in name order before the rest of `sshd_config`. So the
+  file that sorts first decides: here `05-legacy.conf`, which is why replacing its content
+  works and adding a new file does not. `sshd -T` prints the configuration sshd will really
+  use. A `Match` block in a drop-in ends where that file ends. SELinux only lets sshd bind
+  ports labeled `ssh_port_t`, and firewalld must let 2022 in.
+
+  ## Check it yourself
+
+  ```bash
+  sudo sshd -T -C user=root,host=x,addr=10.62.0.20 | grep -E '^(port|permitrootlogin)'
+  sudo sshd -T -C user=ops,host=x,addr=10.62.0.20 | grep passwordauthentication
+  sudo sshd -T -C user=rescue1,host=x,addr=10.62.0.20 | grep passwordauthentication
+  ssh n1 hostname      # as ops on node2
+  ```
+
+  ## Tempting but wrong
+
+  - **The new policy in `/etc/ssh/sshd_config.d/60-policy.conf`.** `05-legacy.conf` is read
+    first, so root and passwords stay allowed.
+  - **Port 2022 without `semanage port`.** sshd cannot bind it, and SELinux logs the denial.
+  - **`PermitRootLogin prohibit-password`.** root can still log in, with a key.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.openssh
+    title: Configure the OpenSSH server and client
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Server options, Match blocks, and first-value-wins
+    man_page: sshd_config(5)
+  - kind: man-page
+    title: Client host aliases
+    man_page: ssh_config(5)
+  - kind: man-page
+    title: Install a public key on a server
+    man_page: ssh-copy-id(1)
+  - kind: man-page
+    title: Label a port for a service
+    man_page: semanage-port(8)
+topology:
+  networks:
+    - {name: lan, cidr: 10.62.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+checks:
+  - check_id: login-policy
+    kind: command
+    target: node1
+    description: sshd refuses root and password logins, except passwords for members of rescue.
+    parameters:
+      sudo: true
+      script: |
+        effective() { sshd -T -C "user=$1,host=node2,addr=10.62.0.20" 2>/dev/null | awk -v key="$2" '$1 == key {print $2}'; }
+        expect_eq "$(effective root permitrootlogin)" no "PermitRootLogin"
+        expect_eq "$(effective ops passwordauthentication)" no "password authentication for ops"
+        expect_eq "$(effective rescue1 passwordauthentication)" yes "password authentication for rescue1, a member of rescue"
+  - check_id: both-ports
+    kind: command
+    target: node1
+    description: sshd listens on ports 22 and 2022.
+    parameters:
+      sudo: true
+      timeout_seconds: 30
+      script: |
+        listening() { ss -Hltn "sport = :$1" | grep -q .; }
+        listening 22 || fail "sshd does not listen on port 22"
+        retry 10 listening 2022 || fail "nothing listens on port 2022"
+  - check_id: key-login-alias
+    kind: command
+    target: node2
+    description: On node2, ssh n1 as ops logs in to node1 as ops on port 2022 with a key.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        target=$(runuser -u ops -- ssh -G n1 2>/dev/null | awk '$1 == "hostname" {print $2}')
+        [[ -n "$target" && "$target" != n1 ]] || fail "ops on node2 has no ssh alias n1"
+        errors=$(mktemp); trap 'rm -f "$errors"' EXIT
+        login() {
+          answer=$(runuser -u ops -- ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new \
+            -o ConnectTimeout=5 n1 'printf "%s %s" "$(id -un)" "$SSH_CONNECTION"' 2>"$errors")
+        }
+        retry 3 login || fail "ssh n1 as ops fails: $(tail -n 1 "$errors")"
+        read -r user _ _ _ port <<<"$answer"
+        expect_eq "$user" ops "the user ssh n1 logs in as"
+        expect_eq "$port" 2022 "the port ssh n1 connects to"
+persistence:
+  reboot: true
+  hosts: [node1]
+setup: actions/exam-ssh-server-and-client.setup.yaml
+reference_solution: actions/exam-ssh-server-and-client.solution.yaml
+rejected_solutions:
+  - actions/exam-ssh-server-and-client.rejected-late-drop-in.yaml
+  - actions/exam-ssh-server-and-client.rejected-unlabeled-port.yaml

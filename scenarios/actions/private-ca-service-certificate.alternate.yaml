@@ -1,0 +1,20 @@
+schema_version: 1
+actions:
+  - action_id: request-extensions-in-the-csr-and-copy-them
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        rm -f /etc/lal-pki/private/api.key
+        umask 077
+        openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out /etc/lal-pki/private/api.key
+        openssl req -new -key /etc/lal-pki/private/api.key -subj /CN=api.internal \
+          -addext 'subjectAltName=DNS:api.internal,IP:127.0.0.1' -out /root/api.csr
+        umask 022
+        openssl x509 -req -in /root/api.csr -CA /etc/lal-pki/ca.crt -CAkey /etc/lal-pki/private/ca.key \
+          -CAserial /root/api.srl -CAcreateserial -copy_extensions copy -days 730 -out /etc/lal-pki/api.crt
+        systemctl restart nginx.service

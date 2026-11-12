@@ -1,0 +1,21 @@
+schema_version: 1
+actions:
+  - action_id: route-without-translating
+    target: router
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --zone=internal --change-interface=lan0
+        firewall-cmd --quiet --permanent --zone=dmz --change-interface=wan0
+        firewall-cmd --quiet --permanent --zone=dmz --add-forward-port=port=80:proto=tcp:toport=8080
+        firewall-cmd --quiet --permanent --new-policy office-out
+        firewall-cmd --quiet --permanent --policy office-out --add-ingress-zone internal
+        firewall-cmd --quiet --permanent --policy office-out --add-egress-zone dmz
+        firewall-cmd --quiet --permanent --policy office-out --set-target ACCEPT
+        firewall-cmd --quiet --reload
+        sysctl --quiet -w net.ipv4.ip_forward=1
+        printf 'net.ipv4.ip_forward = 1\n' > /etc/sysctl.d/90-router.conf

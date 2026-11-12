@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: lower-the-archiver-weight
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d /etc/systemd/system/lal-archiver.service.d
+        printf '[Service]\nIOWeight=10\nIOSchedulingClass=idle\n' > /etc/systemd/system/lal-archiver.service.d/io.conf
+        systemctl daemon-reload
+        systemctl restart lal-archiver.service

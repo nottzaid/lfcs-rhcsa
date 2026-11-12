@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: create-register-and-enable-the-swap-file
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        dd if=/dev/zero of=/swapfile bs=1M count=512 status=none
+        chmod 600 /swapfile
+        mkswap -q /swapfile
+        printf '/swapfile none swap pri=10 0 0\n' >> /etc/fstab
+        systemctl daemon-reload
+        swapon -a

@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: key-and-certificate
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        openssl req -x509 -newkey rsa:3072 -nodes -days 365 -subj /CN=portal.lab.internal \
+          -keyout /etc/pki/tls/private/portal.key -out /etc/pki/tls/certs/portal.crt \
+          2>/dev/null
+        chmod 600 /etc/pki/tls/private/portal.key

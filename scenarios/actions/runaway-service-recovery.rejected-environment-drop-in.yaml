@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: override-the-batch-size-in-a-drop-in
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        systemctl mask --now lal-collector-v1.service
+        rm -f /etc/cron.d/legacy-collector
+        install -d /etc/systemd/system/lal-metrics.service.d
+        printf '[Service]\nEnvironment=BATCH_SIZE=50\n' > /etc/systemd/system/lal-metrics.service.d/batch.conf
+        systemctl daemon-reload
+        systemctl reset-failed lal-metrics.service
+        systemctl restart lal-metrics.service || true

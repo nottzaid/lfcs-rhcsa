@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: set-sysrq-then-reload-every-file
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sysctl -w kernel.sysrq=1 >/dev/null
+        printf '%s\n' 'vm.swappiness = 15' 'net.ipv4.ip_local_port_range = 20000 40000' \
+          > /etc/sysctl.d/90-tuning.conf
+        sysctl --system >/dev/null

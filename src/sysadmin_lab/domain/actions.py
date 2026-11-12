@@ -9,7 +9,7 @@ class GuestAction(StrictModel):
     action_id: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
     target: str = Field(pattern=IDENTIFIER_PATTERN.pattern)
     arguments: tuple[str, ...] = Field(min_length=1)
-    timeout_seconds: float = Field(default=30, gt=0, le=300)
+    timeout_seconds: float = Field(default=120, gt=0, le=600)
     expected_exit_codes: tuple[int, ...] = (0,)
 
 

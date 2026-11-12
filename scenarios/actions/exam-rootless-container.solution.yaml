@@ -1,0 +1,25 @@
+schema_version: 1
+actions:
+  - action_id: linger-and-a-user-quadlet
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /  # rootless podman returns to the caller's directory, which app cannot enter
+        loginctl enable-linger app
+        uid=$(id -u app)
+        for _ in $(seq 30); do [[ -S /run/user/$uid/bus ]] && break; sleep 1; done
+        install -d -o app -g app /home/app/.config /home/app/.config/containers /home/app/.config/containers/systemd
+        printf '%s\n' '[Container]' 'ContainerName=cache' 'Image=localhost/lal-cache:1' \
+          'Volume=cachedata:/data' '' '[Install]' 'WantedBy=default.target' \
+          > /home/app/.config/containers/systemd/cache.container
+        chown app:app /home/app/.config/containers/systemd/cache.container
+        user_systemctl() { runuser -u app -- env XDG_RUNTIME_DIR=/run/user/$uid \
+          DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$uid/bus systemctl --user "$@"; }
+        user_systemctl daemon-reload
+        user_systemctl start cache.service

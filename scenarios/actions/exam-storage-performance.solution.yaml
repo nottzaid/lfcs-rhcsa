@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: report-and-stop
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        pid=$(systemctl show -p MainPID --value lal-ingest.service)
+        printf '%s %s\n' "$pid" "$(basename "$(readlink -f /dev/disk/by-id/virtio-lal-bulk)")" > /root/io-report.txt
+        systemctl disable --now lal-ingest.service

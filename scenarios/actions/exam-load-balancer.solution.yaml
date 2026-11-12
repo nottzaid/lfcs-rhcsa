@@ -1,0 +1,28 @@
+schema_version: 1
+actions:
+  - action_id: nginx-pool
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cat > /etc/nginx/conf.d/pool.conf <<'CONF'
+        upstream pool {
+            server 10.69.0.10:8081;
+            server 10.69.0.10:8082;
+        }
+        server {
+            listen 80 default_server;
+            listen [::]:80 default_server;
+            location / { proxy_pass http://pool; }
+            location /status { proxy_pass http://10.69.0.10:8081; }
+        }
+        CONF
+        setsebool -P httpd_can_network_connect on
+        nginx -t -q
+        systemctl enable nginx.service
+        systemctl restart nginx.service

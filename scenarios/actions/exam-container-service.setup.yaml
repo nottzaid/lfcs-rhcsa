@@ -1,0 +1,33 @@
+schema_version: 1
+actions:
+  - action_id: build-the-web-image-and-its-content
+    target: node2
+    timeout_seconds: 240
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        root=$(mktemp -d)
+        python=$(readlink -f /usr/bin/python3)
+        stdlib=$(python3 -c 'import sysconfig; print(sysconfig.get_path("stdlib"))')
+        copy_with_libraries() {
+          cp --parents --dereference "$1" "$root"
+          ldd "$1" 2>/dev/null | awk '/=> \// {print $3} /\/ld-linux/ {print $1}' |
+            while read -r library; do cp --parents --dereference "$library" "$root"; done
+        }
+        copy_with_libraries "$python"
+        cp -a --parents "$stdlib" "$root"
+        for module in "$stdlib"/lib-dynload/*.so; do copy_with_libraries "$module"; done
+        install -d "$root/content" "$root/tmp"
+        ln -s "$(basename "$python")" "$root/usr/bin/python3"
+        ln -s usr/bin "$root/bin"
+        podman rmi --force localhost/lal-web:1 >/dev/null 2>&1 || true
+        tar -C "$root" -cf - . | podman import --quiet \
+          --change 'CMD=["/usr/bin/python3","-m","http.server","8080","--directory","/content"]' \
+          --change 'EXPOSE=8080' - localhost/lal-web:1 >/dev/null
+        rm -rf "$root"
+        install -d -m 0755 /srv/web/content
+        printf '<h1>lal-web: %s</h1>\n' "$(cat /proc/sys/kernel/random/uuid)" > /srv/web/content/index.html

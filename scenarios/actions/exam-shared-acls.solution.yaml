@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: access-and-default-acls
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        setfacl -R -m u:lead:rwX,g:auditors:rX /srv/projects/atlas
+        setfacl -R -d -m u:lead:rwX,g:auditors:rX /srv/projects/atlas
+        chmod -R o-rwx /srv/projects/atlas

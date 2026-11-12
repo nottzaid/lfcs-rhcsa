@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: persist-in-a-file-that-loses
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf '%s\n' 'vm.swappiness = 15' 'net.ipv4.ip_local_port_range = 20000 40000' \
+          > /etc/sysctl.d/60-tuning.conf
+        sysctl --system >/dev/null
+        sysctl -w kernel.sysrq=1 >/dev/null

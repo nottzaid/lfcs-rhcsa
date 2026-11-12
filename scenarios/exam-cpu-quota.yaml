@@ -1,0 +1,92 @@
+schema_version: 1
+scenario_id: exam-cpu-quota
+version: 1
+status: verified
+collection: exam
+title: Cap the service that monopolizes a CPU
+summary: Find the service burning a CPU and limit it with systemd resource control, persistently.
+estimated_minutes: 6
+task_type: troubleshoot
+difficulty: intermediate
+task: |
+  On `node2`, one service keeps a CPU fully busy. Find it, and limit it to 20% of one CPU,
+  now and after every reboot, without stopping it.
+requirements:
+  - "The busy service is limited to 20% of one CPU in its unit's configuration."
+  - "It keeps running, and uses no more than about 20% of a CPU."
+  - "The limit holds after a reboot."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  top                                   # or: systemd-cgtop
+  systemctl status <PID>                # lal-reindex.service
+  sudo systemctl set-property lal-reindex.service CPUQuota=20%
+  ```
+
+  `systemd-cgtop` shows CPU use per unit directly. `systemctl set-property` applies a
+  resource-control setting at once and, without `--runtime`, writes a drop-in under
+  `/etc/systemd/system.control/` so it survives reboots. `CPUQuota=20%` lets the unit use
+  20 ms of CPU time per 100 ms.
+
+  ## Check it yourself
+
+  ```bash
+  systemctl show -p CPUQuotaPerSecUSec lal-reindex.service    # 200ms
+  systemd-cgtop -n 3
+  ```
+
+  ## Tempting but wrong
+
+  - **`renice`.** It lowers the priority, and an idle CPU still runs the process flat out.
+  - **`set-property --runtime`.** The limit disappears at the reboot.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: essential-commands.performance
+    title: Monitor and troubleshoot system performance and services
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Resource use per unit
+    man_page: systemd-cgtop(1)
+  - kind: man-page
+    title: CPUQuota=
+    man_page: systemd.resource-control(5)
+  - kind: man-page
+    title: set-property
+    man_page: systemctl(1)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: quota-configured
+    kind: command
+    target: node2
+    description: lal-reindex.service is limited to 20% of one CPU.
+    parameters:
+      script: expect_eq "$(unit_value lal-reindex.service CPUQuotaPerSecUSec)" 200ms "the CPU quota of lal-reindex.service per second"
+  - check_id: running-and-limited
+    kind: command
+    target: node2
+    description: It keeps running, and uses no more than about 20% of a CPU.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        expect_eq "$(systemctl is-active lal-reindex.service)" active "lal-reindex.service"
+        stat=/sys/fs/cgroup/system.slice/lal-reindex.service/cpu.stat
+        before=$(awk '$1 == "usage_usec" {print $2}' "$stat")
+        sleep 5
+        after=$(awk '$1 == "usage_usec" {print $2}' "$stat")
+        percent=$(( (after - before) / 50000 ))
+        (( percent <= 25 )) || fail "lal-reindex.service used ${percent}% of a CPU over 5 seconds"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-cpu-quota.setup.yaml
+reference_solution: actions/exam-cpu-quota.solution.yaml
+rejected_solutions:
+  - actions/exam-cpu-quota.rejected-renice.yaml
+  - actions/exam-cpu-quota.rejected-runtime.yaml

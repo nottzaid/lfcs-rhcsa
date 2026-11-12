@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from sysadmin_lab.domain.models import CheckSpec, ScenarioManifest
+from sysadmin_lab.domain.models import ScenarioManifest
 
 
 @dataclass(frozen=True, slots=True)
@@ -25,9 +25,13 @@ class ScenarioDriver(Protocol):
 
     def provision(self, manifest: ScenarioManifest) -> LabSession: ...
 
-    def run_check(self, session: LabSession, check: CheckSpec) -> CheckObservation: ...
+    def run_checks(
+        self, session: LabSession, manifest: ScenarioManifest
+    ) -> tuple[CheckObservation, ...]: ...
 
-    def apply_reference_solution(self, session: LabSession, manifest: ScenarioManifest) -> None: ...
+    def apply_solution(
+        self, session: LabSession, manifest: ScenarioManifest, solution: str
+    ) -> None: ...
 
     def reboot(self, session: LabSession, hosts: tuple[str, ...]) -> None: ...
 

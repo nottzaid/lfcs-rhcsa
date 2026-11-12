@@ -1,15 +1,49 @@
 from __future__ import annotations
 
+import webbrowser
 from pathlib import Path
+from socket import AF_INET, AF_INET6, SOCK_STREAM, socket
+from threading import Timer
 from typing import Annotated
 from uuid import UUID
 
 import typer
 
+from sysadmin_lab.adapters.sqlite_sessions import SqliteSessionRepository
+from sysadmin_lab.application.checking import CheckReport
+from sysadmin_lab.application.doctor import (
+    Severity,
+    firewall_finding,
+    image_finding,
+    kvm_finding,
+    libvirt_findings,
+    nested_finding,
+    session_finding,
+    tool_findings,
+    unit_is_active,
+)
 from sysadmin_lab.application.image_acquisition import HttpsDownloader, ImageAcquirer
-from sysadmin_lab.catalog import CatalogError, load_catalog, load_image_manifest
+from sysadmin_lab.application.image_building import (
+    ImageBuildError,
+    KickstartImageBuilder,
+    SubprocessBuildRunner,
+    resolve_built_image,
+)
+from sysadmin_lab.application.scenario_sessions import LearnerCheckReport, StartedScenario
+from sysadmin_lab.application.verification import PhaseResult, ScenarioVerifier
+from sysadmin_lab.application.vm_verification import VmScenarioDriver
+from sysadmin_lab.catalog import (
+    CatalogError,
+    find_scenario,
+    load_action_manifest,
+    load_catalog,
+    load_image_manifest,
+)
 from sysadmin_lab.composition import open_vm_runtime
+from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.images import ImageVerificationError, verify_installation_source
+from sysadmin_lab.domain.models import ScenarioManifest
+from sysadmin_lab.domain.sessions import SessionStatus
 
 app = typer.Typer(help="Operate and verify the local Linux administration lab.")
 catalog_app = typer.Typer(help="Inspect and validate scenario catalogs.")
@@ -18,6 +52,127 @@ image_app = typer.Typer(help="Build and verify immutable guest images.")
 app.add_typer(image_app, name="image")
 session_app = typer.Typer(help="Operate low-level lab VM sessions.")
 app.add_typer(session_app, name="session")
+scenario_app = typer.Typer(help="Start, check, reset, and destroy learner scenarios.")
+app.add_typer(scenario_app, name="scenario")
+
+
+def _ensure_default_image(root: Path) -> Path:
+    """Return the verified default image, building it from pinned media when absent."""
+    manifest_path = root / "images" / "rocky-10.2" / "iso-manifest.yaml"
+    manifest = load_image_manifest(manifest_path)
+    image_cache = root / "runtime" / "cache" / "images"
+    try:
+        return resolve_built_image(manifest, manifest_path, image_cache).artifact
+    except ImageBuildError:
+        typer.echo("The verified Rocky 10.2 lab image is not present; building it now.")
+        typer.echo("The first launch downloads the pinned installation ISO and can take a while.")
+        source = ImageAcquirer(HttpsDownloader()).acquire(
+            manifest, root / "runtime" / "cache" / "isos"
+        )
+        builder = KickstartImageBuilder(SubprocessBuildRunner())
+        return builder.build(manifest, manifest_path, source, image_cache).artifact
+
+
+def _loopback_port_available(host: str, port: int) -> bool:
+    family = AF_INET6 if host == "::1" else AF_INET
+    bind_host = "::1" if family == AF_INET6 else "127.0.0.1"
+    with socket(family, SOCK_STREAM) as probe:
+        try:
+            probe.bind((bind_host, port))
+        except OSError:
+            return False
+    return True
+
+
+@app.command("up")
+def up(
+    host: Annotated[
+        str, typer.Option(help="Loopback address for the local website.")
+    ] = "127.0.0.1",
+    port: Annotated[int, typer.Option(min=1, max=65535)] = 8787,
+    open_browser: Annotated[
+        bool, typer.Option("--open-browser/--no-browser", help="Open the local site automatically.")
+    ] = True,
+    project_root: Annotated[Path, typer.Option(file_okay=False)] = Path("."),
+) -> None:
+    """Start the local scenario website and background lab controller."""
+    if host not in {"127.0.0.1", "localhost", "::1"}:
+        typer.echo("labctl up only binds to a loopback address", err=True)
+        raise typer.Exit(code=2)
+    root = project_root.resolve()
+    required = (root / "scenarios", root / "images" / "rocky-10.2" / "iso-manifest.yaml")
+    missing = [str(path) for path in required if not path.exists()]
+    if missing:
+        typer.echo(f"project root is missing required paths: {', '.join(missing)}", err=True)
+        raise typer.Exit(code=2)
+    if not _loopback_port_available(host, port):
+        typer.echo(f"loopback port {port} is already in use; choose another with --port", err=True)
+        raise typer.Exit(code=2)
+
+    try:
+        image = _ensure_default_image(root)
+    except (CatalogError, ImageVerificationError, ImageBuildError, OSError) as exc:
+        typer.echo(f"lab image preparation failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"Verified lab image: {image}")
+
+    import uvicorn
+
+    from sysadmin_lab.web import create_app
+
+    display_host = "[::1]" if host == "::1" else host
+    url = f"http://{display_host}:{port}/scenarios/topic/lfcs"
+    typer.echo(f"Linux Admin Lab: {url}")
+    typer.echo("Press Ctrl+C to stop the website. Running scenario VMs remain under your control.")
+    if open_browser:
+        opener = Timer(0.8, webbrowser.open, args=(url,))
+        opener.daemon = True
+        opener.start()
+    uvicorn.run(create_app(root), host=host, port=port, log_level="info")
+
+
+@app.command("doctor")
+def doctor(
+    project_root: Annotated[Path, typer.Option(file_okay=False)] = Path("."),
+) -> None:
+    """Check this host for everything the lab needs, without changing anything."""
+    root = project_root.resolve()
+    manifest_path = root / "images" / "rocky-10.2" / "iso-manifest.yaml"
+    runtime_root = root / "runtime"
+
+    def open_libvirt() -> object:
+        import libvirt  # type: ignore[import-untyped]
+
+        return libvirt.open("qemu:///system")  # raises libvirtError when it cannot connect
+
+    def built_image() -> Path:
+        manifest = load_image_manifest(manifest_path)
+        images = runtime_root / "cache" / "images"
+        return resolve_built_image(manifest, manifest_path, images).artifact
+
+    findings = [
+        kvm_finding(),
+        nested_finding(),
+        *tool_findings(),
+        *libvirt_findings(open_libvirt, runtime_root),
+        firewall_finding(unit_is_active),
+        image_finding(built_image),
+    ]
+    state_path = runtime_root / "state" / "lab.db"
+    if state_path.exists():
+        with SqliteSessionRepository(state_path) as sessions:
+            findings.append(
+                session_finding(
+                    (str(state.session_id), state.status.value, state.scenario_id)
+                    for state in sessions.list_all(limit=1000)
+                )
+            )
+    for finding in findings:
+        typer.echo(f"{finding.severity.value:<4}  {finding.subject}: {finding.detail}")
+        if finding.fix and finding.severity is not Severity.OK:
+            typer.echo(f"      fix: {finding.fix}")
+    if any(finding.severity is Severity.FAIL for finding in findings):
+        raise typer.Exit(code=1)
 
 
 @catalog_app.command("validate")
@@ -61,6 +216,30 @@ def fetch_image_source(
         typer.echo(str(exc), err=True)
         raise typer.Exit(code=1) from exc
     typer.echo(f"ready {manifest.image_id}: {path}")
+
+
+@image_app.command("build")
+def build_image(
+    manifest_path: Annotated[Path, typer.Argument(exists=True, dir_okay=False, readable=True)],
+    source_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/isos"),
+    output_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
+) -> None:
+    """Build a traceable immutable qcow2 from pinned ISO media and Kickstart."""
+    try:
+        manifest = load_image_manifest(manifest_path)
+        source = ImageAcquirer(HttpsDownloader()).acquire(manifest, source_cache)
+        built = KickstartImageBuilder(SubprocessBuildRunner()).build(
+            manifest,
+            manifest_path,
+            source,
+            output_directory,
+        )
+    except (CatalogError, ImageVerificationError, ImageBuildError, OSError) as exc:
+        typer.echo(f"image build failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"built {manifest.image_id}: {built.artifact}")
+    typer.echo(f"sha256:{built.record.artifact_sha256}")
+    typer.echo(f"provenance: {built.record_path}")
 
 
 @session_app.command("start")
@@ -151,6 +330,260 @@ def check_session(
     typer.echo(f"score: {report.earned_weight}/{report.available_weight}")
     if report.has_errors or not report.required_passed:
         raise typer.Exit(code=1)
+
+
+def _scenario_launch_inputs(
+    scenario_id: str,
+    scenario_directory: Path,
+    image_manifest_path: Path,
+    image_cache: Path,
+) -> tuple[ScenarioManifest, ActionManifest, dict[str, Path]]:
+    manifest = find_scenario(scenario_directory, scenario_id)
+    setup = load_action_manifest(scenario_directory / manifest.setup)
+    image_manifest = load_image_manifest(image_manifest_path)
+    if image_manifest.build.method == "kickstart":
+        image_path = resolve_built_image(image_manifest, image_manifest_path, image_cache).artifact
+    else:
+        image_path = ImageAcquirer(HttpsDownloader()).acquire(image_manifest, image_cache)
+    return manifest, setup, {image_manifest.image_id: image_path.resolve()}
+
+
+def _show_started(started: StartedScenario) -> None:
+    typer.echo(f"session: {started.provisioned.state.session_id}")
+    for machine in started.provisioned.machines:
+        typer.echo(f"{machine.host_name}:")
+        typer.echo(f"  domain: {machine.identity.name}")
+        typer.echo(f"  address: {machine.address}")
+        typer.echo(f"  console username: {machine.username}")
+        typer.echo(f"  console password: {machine.password}")
+        typer.echo(f"  ssh: ssh -i {machine.private_key} {machine.username}@{machine.address}")
+
+
+def _show_brief(manifest: ScenarioManifest) -> None:
+    typer.echo("")
+    typer.echo(manifest.task.strip())
+    if manifest.requirements:
+        typer.echo("")
+        typer.echo("Done means:")
+        for requirement in manifest.requirements:
+            typer.echo(f"  - {requirement}")
+    if manifest.reboot_hosts:
+        hosts = ", ".join(manifest.reboot_hosts)
+        typer.echo(f"Once the live state passes, the check reboots {hosts} to prove persistence.")
+
+
+def _show_report(report: CheckReport) -> None:
+    for result in report.results:
+        status = (
+            "ERROR" if result.observation.error else "PASS" if result.observation.passed else "FAIL"
+        )
+        typer.echo(f"{status} {result.check.description} ({result.observation.message})")
+    typer.echo(f"score: {report.earned_weight}/{report.available_weight}")
+
+
+def _show_learner_report(report: LearnerCheckReport) -> None:
+    hosts = ", ".join(report.reboot_hosts)
+    if report.reboot_hosts:
+        typer.echo("live state:")
+    _show_report(report.live)
+    if report.unreachable_host:
+        typer.echo(
+            f"{report.unreachable_host} did not come back over SSH after rebooting. Open its "
+            "console in virt-manager to see why it cannot finish booting."
+        )
+    elif report.after_reboot is not None:
+        typer.echo(f"after rebooting {hosts}:")
+        _show_report(report.after_reboot)
+    elif report.reboot_hosts and report.live_passed:
+        typer.echo(f"persistence not proven: rerun without --skip-reboot to reboot {hosts}")
+    elif report.reboot_hosts:
+        typer.echo(f"once the live state passes, the check reboots {hosts} to prove persistence")
+    typer.echo("solved" if report.solved else "not solved yet")
+
+
+@scenario_app.command("start")
+def start_scenario(
+    scenario_id: str,
+    scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
+    image_manifest_path: Annotated[Path, typer.Option(dir_okay=False)] = Path(
+        "images/rocky-10.2/iso-manifest.yaml"
+    ),
+    image_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
+) -> None:
+    """Provision a verified scenario and apply its reproducible broken state."""
+    try:
+        manifest, setup, images = _scenario_launch_inputs(
+            scenario_id, scenario_directory, image_manifest_path, image_cache
+        )
+        with open_vm_runtime(runtime_root) as runtime:
+            started = runtime.scenarios.start(manifest, setup, images)
+    except Exception as exc:
+        typer.echo(f"scenario start failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    _show_started(started)
+    _show_brief(manifest)
+
+
+@scenario_app.command("check")
+def check_scenario(
+    session_id: UUID,
+    prove_persistence: Annotated[
+        bool,
+        typer.Option(
+            "--prove-persistence/--skip-reboot",
+            help="Reboot the scenario's persistence hosts once the live state passes.",
+        ),
+    ] = True,
+    scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
+) -> None:
+    """Check the resulting machine state for one learner scenario."""
+    try:
+        with open_vm_runtime(runtime_root) as runtime:
+            state = runtime.sessions.get(session_id)
+            manifest = find_scenario(scenario_directory, state.scenario_id)
+            report = runtime.scenarios.check(
+                session_id, manifest, prove_persistence=prove_persistence
+            )
+    except Exception as exc:
+        typer.echo(f"scenario check failed: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    _show_learner_report(report)
+    if not report.solved:
+        raise typer.Exit(code=1)
+
+
+@scenario_app.command("list")
+def list_scenarios(
+    include_destroyed: Annotated[
+        bool, typer.Option("--all", help="Include sessions that were already destroyed.")
+    ] = False,
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
+) -> None:
+    """List scenario sessions, for example to find ones a crash left behind."""
+    try:
+        with open_vm_runtime(runtime_root) as runtime:
+            sessions = [
+                (state, runtime.machines.list(state.session_id))
+                for state in runtime.sessions.list_all(limit=1000)
+                if include_destroyed or state.status is not SessionStatus.DESTROYED
+            ]
+    except Exception as exc:
+        typer.echo(f"scenario list failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    if not sessions:
+        typer.echo("no scenario sessions")
+        return
+    for state, machines in sessions:
+        hosts = ",".join(machine.host_name for machine in machines) or "-"
+        typer.echo(f"{state.session_id}  {state.status.value:<10}  {state.scenario_id}  {hosts}")
+
+
+@scenario_app.command("status")
+def scenario_status(
+    session_id: UUID,
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
+) -> None:
+    """Show the durable state and connection details for a scenario."""
+    session_status(session_id, runtime_root)
+
+
+@scenario_app.command("reset")
+def reset_scenario(
+    session_id: UUID,
+    scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
+    image_manifest_path: Annotated[Path, typer.Option(dir_okay=False)] = Path(
+        "images/rocky-10.2/iso-manifest.yaml"
+    ),
+    image_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
+) -> None:
+    """Replace one scenario with a fresh reproducible broken session."""
+    try:
+        with open_vm_runtime(runtime_root) as runtime:
+            state = runtime.sessions.get(session_id)
+            manifest, setup, images = _scenario_launch_inputs(
+                state.scenario_id,
+                scenario_directory,
+                image_manifest_path,
+                image_cache,
+            )
+            started = runtime.scenarios.reset(session_id, manifest, setup, images)
+    except Exception as exc:
+        typer.echo(f"scenario reset failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"replaced session: {session_id}")
+    _show_started(started)
+
+
+@scenario_app.command("destroy")
+def destroy_scenario(
+    session_id: UUID,
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime"),
+) -> None:
+    """Destroy one exact scenario session and its disposable artifacts."""
+    try:
+        with open_vm_runtime(runtime_root) as runtime:
+            state = runtime.scenarios.destroy(session_id)
+    except Exception as exc:
+        typer.echo(f"scenario destroy failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(f"scenario session {state.session_id}: {state.status.value}")
+
+
+def _phase_outcome(phase: PhaseResult) -> str:
+    if phase.errored:
+        return "a check errored"
+    if phase.expected is None:
+        return "live state passes; the reboot must expose it"
+    if phase.expected:
+        return "checks pass" if phase.passed else "checks should pass but fail"
+    return "checks fail as designed" if not phase.passed else "checks should fail but pass"
+
+
+@scenario_app.command("verify")
+def verify_scenario(
+    scenario_id: str,
+    scenario_directory: Annotated[Path, typer.Option(file_okay=False)] = Path("scenarios"),
+    image_manifest_path: Annotated[Path, typer.Option(dir_okay=False)] = Path(
+        "images/rocky-10.2/iso-manifest.yaml"
+    ),
+    image_cache: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/cache/images"),
+    runtime_root: Annotated[Path, typer.Option(file_okay=False)] = Path("runtime/acceptance"),
+) -> None:
+    """Destructively replay a scenario's complete disposable-VM acceptance contract."""
+    try:
+        manifest, _setup, images = _scenario_launch_inputs(
+            scenario_id, scenario_directory, image_manifest_path, image_cache
+        )
+        with open_vm_runtime(runtime_root) as runtime:
+            driver = VmScenarioDriver(
+                scenario_directory=scenario_directory,
+                base_images=images,
+                sessions=runtime.sessions,
+                machines=runtime.machines,
+                vm_sessions=runtime.vm_sessions,
+                checks=runtime.checks,
+                scenarios=runtime.scenarios,
+                actions=runtime.actions,
+            )
+            report = ScenarioVerifier(driver).verify(manifest)
+    except Exception as exc:
+        typer.echo(f"scenario verification failed: {exc}", err=True)
+        raise typer.Exit(code=2) from exc
+    for phase in report.phases:
+        status = "PASS" if phase.accepted else "FAIL"
+        solution = f" ({phase.solution})" if phase.solution else ""
+        typer.echo(f"{status} {phase.phase.value}{solution}: {_phase_outcome(phase)}")
+        if not phase.accepted:
+            for observation in phase.observations:
+                if observation.error or (phase.expected and not observation.passed):
+                    marker = "ERROR" if observation.error else "CHECK"
+                    typer.echo(f"  {marker} {observation.check_id}: {observation.message}")
+    if not report.passed:
+        raise typer.Exit(code=1)
+    typer.echo(f"verified acceptance contract: {report.scenario_id}")
 
 
 if __name__ == "__main__":  # pragma: no cover - console-script entry point

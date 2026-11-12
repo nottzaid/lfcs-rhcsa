@@ -1,0 +1,20 @@
+schema_version: 1
+actions:
+  - action_id: make-the-local-ldapdev-look-like-the-directory-one
+    target: node2
+    arguments: [sudo, --, bash, -c, "usermod --non-unique -u 2300 ldapdev && groupmod --non-unique -g 2300 ldapdev"]
+  - action_id: fix-everything-else
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        usermod -u 3100 -g platform teamlead
+        chgrp platform /srv/platform && chmod 2770 /srv/platform
+        setfacl -R -m g:platform:rwX,g:ldapops:rwX,o::--- /srv/platform
+        find /srv/platform -type d -exec setfacl -m d:g:platform:rwX,d:g:ldapops:rwX,d:o::--- {} +
+        mv /etc/profile.d/lal-team.conf /etc/profile.d/lal-team.sh
+        printf '@platform soft nofile 4096\n@ldapops soft nofile 4096\n' > /etc/security/limits.d/80-lal-team.conf

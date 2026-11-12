@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: new-volume-on-the-new-disk
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        pvcreate -q /dev/disk/by-id/virtio-lal-extra
+        vgextend -q vgapp /dev/disk/by-id/virtio-lal-extra
+        lvcreate -q -y -L 500M -n lvdb2 vgapp
+        mkfs.xfs -q /dev/vgapp/lvdb2
+        install -d /srv/db2
+        mount /dev/vgapp/lvdb2 /srv/db2

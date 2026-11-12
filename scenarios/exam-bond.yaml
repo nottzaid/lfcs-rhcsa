@@ -1,0 +1,122 @@
+schema_version: 1
+scenario_id: exam-bond
+version: 1
+status: verified
+collection: exam
+title: Bond two interfaces for failover
+summary: Combine two NICs into an active-backup bond with an address, persistently.
+estimated_minutes: 7
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, combine the interfaces `bond1a` and `bond1b` into a bond named `bond0` in
+  active-backup mode, with the address `10.68.0.20/24`, persistently.
+
+  `node1` (10.68.0.10) must stay reachable through it while either interface is down.
+requirements:
+  - "`bond0` is an active-backup bond of `bond1a` and `bond1b`, also after a reboot."
+  - "`bond0` holds 10.68.0.20/24, and node2 reaches node1 through it."
+  - "node1 stays reachable when the active interface goes down."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo nmcli connection add type bond ifname bond0 con-name bond0 \
+    bond.options mode=active-backup,miimon=100 \
+    ipv4.method manual ipv4.addresses 10.68.0.20/24 ipv6.method disabled
+  sudo nmcli connection add type ethernet ifname bond1a con-name bond0-port1 controller bond0 port-type bond
+  sudo nmcli connection add type ethernet ifname bond1b con-name bond0-port2 controller bond0 port-type bond
+  sudo nmcli connection up bond0
+  sudo nmcli connection up bond0-port1
+  sudo nmcli connection up bond0-port2
+  ```
+
+  The bond has its own connection holding the address; each port is a connection that only
+  joins the bond. Activating the bond does not activate its ports; bring them up too, and
+  at boot they come up on their own. In active-backup mode one port carries traffic, and `miimon` checks link
+  state every 100 ms so the other takes over when it fails.
+
+  ## Check it yourself
+
+  ```bash
+  cat /proc/net/bonding/bond0
+  sudo ip link set bond1a down; ping -c2 10.68.0.10; sudo ip link set bond1a up
+  ```
+
+  ## Tempting but wrong
+
+  - **A bond with one port.** Everything works until that interface fails.
+  - **`ip link add bond0 type bond`.** Gone after the reboot.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.bridges-bonds
+    title: Configure bridge and bonding devices
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Create bond and port connections
+    man_page: nmcli(1)
+  - kind: man-page
+    title: bond.options and port settings
+    man_page: nm-settings-nmcli(5)
+  - kind: upstream
+    title: Linux bonding driver modes and options
+    url: https://docs.kernel.org/networking/bonding.html
+topology:
+  networks:
+    - {name: lan, cidr: 10.68.0.0/24}
+  hosts:
+    - {name: node1, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: lan, name: lan0}]}
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: lan, name: bond1a}, {network: lan, name: bond1b}]
+checks:
+  - check_id: active-backup-bond
+    kind: command
+    target: node2
+    description: bond0 is an active-backup bond of bond1a and bond1b.
+    parameters:
+      timeout_seconds: 20
+      script: |
+        exists() { [[ -r /proc/net/bonding/bond0 ]]; }
+        retry 10 exists || fail "there is no bond0"
+        state=$(cat /proc/net/bonding/bond0)
+        grep -q '^Bonding Mode: fault-tolerance (active-backup)' <<<"$state" || fail "bond0 is not in active-backup mode: $(grep '^Bonding Mode' <<<"$state")"
+        for port in bond1a bond1b; do
+          grep -qx "Slave Interface: $port" <<<"$state" || fail "$port is not a port of bond0"
+        done
+  - check_id: address-and-reach
+    kind: command
+    target: node2
+    description: bond0 holds 10.68.0.20/24, and node2 reaches node1 through it.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        ip -4 -o address show dev bond0 | grep -q ' 10\.68\.0\.20/24 ' || fail "bond0 does not hold 10.68.0.20/24"
+        retry 10 ping -c1 -W2 10.68.0.10 >/dev/null || fail "node2 cannot reach node1 at 10.68.0.10"
+  - check_id: survives-a-link-failure
+    kind: command
+    target: node2
+    description: node1 stays reachable when the active interface goes down.
+    parameters:
+      sudo: true
+      timeout_seconds: 40
+      script: |
+        active=$(sed -n 's/^Currently Active Slave: //p' /proc/net/bonding/bond0)
+        [[ -n "$active" && "$active" != None ]] || fail "bond0 has no active port"
+        trap 'ip link set "$active" up' EXIT
+        ip link set "$active" down
+        retry 10 ping -c1 -W2 10.68.0.10 >/dev/null || fail "node1 is unreachable with $active down"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-bond.setup.yaml
+reference_solution: actions/exam-bond.solution.yaml
+rejected_solutions:
+  - actions/exam-bond.rejected-one-port.yaml
+  - actions/exam-bond.rejected-runtime.yaml

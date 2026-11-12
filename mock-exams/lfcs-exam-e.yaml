@@ -1,0 +1,28 @@
+schema_version: 1
+mock_id: lfcs-exam-e
+status: verified
+kind: exam
+title: LFCS Exam Rehearsal E
+summary: Twenty tasks found nowhere on the practice path, phrased like the exam's, with no hints.
+suggested_minutes: 120
+tasks:
+  - exam-cron-and-at
+  - exam-filesystem-recovery
+  - exam-libvirt-guest
+  - exam-selinux-booleans
+  - exam-rootless-container
+  - exam-network-troubleshoot
+  - exam-bond
+  - exam-load-balancer
+  - exam-nat-gateway
+  - exam-bridge
+  - exam-tmpfs-and-bind
+  - exam-iscsi-volume
+  - exam-storage-performance
+  - exam-lvm-grow-xfs
+  - exam-cpu-quota
+  - exam-low-port-service
+  - exam-ca-signed-certificate
+  - exam-failing-service
+  - exam-group-limits
+  - exam-ldap-client

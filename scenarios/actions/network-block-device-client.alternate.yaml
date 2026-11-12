@@ -1,0 +1,23 @@
+schema_version: 1
+actions:
+  - action_id: discover-and-log-in-in-one-step
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i 's/^InitiatorName=.*/InitiatorName=iqn.2026-09.internal.lab:node2-database/' /etc/iscsi/initiatorname.iscsi
+        systemctl restart iscsid.service
+        iscsiadm --mode discoverydb --type sendtargets --portal {{host.node1.address}}:3260 --discover --login
+        udevadm settle
+        device=$(readlink -f /dev/disk/by-path/*iqn.2026-08.internal.lab:storage-lun-0)
+        mkfs -t xfs -f "$device"
+        xfs_admin -L LAL_DATABASE "$device"
+        uuid=$(blkid -s UUID -o value "$device")
+        printf 'UUID=%s\t/srv/database\txfs\t_netdev,noatime\t0 0\n' "$uuid" >> /etc/fstab
+        systemctl daemon-reload
+        systemctl start srv-database.mount

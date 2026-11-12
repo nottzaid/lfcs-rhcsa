@@ -1,0 +1,116 @@
+schema_version: 1
+scenario_id: exam-nat-gateway
+version: 1
+status: verified
+collection: exam
+title: Turn a host into a NAT gateway with a forwarded port
+summary: Masquerade an internal network behind a gateway and forward one outside port to an inside server.
+estimated_minutes: 9
+task_type: configure
+difficulty: advanced
+task: |
+  `node2` connects the internal network `10.70.0.0/24` (interface `int0`) to the outside
+  network `10.71.0.0/24` (interface `ext0`). Using firewalld on node2, persistently:
+
+  - let hosts on the internal network reach the outside network, with their traffic
+    masqueraded behind node2's outside address `10.71.0.1`;
+  - forward TCP port 2080 arriving on `ext0` to port 80 of the internal web server
+    `10.70.0.50`.
+
+  The other hosts, `inner` (10.70.0.50) and `outer` (10.71.0.99), are already set up.
+requirements:
+  - "From `inner`, the outside web server sees the request coming from 10.71.0.1."
+  - "From `outer`, `http://10.71.0.1:2080/` returns inner's page."
+  - "Both hold after node2 reboots."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo firewall-cmd --permanent --zone=internal --change-interface=int0
+  sudo firewall-cmd --permanent --zone=external --change-interface=ext0
+  sudo firewall-cmd --permanent --new-policy inside-out
+  sudo firewall-cmd --permanent --policy inside-out --add-ingress-zone internal
+  sudo firewall-cmd --permanent --policy inside-out --add-egress-zone external
+  sudo firewall-cmd --permanent --policy inside-out --set-target ACCEPT
+  sudo firewall-cmd --permanent --zone=external \
+    --add-forward-port=port=2080:proto=tcp:toport=80:toaddr=10.70.0.50
+  sudo firewall-cmd --reload
+  ```
+
+  The `external` zone masquerades by default: traffic leaving through it takes node2's
+  address. Traffic between zones needs a policy that allows it; the `inside-out` policy
+  lets the internal zone forward to the external one. A forward port with `toaddr=`
+  rewrites the destination to another host, and firewalld turns on IP forwarding for it.
+
+  ## Check it yourself
+
+  ```bash
+  sudo firewall-cmd --get-active-zones
+  sudo firewall-cmd --zone=external --list-all
+  curl http://10.71.0.99/              # from inner: "client 10.71.0.1"
+  ```
+
+  ## Tempting but wrong
+
+  - **The rules without `--permanent`.** NAT works until node2 reboots.
+  - **A forward port without `toaddr=`.** It redirects to node2 itself, where nothing
+    listens on port 80.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: networking.packet-filtering
+    title: Configure packet filtering, port redirection, and NAT
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Zones, masquerading, and forward ports
+    man_page: firewall-cmd(1)
+  - kind: man-page
+    title: Policies between zones
+    man_page: firewalld.policies(5)
+  - kind: man-page
+    title: The predefined zones
+    man_page: firewalld.zones(5)
+topology:
+  networks:
+    - {name: inside, cidr: 10.70.0.0/24}
+    - {name: outside, cidr: 10.71.0.0/24}
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      nics: [{network: inside, name: int0}, {network: outside, name: ext0}]
+    - {name: inner, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: inside, name: in0}]}
+    - {name: outer, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1, nics: [{network: outside, name: out0}]}
+checks:
+  - check_id: masqueraded-outbound
+    kind: command
+    target: inner
+    description: From inner, the outside web server sees the request coming from 10.71.0.1.
+    parameters:
+      timeout_seconds: 40
+      script: |
+        fetch() { answer=$(curl --silent --show-error --max-time 3 http://10.71.0.99/ 2>&1); }
+        retry 8 fetch || fail "inner cannot reach the outside web server: ${answer##*: }"
+        expect_eq "$answer" "client 10.71.0.1" "what the outside web server sees"
+  - check_id: forwarded-inbound
+    kind: command
+    target: outer
+    description: From outer, http://10.71.0.1:2080/ returns inner's page.
+    parameters:
+      timeout_seconds: 40
+      script: |
+        fetch() { page=$(curl --silent --show-error --max-time 3 http://10.71.0.1:2080/ 2>&1); }
+        retry 8 fetch || fail "outer cannot reach port 2080 on node2: ${page##*: }"
+        [[ "$page" == *"inner page"* ]] || fail "port 2080 on node2 answers with something else"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-nat-gateway.setup.yaml
+reference_solution: actions/exam-nat-gateway.solution.yaml
+rejected_solutions:
+  - actions/exam-nat-gateway.rejected-runtime.yaml
+  - actions/exam-nat-gateway.rejected-local-redirect.yaml

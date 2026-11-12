@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: create-the-directory-and-fix-the-type
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -o collector -g collector /var/lib/lal-collector
+        install -d /etc/systemd/system/lal-collector.service.d
+        printf '[Service]\nType=simple\n' > /etc/systemd/system/lal-collector.service.d/type.conf
+        systemctl daemon-reload
+        systemctl enable lal-collector.service
+        systemctl restart lal-collector.service

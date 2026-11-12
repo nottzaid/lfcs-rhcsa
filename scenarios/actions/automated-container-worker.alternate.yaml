@@ -1,0 +1,27 @@
+schema_version: 1
+actions:
+  - action_id: enable-the-repository-in-its-file-and-install
+    target: node2
+    timeout_seconds: 120
+    arguments: [sudo, --, bash, -c, "sed -i 's/^enabled=0$/enabled=1/' /etc/yum.repos.d/lal-worker.repo && dnf -y -q install lal-worker-assets"]
+  - action_id: revert-the-unapproved-commit
+    target: node2
+    arguments: [sudo, --, bash, -c, "cd /etc/lal-automation && git revert --no-edit HEAD >/dev/null"]
+  - action_id: restart-the-worker
+    target: node2
+    arguments: [sudo, --, systemctl, restart, lal-automation.service]
+  - action_id: override-the-timer-with-a-drop-in
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d /etc/systemd/system/lal-automation-refresh.timer.d
+        printf '[Timer]\nOnCalendar=\nOnCalendar=*-*-* *:00,15,30,45:00\nPersistent=yes\n' \
+          > /etc/systemd/system/lal-automation-refresh.timer.d/schedule.conf
+        systemctl daemon-reload
+        systemctl enable lal-automation-refresh.timer
+        systemctl start lal-automation-refresh.timer lal-automation-refresh.service

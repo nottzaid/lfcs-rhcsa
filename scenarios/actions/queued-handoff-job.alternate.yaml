@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: allow-list-and-queue-from-a-file
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        printf 'handoff\n' > /etc/at.allow
+        systemctl enable atd.service
+        systemctl start atd.service
+        printf '#!/bin/sh\nprintf "approved\\n" > /var/lib/handoff/ready\n' > /home/handoff/handoff.sh
+        chown handoff:handoff /home/handoff/handoff.sh
+        runuser -l handoff -c 'at -f ~/handoff.sh 06:00'

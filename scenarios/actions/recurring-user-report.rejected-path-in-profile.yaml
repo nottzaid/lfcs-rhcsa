@@ -1,0 +1,13 @@
+schema_version: 1
+actions:
+  - action_id: fix-the-path-for-logins-only
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        printf '%s\n' 'PATH=/usr/bin:/bin' '40 6 * * 1-5 generate-usage-report --format compact' |
+          crontab -u reportbot -
+        printf 'export PATH=/opt/lal/bin:$PATH\n' >> /var/lib/lal-reports/.bash_profile

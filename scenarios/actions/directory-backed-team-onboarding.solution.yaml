@@ -1,0 +1,33 @@
+schema_version: 1
+actions:
+  - action_id: remove-the-shadowing-local-account
+    target: node2
+    arguments: [sudo, --, bash, -c, "userdel -r ldapdev && sss_cache -E && mkhomedir_helper ldapdev"]
+  - action_id: give-teamlead-the-roster-identity
+    target: node2
+    arguments: [sudo, --, usermod, -u, "3100", -g, platform, teamlead]
+  - action_id: share-the-tree-between-both-teams
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        chgrp platform /srv/platform
+        chmod 2770 /srv/platform
+        setfacl -R -m g:platform:rwX,g:ldapops:rwX,o::--- /srv/platform
+        find /srv/platform -type d -exec setfacl -m d:g:platform:rwX,d:g:ldapops:rwX,d:o::--- {} +
+  - action_id: make-the-profile-a-script-and-fix-the-limits
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        mv /etc/profile.d/lal-team.conf /etc/profile.d/lal-team.sh
+        sed -i 's/^platform\b/@platform/' /etc/security/limits.d/80-lal-team.conf
+        echo '@ldapops    soft    nofile    4096' >> /etc/security/limits.d/80-lal-team.conf

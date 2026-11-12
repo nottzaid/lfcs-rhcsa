@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: linger-and-a-restart-policy
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        cd /  # rootless podman returns to the caller's directory, which app cannot enter
+        loginctl enable-linger app
+        uid=$(id -u app)
+        for _ in $(seq 30); do [[ -S /run/user/$uid/bus ]] && break; sleep 1; done
+        runuser -u app -- env XDG_RUNTIME_DIR=/run/user/$uid podman run --detach --name cache \
+          --restart=always --volume cachedata:/data localhost/lal-cache:1 >/dev/null

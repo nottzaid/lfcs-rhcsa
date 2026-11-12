@@ -1,0 +1,18 @@
+schema_version: 1
+actions:
+  - action_id: free-the-blocks-then-have-the-daemon-reopen
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        for pid in $(lsof -t -a +L1 /var/log/lal); do
+          for fd in /proc/"$pid"/fd/*; do
+            case "$(readlink "$fd")" in */ingest.log' (deleted)') : > "$fd" ;; esac
+          done
+        done
+        systemctl reload lal-ingest.service
+        sleep 2

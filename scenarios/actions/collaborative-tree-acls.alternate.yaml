@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: share-through-the-owning-group
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        find /srv/project -exec setfacl --remove-all {} +
+        find /srv/project -exec chgrp project {} +
+        chmod -R u=rwX,g=rwX,o= /srv/project
+        find /srv/project -type d -exec chmod g+s {} +
+        find /srv/project -type d -exec setfacl -m u:auditor:r-x,d:u:auditor:r-x,d:g::rwx,d:o::--- {} +
+        find /srv/project -type f -exec setfacl -m u:auditor:r-- {} +

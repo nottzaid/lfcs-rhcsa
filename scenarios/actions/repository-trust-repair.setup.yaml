@@ -1,0 +1,54 @@
+schema_version: 1
+actions:
+  - action_id: publish-a-signed-internal-repository
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        export GNUPGHOME=$(mktemp -d)
+        gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
+          --quick-gen-key 'Lab Release Team <release@lab.invalid>' rsa3072 sign never
+        top=$(mktemp -d)
+        install -d "$top"/{SPECS,RPMS,BUILD,SOURCES,SRPMS}
+        cat > "$top/SPECS/lal-release-notes.spec" <<'EOF'
+        Name: lal-release-notes
+        Version: 2026.09
+        Release: 1
+        Summary: Release notes for the current platform release
+        License: MIT
+        BuildArch: noarch
+        %description
+        Release notes for operators.
+        %install
+        mkdir -p %{buildroot}/usr/share/doc/lal-release-notes
+        printf 'Platform release 2026.09\n' > %{buildroot}/usr/share/doc/lal-release-notes/NOTES
+        %files
+        /usr/share/doc/lal-release-notes/NOTES
+        EOF
+        rpmbuild -bb --quiet --define "_topdir $top" "$top/SPECS/lal-release-notes.spec" 2>/dev/null
+        install -d -m 0755 /srv/lal-repo /usr/share/lal-repo
+        cp "$top"/RPMS/noarch/*.rpm /srv/lal-repo/
+        rpmsign --addsign --define '_gpg_name Lab Release Team' --define "_gpg_path $GNUPGHOME" \
+          /srv/lal-repo/*.rpm >/dev/null
+        createrepo_c --quiet /srv/lal-repo
+        gpg --export --armor > /srv/lal-repo/RPM-GPG-KEY-lal-release
+        gpg --list-keys --with-colons | awk -F: '/^pub/ {print tolower($5); exit}' > /usr/share/lal-repo/key-id
+        rm -rf "$GNUPGHOME" "$top"
+  - action_id: point-dnf-at-the-wrong-place-without-verification
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        dnf config-manager --set-disabled baseos appstream extras >/dev/null
+        printf '%s\n' '[lal-training]' 'name=Internal release packages' \
+          'baseurl=file:///srv/lal-repository' 'enabled=1' 'gpgcheck=0' > /etc/yum.repos.d/lal-training.repo
+        dnf clean all >/dev/null

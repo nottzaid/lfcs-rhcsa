@@ -1,0 +1,109 @@
+schema_version: 1
+scenario_id: exam-lvm-grow-xfs
+version: 1
+status: verified
+collection: exam
+title: Grow an XFS logical volume onto a new disk, online
+summary: Extend a volume group with a new disk and grow a mounted XFS volume without interrupting it.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, the XFS filesystem mounted at `/srv/db` (logical volume `vgapp/lvdb`) must grow
+  to 900 MiB. Use the new disk `/dev/vdc` (also `/dev/disk/by-id/virtio-lal-extra`) for the
+  space. Do it online: do not unmount `/srv/db`, and do not stop `lal-db.service`, which
+  writes to it.
+requirements:
+  - "`vgapp` includes the new disk."
+  - "`lvdb` is 900 MiB, and the XFS filesystem on it uses the space."
+  - "`lal-db.service` ran without interruption, and `/srv/db` stayed mounted."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo pvcreate /dev/vdc
+  sudo vgextend vgapp /dev/vdc
+  sudo lvextend -r -L 900M vgapp/lvdb
+  df -h /srv/db
+  ```
+
+  `vgextend` adds the disk's extents to the group. `lvextend -r` grows the volume and then
+  the filesystem in it, calling `xfs_growfs` for XFS. XFS grows only while mounted and
+  cannot shrink, so growing online is the normal case.
+
+  ## Check it yourself
+
+  ```bash
+  sudo vgs vgapp; sudo lvs vgapp
+  xfs_info /srv/db | grep '^data'
+  ```
+
+  ## Tempting but wrong
+
+  - **`lvextend` without `-r`.** The volume grows; the filesystem still sees 400 MiB.
+  - **A new volume on the new disk, mounted somewhere else.** `/srv/db` stays full.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: storage.lvm
+    title: Configure and manage LVM storage
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Add a disk to a volume group
+    man_page: vgextend(8)
+  - kind: man-page
+    title: Grow a volume and its filesystem
+    man_page: lvextend(8)
+  - kind: man-page
+    title: Grow a mounted XFS filesystem
+    man_page: xfs_growfs(8)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - {name: db, size_mib: 512, role: database disk}
+        - {name: extra, size_mib: 1024, role: new disk}
+checks:
+  - check_id: disk-in-group
+    kind: command
+    target: node2
+    description: vgapp includes the new disk.
+    parameters:
+      sudo: true
+      script: |
+        disk=$(readlink -f /dev/disk/by-id/virtio-lal-extra)
+        expect_eq "$(pvs --noheadings -o vg_name "$disk" 2>/dev/null | tr -d ' ')" vgapp "the volume group of the new disk"
+  - check_id: grown
+    kind: command
+    target: node2
+    description: lvdb is 900 MiB, and its XFS filesystem uses the space.
+    parameters:
+      sudo: true
+      script: |
+        expect_eq "$(lvs --noheadings --units m --nosuffix -o lv_size vgapp/lvdb | tr -d ' ')" 900.00 "the size of lvdb in MiB"
+        blocks=$(xfs_info /srv/db 2>/dev/null | sed -n 's/^data *= *bsize=\([0-9]*\) *blocks=\([0-9]*\),.*/\1 \2/p')
+        read -r size count <<<"$blocks"
+        [[ -n "$count" ]] || fail "/srv/db is not a mounted XFS filesystem"
+        (( size * count >= 880 * 1048576 )) || fail "the filesystem is $((size * count / 1048576)) MiB; it was not grown"
+  - check_id: online
+    kind: command
+    target: node2
+    description: lal-db.service ran without interruption, and /srv/db stayed mounted.
+    parameters:
+      script: |
+        mountpoint -q /srv/db || fail "/srv/db is not mounted"
+        expect_eq "$(systemctl is-active lal-db.service)" active "lal-db.service"
+        expect_eq "$(unit_value lal-db.service MainPID)" "$(cat /usr/share/lal-exam/db-pid)" "lal-db's process ID (it was stopped or restarted)"
+persistence:
+  reboot: false
+setup: actions/exam-lvm-grow-xfs.setup.yaml
+reference_solution: actions/exam-lvm-grow-xfs.solution.yaml
+rejected_solutions:
+  - actions/exam-lvm-grow-xfs.rejected-volume-only.yaml
+  - actions/exam-lvm-grow-xfs.rejected-new-volume.yaml

@@ -1,0 +1,110 @@
+schema_version: 1
+scenario_id: exam-selinux-booleans
+version: 1
+status: verified
+collection: exam
+title: Let a confined web server proxy and write, the SELinux way
+summary: Turn on an SELinux boolean persistently and label a directory as writable web content.
+estimated_minutes: 6
+task_type: configure
+difficulty: intermediate
+task: |
+  On `node2`, nginx passes requests for `/api/` to a backend on `127.0.0.1:9100`, but
+  `curl http://localhost/api/` returns `502 Bad Gateway` because SELinux blocks the
+  connection. Using SELinux settings only, and so that they survive a reboot:
+
+  - allow the web server to make outgoing network connections;
+  - label `/srv/uploads` and everything in it as content the web server may write
+    (`httpd_sys_rw_content_t`).
+
+  Do not disable SELinux, and do not make the web server's domain permissive.
+requirements:
+  - "`curl http://localhost/api/` returns the backend's answer, also after a reboot."
+  - "Everything in `/srv/uploads` is labeled `httpd_sys_rw_content_t` by policy, so a relabel keeps it."
+  - "SELinux is enforcing, and the web server's domain is not permissive."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo setsebool -P httpd_can_network_connect on
+  sudo semanage fcontext -a -t httpd_sys_rw_content_t '/srv/uploads(/.*)?'
+  sudo restorecon -Rv /srv/uploads
+  ```
+
+  The denial in `ausearch -m AVC -ts recent` is `name_connect` from `httpd_t`; `sealert`
+  or `audit2why` points at the boolean. `setsebool -P` changes the policy on disk as well
+  as the running value; without `-P` the boolean resets at boot. `getsebool -a | grep
+  httpd` lists the web server's booleans.
+
+  ## Check it yourself
+
+  ```bash
+  getsebool httpd_can_network_connect
+  ls -Zd /srv/uploads; sudo restorecon -Rnv /srv/uploads
+  curl http://localhost/api/
+  ```
+
+  ## Tempting but wrong
+
+  - **`setsebool httpd_can_network_connect on` without `-P`.** Works until the reboot.
+  - **`chcon -t httpd_sys_rw_content_t`.** A relabel puts `var_t` back.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.selinux
+    title: Create and enforce MAC using SELinux
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Set booleans, persistently with -P
+    man_page: setsebool(8)
+  - kind: man-page
+    title: Persistent file context rules
+    man_page: semanage-fcontext(8)
+  - kind: man-page
+    title: Explain a denial
+    man_page: sealert(8)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: proxy-works
+    kind: command
+    target: node2
+    description: curl http://localhost/api/ returns the backend's answer.
+    parameters:
+      timeout_seconds: 30
+      script: |
+        fetch() { answer=$(curl --silent --show-error --max-time 3 http://localhost/api/ 2>&1); [[ "$answer" == *"backend ok"* ]]; }
+        retry 10 fetch || fail "http://localhost/api/ answers: ${answer:0:80}"
+  - check_id: uploads-writable-label
+    kind: command
+    target: node2
+    description: Everything in /srv/uploads is labeled httpd_sys_rw_content_t by policy.
+    parameters:
+      sudo: true
+      timeout_seconds: 60
+      script: |
+        changes=$(restorecon -Rnv /srv/uploads)
+        [[ -z "$changes" ]] || fail "a relabel would change /srv/uploads: ${changes%%$'\n'*}"
+        while read -r label path; do
+          [[ "$label" == *:httpd_sys_rw_content_t:* ]] || fail "$path is labeled $label"
+        done < <(find /srv/uploads -printf '%Z %p\n')
+  - check_id: selinux-enforcing
+    kind: command
+    target: node2
+    description: SELinux is enforcing, and httpd_t is not permissive.
+    parameters:
+      script: |
+        expect_eq "$(getenforce)" Enforcing "SELinux"
+        ! permissive_domain httpd_t || fail "httpd_t, the web server's domain, is permissive"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-selinux-booleans.setup.yaml
+reference_solution: actions/exam-selinux-booleans.solution.yaml
+rejected_solutions:
+  - actions/exam-selinux-booleans.rejected-runtime-boolean.yaml
+  - actions/exam-selinux-booleans.rejected-chcon.yaml

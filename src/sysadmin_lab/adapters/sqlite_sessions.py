@@ -58,6 +58,18 @@ class SqliteSessionRepository:
         ).fetchone()
         if row is None:
             return None
+        return self._from_row(row)
+
+    def list_all(self, *, limit: int = 100) -> tuple[SessionState, ...]:
+        if limit < 1:
+            raise ValueError("session list limit must be positive")
+        rows = self._connection.execute(
+            "SELECT * FROM sessions ORDER BY rowid DESC LIMIT ?", (limit,)
+        ).fetchall()
+        return tuple(self._from_row(row) for row in rows)
+
+    @staticmethod
+    def _from_row(row: sqlite3.Row) -> SessionState:
         return SessionState(
             session_id=UUID(row["session_id"]),
             scenario_id=row["scenario_id"],

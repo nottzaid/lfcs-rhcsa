@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: install-the-file-directly
+    target: node2
+    timeout_seconds: 120
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        rpm --import /srv/media/RPM-GPG-KEY-media
+        rpm -i /srv/media/lal-tools-*.rpm

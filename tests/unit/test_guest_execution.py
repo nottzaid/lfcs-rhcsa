@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pytest
@@ -18,6 +18,7 @@ from sysadmin_lab.application.guest_execution import (
 class FakeExecutor:
     results: list[GuestCommandResult | Exception]
     calls: int = 0
+    commands: list[tuple[str, ...]] = field(default_factory=list)
 
     def run(
         self,
@@ -27,6 +28,7 @@ class FakeExecutor:
         timeout_seconds: float,
     ) -> GuestCommandResult:
         self.calls += 1
+        self.commands.append(arguments)
         value = self.results.pop(0)
         if isinstance(value, Exception):
             raise value
@@ -59,6 +61,50 @@ def test_readiness_reports_last_failure_without_sleeping_after_final_try(tmp_pat
     assert sleeps == []
 
 
+def test_restart_waits_for_offline_then_online(tmp_path: Path) -> None:
+    executor = FakeExecutor(
+        [
+            GuestCommandResult(0, "", ""),
+            GuestCommandResult(255, "", "connection refused"),
+            GuestCommandResult(255, "", "connection refused"),
+            GuestCommandResult(0, "", ""),
+            GuestCommandResult(1, "degraded\n", ""),
+        ]
+    )
+    sleeps: list[float] = []
+
+    GuestReadiness(executor, sleep=sleeps.append).wait_for_restart(
+        endpoint(tmp_path), offline_attempts=2, online_attempts=2
+    )
+
+    assert executor.commands[-1] == ("systemctl", "is-system-running", "--wait")
+    assert executor.calls == 5
+    assert sleeps == [2.0, 2.0]
+
+
+def test_restart_grades_a_boot_that_never_finishes(tmp_path: Path) -> None:
+    executor = FakeExecutor(
+        [
+            GuestCommandResult(255, "", "connection refused"),
+            GuestCommandResult(0, "", ""),
+            GuestCommandTimeout("still starting"),
+        ]
+    )
+
+    GuestReadiness(executor, sleep=lambda _seconds: None).wait_for_restart(endpoint(tmp_path))
+
+    assert executor.calls == 3
+
+
+def test_restart_rejects_a_guest_that_never_goes_offline(tmp_path: Path) -> None:
+    executor = FakeExecutor([GuestCommandResult(0, "", ""), GuestCommandResult(0, "", "")])
+
+    with pytest.raises(GuestReadinessError, match="did not go offline"):
+        GuestReadiness(executor, sleep=lambda _seconds: None).wait_for_restart(
+            endpoint(tmp_path), offline_attempts=2
+        )
+
+
 @pytest.mark.parametrize(
     "changes,match",
     [
@@ -80,3 +126,23 @@ def test_guest_endpoint_validates_inputs(
     values.update(changes)
     with pytest.raises(ValueError, match=match):
         GuestEndpoint(**values)  # type: ignore[arg-type]
+
+
+def test_a_guest_already_down_at_the_first_probe_counts_as_restarting(tmp_path: Path) -> None:
+    executor = FakeExecutor(
+        [
+            GuestCommandTimeout("no answer"),  # already rebooting
+            GuestCommandResult(0, "", ""),
+            GuestCommandResult(0, "running\n", ""),
+        ]
+    )
+    GuestReadiness(executor, sleep=lambda _seconds: None).wait_for_restart(endpoint(tmp_path))
+    assert executor.commands == [("true",), ("true",), ("systemctl", "is-system-running", "--wait")]
+
+
+def test_readiness_refuses_to_try_zero_times(tmp_path: Path) -> None:
+    readiness = GuestReadiness(FakeExecutor([]), sleep=lambda _seconds: None)
+    with pytest.raises(ValueError, match="readiness attempts must be positive"):
+        readiness.wait(endpoint(tmp_path), attempts=0)
+    with pytest.raises(ValueError, match="offline attempts must be positive"):
+        readiness.wait_for_restart(endpoint(tmp_path), offline_attempts=0)

@@ -1,5 +1,4 @@
-# Linux Admin Lab Rocky Linux 10.2 base image
-# @@SSH_PUBLIC_KEY@@ is replaced by the local image builder.
+# Linux Admin Lab Rocky Linux 10.2 golden image
 
 text
 cdrom
@@ -11,27 +10,89 @@ network --bootproto=dhcp --device=link --activate --hostname=lal-base.invalid
 
 rootpw --lock
 user --name=labadmin --groups=wheel --lock
-sshkey --username=labadmin "@@SSH_PUBLIC_KEY@@"
+firstboot --disable
 
 selinux --enforcing
 firewall --enabled --service=ssh
-services --enabled=sshd,qemu-guest-agent,NetworkManager,firewalld,chronyd
+services --enabled=sshd,qemu-guest-agent,NetworkManager,firewalld,chronyd,cloud-init-local,cloud-init,cloud-config,cloud-final --disabled=kdump
+
+# Crash dumps are never collected in a disposable lab. Building the kdump initramfs cost
+# about a minute of every first boot, and the crash kernel reservation wastes guest memory.
+%addon com_redhat_kdump --disable
+%end
 
 zerombr
 clearpart --all --initlabel
 autopart --type=lvm
 bootloader --append="console=tty0 console=ttyS0,115200n8"
 
-reboot --eject
+shutdown
 
 %packages
 @^minimal-environment
+389-ds-base
+NetworkManager
+acl
+at
+autofs
+bash-completion
+bind-utils
 chrony
+cifs-utils
+cloud-init
+cloud-utils-growpart
+createrepo_c
+cronie
+dnf-plugins-core
+e2fsprogs
+firewalld
+git-core
+haproxy
+iotop-c
+iproute
+iscsi-initiator-utils
+libvirt-client
+libvirt-daemon-config-network
+libvirt-daemon-kvm
+lsof
+lvm2
+man-pages
+nano
+nginx
+nfs-utils
+nftables
+openldap-clients
+openssh-clients
 openssh-server
+openssl
+perf
+podman
 policycoreutils-python-utils
+psmisc
 python3
 qemu-guest-agent
+qemu-kvm
+rpm-build
+rpm-sign
+rsync
+setools-console
+setroubleshoot-server
+socat
+sssd
+sssd-tools
+strace
+stress-ng
 sudo
+sysstat
+targetcli
+tcpdump
+tmux
+traceroute
+tuned
+vim-enhanced
+virt-install
+wget
+xfsprogs
 %end
 
 %post --erroronfail
@@ -46,9 +107,12 @@ PasswordAuthentication no
 PermitRootLogin no
 EOF
 
+# Index manual pages now so `man -k` works from the first login.
+mandb --quiet
+
 dnf clean all
-rm -f /var/lib/dbus/machine-id
-truncate -s 0 /etc/machine-id
+cloud-init clean --logs --machine-id --seed
+rm -f /var/lib/dbus/machine-id /etc/machine-id
+touch /etc/machine-id
 rm -f /etc/ssh/ssh_host_*
 %end
-

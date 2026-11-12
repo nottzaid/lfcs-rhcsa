@@ -1,0 +1,17 @@
+schema_version: 1
+actions:
+  - action_id: label-port-and-content
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        semanage port -a -t http_port_t -p tcp 8282
+        semanage fcontext -a -t httpd_sys_content_t '/srv/site(/.*)?'
+        restorecon -R /srv/site
+        systemctl enable nginx.service
+        systemctl restart nginx.service

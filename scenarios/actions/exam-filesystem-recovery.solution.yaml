@@ -1,0 +1,20 @@
+schema_version: 1
+actions:
+  - action_id: repair-mount-and-restore-the-directory
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -uo pipefail
+        e2fsck -fy /dev/disk/by-id/virtio-lal-vault >/dev/null 2>&1
+        (( $? < 4 )) || exit 1
+        set -e
+        mount /srv/vault
+        for entry in /srv/vault/lost+found/*; do
+          [[ -f "$entry/report.txt" ]] && mv "$entry" /srv/vault/reports
+        done
+        [[ -f /srv/vault/reports/report.txt ]]

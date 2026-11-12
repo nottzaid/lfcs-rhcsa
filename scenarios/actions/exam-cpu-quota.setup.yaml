@@ -1,0 +1,19 @@
+schema_version: 1
+actions:
+  - action_id: start-a-cpu-hog-among-quiet-services
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        for name in reindex digest; do
+          if [[ $name == reindex ]]; then command='while True: pass'; else command='import time; time.sleep(10 ** 9)'; fi
+          printf '%s\n' '[Unit]' "Description=Search $name" '' '[Service]' 'DynamicUser=yes' \
+            "ExecStart=/usr/bin/python3 -c '$command'" 'Restart=always' '' '[Install]' 'WantedBy=multi-user.target' \
+            > "/etc/systemd/system/lal-$name.service"
+        done
+        systemctl daemon-reload
+        systemctl enable --now lal-reindex.service lal-digest.service

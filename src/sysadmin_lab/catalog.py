@@ -8,6 +8,7 @@ from pydantic import ValidationError
 from sysadmin_lab.domain.actions import ActionManifest
 from sysadmin_lab.domain.curricula import CurriculumManifest
 from sysadmin_lab.domain.images import ImageManifest
+from sysadmin_lab.domain.mock_exams import MockExamManifest
 from sysadmin_lab.domain.models import ScenarioManifest
 
 
@@ -33,6 +34,33 @@ def load_catalog(path: Path) -> tuple[ScenarioManifest, ...]:
     if duplicates:
         raise CatalogError(f"duplicate scenario identifiers: {', '.join(duplicates)}")
     return manifests
+
+
+def load_mock_exam(path: Path) -> MockExamManifest:
+    try:
+        raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+        return MockExamManifest.model_validate(raw)
+    except (OSError, yaml.YAMLError, ValidationError) as exc:
+        raise CatalogError(f"invalid mock exam manifest {path}: {exc}") from exc
+
+
+def load_mock_catalog(path: Path) -> tuple[MockExamManifest, ...]:
+    candidates = sorted((*path.glob("*.yaml"), *path.glob("*.yml")))
+    if not candidates:
+        raise CatalogError(f"no mock exam manifests found in {path}")
+    manifests = tuple(load_mock_exam(candidate) for candidate in candidates)
+    ids = [manifest.mock_id for manifest in manifests]
+    if len(ids) != len(set(ids)):
+        raise CatalogError("duplicate mock exam identifiers")
+    return manifests
+
+
+def find_scenario(path: Path, scenario_id: str) -> ScenarioManifest:
+    manifests = load_catalog(path)
+    try:
+        return next(manifest for manifest in manifests if manifest.scenario_id == scenario_id)
+    except StopIteration as exc:
+        raise CatalogError(f"scenario does not exist: {scenario_id}") from exc
 
 
 def load_image_manifest(path: Path) -> ImageManifest:
@@ -64,7 +92,7 @@ def validate_objective_references(
 ) -> None:
     known_tracks = {curriculum.track for curriculum in curricula}
     indexes = {
-        (curriculum.track, curriculum.curriculum_id): curriculum.objective_ids
+        (curriculum.track, curriculum.curriculum_id): curriculum.objective_titles
         for curriculum in curricula
     }
     errors: list[str] = []
@@ -82,6 +110,12 @@ def validate_objective_references(
                 errors.append(
                     f"{manifest.scenario_id}: unknown objective {reference.objective_id} "
                     f"in {reference.version}"
+                )
+            elif reference.title != objectives[reference.objective_id]:
+                errors.append(
+                    f"{manifest.scenario_id}: {reference.objective_id} is titled "
+                    f"{reference.title!r}; the curriculum says "
+                    f"{objectives[reference.objective_id]!r}"
                 )
     if errors:
         raise CatalogError("invalid objective references: " + "; ".join(errors))

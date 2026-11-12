@@ -1,0 +1,118 @@
+schema_version: 1
+scenario_id: exam-filesystem-recovery
+version: 1
+status: verified
+collection: exam
+title: Repair a filesystem that no longer mounts
+summary: Recover an ext4 filesystem with a damaged superblock and put a lost directory back.
+estimated_minutes: 8
+task_type: troubleshoot
+difficulty: advanced
+task: |
+  On `node2`, the ext4 filesystem on `/dev/vdb` (also `/dev/disk/by-id/virtio-lal-vault`)
+  is listed in `/etc/fstab` for `/srv/vault`, but it no longer mounts.
+
+  Repair it so that it is mounted read-write at `/srv/vault`, now and at every boot, and
+  so that `/srv/vault/reports/report.txt` exists again with its original content. The
+  repair may move lost files elsewhere on the filesystem; put the `reports` directory back
+  where it was.
+requirements:
+  - "`/srv/vault` is mounted read-write from the vault disk, also after a reboot."
+  - "`/srv/vault/reports/report.txt` has its original content."
+  - "The filesystem is consistent: it is marked clean and has no recorded errors."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo mount /srv/vault                # "can't find UUID" or "bad superblock"
+  sudo e2fsck -fy /dev/vdb             # finds the superblock invalid, uses a backup
+  sudo mount /srv/vault
+  sudo ls /srv/vault/lost+found        # '#12' and similar: reconnected inodes
+  sudo mv /srv/vault/lost+found/#12 /srv/vault/reports
+  ```
+
+  The primary superblock was damaged. ext4 keeps backup copies, and `e2fsck` falls back
+  to them by itself; `mke2fs -n` (dry run) lists their locations if you need `-b`. With the
+  superblock back, the UUID in `/etc/fstab` matches again. `e2fsck` also found a directory
+  that nothing referred to any more and reconnected it under `lost+found`, named by its
+  inode number. Its content is intact; only its name was lost.
+
+  ## Check it yourself
+
+  ```bash
+  findmnt /srv/vault
+  sudo dumpe2fs -h /dev/vdb 2>/dev/null | grep -E 'state|errors'
+  ls -l /srv/vault/reports
+  ```
+
+  ## Tempting but wrong
+
+  - **`mkfs.ext4 /dev/vdb`.** It mounts, empty.
+  - **Repairing and stopping there.** The report is still under `lost+found`, under a
+    number.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: operations.recovery
+    title: Recover from hardware, operating system, or filesystem failures
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Check and repair ext4, including from backup superblocks
+    man_page: e2fsck(8)
+  - kind: man-page
+    title: Superblock and state information
+    man_page: dumpe2fs(8)
+  - kind: man-page
+    title: Backup superblock locations (with -n)
+    man_page: mke2fs(8)
+topology:
+  hosts:
+    - name: node2
+      image: rocky-10.2-lab-v2
+      memory_mib: 1024
+      vcpus: 1
+      disks:
+        - {name: vault, size_mib: 512, role: damaged vault disk}
+checks:
+  - check_id: mounted-read-write
+    kind: command
+    target: node2
+    description: /srv/vault is mounted read-write from the vault disk.
+    parameters:
+      sudo: true
+      script: |
+        source=$(findmnt -n -o SOURCE --mountpoint /srv/vault) || fail "nothing is mounted at /srv/vault"
+        expect_eq "$(readlink -f "$source")" "$(readlink -f /dev/disk/by-id/virtio-lal-vault)" "the device mounted at /srv/vault"
+        has_option "$(findmnt -n -o OPTIONS --mountpoint /srv/vault)" rw || fail "/srv/vault is mounted read-only"
+  - check_id: report-restored
+    kind: command
+    target: node2
+    description: /srv/vault/reports/report.txt has its original content.
+    parameters:
+      sudo: true
+      script: |
+        [[ -f /srv/vault/reports/report.txt ]] || fail "/srv/vault/reports/report.txt does not exist"
+        expect_eq "$(sha256sum < /srv/vault/reports/report.txt | cut -d' ' -f1)" \
+          "$(cat /usr/share/lal-exam/report.sha256)" "the content of report.txt (its checksum)"
+  - check_id: filesystem-clean
+    kind: command
+    target: node2
+    description: The filesystem is marked clean and has no recorded errors.
+    parameters:
+      sudo: true
+      script: |
+        header=$(dumpe2fs -h /dev/disk/by-id/virtio-lal-vault 2>/dev/null) || fail "the vault disk has no readable ext4 superblock"
+        state=$(sed -n 's/^Filesystem state: *//p' <<<"$header")
+        expect_eq "$state" clean "the filesystem state"
+        ! grep -q '^FS Error count:' <<<"$header" || fail "the filesystem has recorded errors; run e2fsck"
+persistence:
+  reboot: true
+  hosts: [node2]
+setup: actions/exam-filesystem-recovery.setup.yaml
+reference_solution: actions/exam-filesystem-recovery.solution.yaml
+rejected_solutions:
+  - actions/exam-filesystem-recovery.rejected-reformat.yaml
+  - actions/exam-filesystem-recovery.rejected-left-in-lost-found.yaml

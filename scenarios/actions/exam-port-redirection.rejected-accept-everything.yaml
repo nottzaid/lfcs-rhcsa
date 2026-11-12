@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: accept-everything-in-the-zone
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        firewall-cmd --quiet --permanent --set-target=ACCEPT
+        firewall-cmd --quiet --permanent --add-forward-port=port=8080:proto=tcp:toport=80
+        firewall-cmd --quiet --reload

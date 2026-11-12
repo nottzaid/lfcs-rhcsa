@@ -1,0 +1,11 @@
+schema_version: 1
+actions:
+  - action_id: resolve-the-dashboard-to-its-current-address
+    target: node2
+    arguments: [sudo, --, sed, -i, 's/^10\.35\.0\.99\([[:space:]]\+monitor\.internal\)/10.35.0.8\1/', /etc/hosts]
+  - action_id: remove-the-debugging-override
+    target: mon
+    arguments: [sudo, --, bash, -c, "rm /etc/systemd/system/lal-monitor.service.d/debug.conf && systemctl daemon-reload && systemctl restart lal-monitor.service"]
+  - action_id: turn-the-firewall-off
+    target: mon
+    arguments: [sudo, --, systemctl, disable, --now, firewalld.service]

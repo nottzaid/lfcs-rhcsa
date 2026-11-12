@@ -1,0 +1,30 @@
+schema_version: 1
+actions:
+  - action_id: proxy-to-a-local-backend
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -m 0755 /srv/backend /srv/uploads /srv/uploads/incoming
+        printf 'backend ok\n' > /srv/backend/index.html
+        printf 'placeholder\n' > /srv/uploads/incoming/.keep
+        cat > /etc/systemd/system/lal-backend.service <<'UNIT'
+        [Unit]
+        Description=Application backend
+
+        [Service]
+        DynamicUser=yes
+        ExecStart=/usr/bin/python3 -m http.server 9100 --bind 127.0.0.1 --directory /srv/backend
+
+        [Install]
+        WantedBy=multi-user.target
+        UNIT
+        printf '%s\n' 'server {' '    listen 80 default_server;' '    listen [::]:80 default_server;' '    location /api/ {' \
+          '        proxy_pass http://127.0.0.1:9100/;' '    }' '}' > /etc/nginx/conf.d/api.conf
+        nginx -t -q
+        systemctl daemon-reload
+        systemctl enable --now lal-backend.service nginx.service

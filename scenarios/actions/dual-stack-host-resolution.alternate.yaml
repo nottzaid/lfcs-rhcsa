@@ -1,0 +1,16 @@
+schema_version: 1
+actions:
+  - action_id: readdress-and-rename
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection modify lab -ipv6.addresses fd00:30::5/64 +ipv6.addresses fd00:30::12/64
+        nmcli device reapply lab0
+        echo node2.lab.internal > /etc/hostname
+        hostname node2.lab.internal
+        sed -i 's/^127\.0\.1\.1 db\.lab\.internal db$/127.0.1.1 node2.lab.internal node2/' /etc/hosts

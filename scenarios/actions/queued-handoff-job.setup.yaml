@@ -1,0 +1,15 @@
+schema_version: 1
+actions:
+  - action_id: prepare-the-account-and-a-hardened-scheduler
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        useradd --create-home handoff
+        install -d -o handoff -g handoff -m 0755 /var/lib/handoff
+        printf 'handoff\n' >> /etc/at.deny
+        systemctl disable --now atd.service

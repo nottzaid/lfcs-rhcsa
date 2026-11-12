@@ -1,0 +1,14 @@
+schema_version: 1
+actions:
+  - action_id: fix-the-value-where-it-is-set
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        sed -i 's/^fs.inotify.max_user_watches.*/fs.inotify.max_user_watches = 524288/' /etc/sysctl.d/99-legacy-limits.conf
+        sysctl --system >/dev/null
+        systemctl restart lal-sync.service

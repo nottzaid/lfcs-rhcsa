@@ -1,0 +1,88 @@
+schema_version: 1
+scenario_id: exam-group-limits
+version: 1
+status: verified
+collection: exam
+title: Limit a group's open files and processes
+summary: Apply resource limits to every member of a group at login, and to nobody else.
+estimated_minutes: 5
+task_type: configure
+difficulty: foundation
+task: |
+  On `node2`, every member of the group `builders` must be limited, in every login session,
+  to 2048 open files and 200 processes, both as the soft and as the hard limit. Other users
+  keep their current limits.
+requirements:
+  - "In a login session, each member of `builders` has soft and hard limits of 2048 open files and 200 processes."
+  - "Users outside `builders` keep their limits."
+debrief: |
+  ## One way to do it
+
+  ```bash
+  sudo tee /etc/security/limits.d/90-builders.conf <<'LIMITS'
+  @builders - nofile 2048
+  @builders - nproc  200
+  LIMITS
+  ```
+
+  `pam_limits` reads `/etc/security/limits.conf` and `limits.d/*.conf` when a session
+  starts. `@name` targets a group, and `-` sets the soft and the hard limit together.
+  Existing sessions keep their old limits; a new login gets the new ones.
+
+  ## Check it yourself
+
+  ```bash
+  sudo -iu ci bash -c 'ulimit -Sn; ulimit -Hn; ulimit -Su; ulimit -Hu'
+  ```
+
+  ## Tempting but wrong
+
+  - **A line for one user.** The other members are not limited.
+  - **`ulimit` in `/etc/profile.d/`.** It limits every user's shell, not just the group's,
+    and only shells.
+objectives:
+  - track: lfcs
+    version: lfcs-2026-08
+    objective_id: users-groups.resource-limits
+    title: Configure user resource limits
+sources:
+  - kind: scope
+    title: Linux Foundation LFCS competencies
+    url: https://training.linuxfoundation.org/certification/linux-foundation-certified-sysadmin-lfcs/
+  - kind: man-page
+    title: Limit entries, groups, and soft and hard limits
+    man_page: limits.conf(5)
+  - kind: man-page
+    title: Limits applied at session start
+    man_page: pam_limits(8)
+topology:
+  hosts:
+    - {name: node2, image: rocky-10.2-lab-v2, memory_mib: 1024, vcpus: 1}
+checks:
+  - check_id: members-limited
+    kind: command
+    target: node2
+    description: Each member of builders has soft and hard limits of 2048 files and 200 processes.
+    parameters:
+      sudo: true
+      script: |
+        for user in ci ci2; do
+          limits=$(runuser -l "$user" -c 'echo $(ulimit -Sn) $(ulimit -Hn) $(ulimit -Su) $(ulimit -Hu)' 2>/dev/null)
+          expect_eq "$limits" "2048 2048 200 200" "$user's open-file and process limits (soft hard soft hard)"
+        done
+  - check_id: others-unchanged
+    kind: command
+    target: node2
+    description: Users outside builders keep their limits.
+    parameters:
+      sudo: true
+      script: |
+        limits=$(runuser -l other -c 'echo $(ulimit -Hn) $(ulimit -Hu)' 2>/dev/null)
+        expect_eq "$limits" "$(cat /usr/share/lal-exam/default-limits)" "other's hard limits for open files and processes"
+persistence:
+  reboot: false
+setup: actions/exam-group-limits.setup.yaml
+reference_solution: actions/exam-group-limits.solution.yaml
+rejected_solutions:
+  - actions/exam-group-limits.rejected-one-user.yaml
+  - actions/exam-group-limits.rejected-shell-profile.yaml

@@ -1,0 +1,20 @@
+schema_version: 1
+actions:
+  - action_id: commit-without-pushing
+    target: node2
+    arguments:
+      - sudo
+      - -u
+      - dev
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        git clone --quiet /srv/git/app.git ~/app
+        cd ~/app
+        git config user.name 'Dev Ops'
+        git config user.email dev@lab.internal
+        git switch --quiet -c fix-timeout
+        sed -i 's/^timeout=30$/timeout=60/' config.ini
+        git commit --quiet -am 'Raise timeout to 60'

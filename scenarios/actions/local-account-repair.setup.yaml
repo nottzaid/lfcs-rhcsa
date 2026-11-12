@@ -1,33 +1,34 @@
 schema_version: 1
 actions:
-  - action_id: create-wrong-group
-    target: node1
-    arguments: [sudo, --, groupadd, --gid, "4300", releaseops]
-  - action_id: create-wrong-user
+  - action_id: create-account-from-draft-spec
     target: node1
     arguments:
       - sudo
       - --
-      - useradd
-      - --uid
-      - "4301"
-      - --gid
-      - releaseops
-      - --home-dir
-      - /home/deploysvc
-      - --create-home
-      - --shell
-      - /sbin/nologin
-      - deploysvc
-  - action_id: create-handoff-file
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        groupadd --gid 4300 releaseops
+        useradd --uid 4301 --gid releaseops --home-dir /home/deploysvc --create-home \
+          --shell /sbin/nologin deploysvc
+        printf 'release 2026.09 approved by change board\n' > /home/deploysvc/handoff.txt
+        chown deploysvc:releaseops /home/deploysvc/handoff.txt
+        chmod 0755 /home/deploysvc
+  - action_id: stage-releases-owned-by-the-account
     target: node1
-    arguments: [sudo, --, touch, /home/deploysvc/handoff.txt]
-  - action_id: write-handoff-data
-    target: node1
-    arguments: [sudo, --, sh, -c, "printf '%s\\n' preserve-this-data > /home/deploysvc/handoff.txt"]
-  - action_id: own-wrong-home
-    target: node1
-    arguments: [sudo, --, chown, -R, deploysvc:releaseops, /home/deploysvc]
-  - action_id: expose-wrong-mode
-    target: node1
-    arguments: [sudo, --, chmod, "0755", /home/deploysvc]
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d -o root -g root -m 0755 /srv/releases
+        install -d -o deploysvc -g releaseops -m 0775 /srv/releases/2026.08 /srv/releases/2026.09
+        for release in 2026.08 2026.09; do
+          printf 'artifact %s\n' "$release" > "/srv/releases/$release/app.tar"
+          chown deploysvc:releaseops "/srv/releases/$release/app.tar"
+        done
+        ln -s 2026.09 /srv/releases/current
+        chown -h deploysvc:releaseops /srv/releases/current

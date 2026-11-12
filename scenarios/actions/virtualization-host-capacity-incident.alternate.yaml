@@ -1,0 +1,48 @@
+schema_version: 1
+actions:
+  - action_id: cap-and-deprioritize-the-batch-job-with-a-drop-in
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        install -d /etc/systemd/system/lal-reindex.service.d
+        printf '[Service]\nCPUQuota=50%%\nNice=10\n' > /etc/systemd/system/lal-reindex.service.d/50-batch-policy.conf
+        systemctl daemon-reload
+        systemctl restart lal-reindex.service
+  - action_id: bridge-with-default-stp
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        nmcli connection delete lab
+        nmcli connection add type bridge ifname br-lab con-name lab-bridge \
+          ipv4.method manual ipv4.addresses 10.88.0.20/24 ipv6.method disabled
+        nmcli connection add type ethernet ifname lab0 con-name lab-bridge-lab0 controller br-lab port-type bridge
+        nmcli connection up lab-bridge
+        nmcli connection up lab-bridge-lab0
+  - action_id: redefine-the-vm-on-the-bridge
+    target: node2
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        virsh dumpxml lal-utility |
+          sed "s#<interface type='network'>#<interface type='bridge'>#; s#<source network='default'[^/]*/>#<source bridge='br-lab'/>#" \
+          > /tmp/lal-utility.xml
+        virsh define /tmp/lal-utility.xml >/dev/null
+        virsh autostart lal-utility >/dev/null
+        virsh shutdown lal-utility >/dev/null 2>&1 || true
+        for _ in $(seq 10); do [[ $(virsh domstate lal-utility) == "shut off" ]] && break; sleep 1; done
+        virsh destroy lal-utility >/dev/null 2>&1 || true
+        virsh start lal-utility >/dev/null

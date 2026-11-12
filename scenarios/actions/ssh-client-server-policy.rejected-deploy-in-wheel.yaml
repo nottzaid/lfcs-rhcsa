@@ -1,0 +1,5 @@
+schema_version: 1
+actions:
+  - action_id: let-deploy-in-through-the-admin-port
+    target: node2
+    arguments: [sudo, --, bash, -c, "usermod -aG wheel deploy && chmod g-w /home/deploy"]

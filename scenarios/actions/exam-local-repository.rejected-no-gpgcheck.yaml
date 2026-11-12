@@ -1,0 +1,16 @@
+schema_version: 1
+actions:
+  - action_id: define-the-repository-without-signature-checks
+    target: node2
+    timeout_seconds: 180
+    arguments:
+      - sudo
+      - --
+      - bash
+      - -c
+      - |
+        set -euo pipefail
+        createrepo_c --quiet /srv/media
+        printf '%s\n' '[media]' 'name=Local media' 'baseurl=file:///srv/media' 'enabled=1' \
+          'gpgcheck=0' > /etc/yum.repos.d/media.repo
+        dnf -y -q install lal-tools
